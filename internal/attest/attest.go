@@ -111,9 +111,9 @@ type Policy struct {
 
 // ImageSource is the public build record of one image digest.
 type ImageSource struct {
-	Repo      string `json:"repo"`      // e.g. ghcr.io/femled/masseuse-video-tee
+	Repo      string `json:"repo"`      // e.g. ghcr.io/masseuse-ai/masseuse-video-tee
 	Tag       string `json:"tag"`       // the release tag, e.g. v0.4.0; empty when the image is unstamped
-	SourceURI string `json:"sourceUri"` // e.g. github.com/FemLed/masseuse-video-tee
+	SourceURI string `json:"sourceUri"` // e.g. github.com/Masseuse-ai/masseuse-video-tee
 }
 
 // String is "<sourceUri>@<tag>", the source revision the digest was built

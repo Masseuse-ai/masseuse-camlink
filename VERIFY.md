@@ -509,15 +509,18 @@ its source lives:
 
 ```json
 "imageSignatures": ["cfb085b950e93abb8332cede62fa50df662ef9aebb1533b2ae0bf1403ea4f811"],
-"minRelease": "v0.4.0",
-"sourceUri": "github.com/FemLed/masseuse-video-tee",
-"imageRepo": "ghcr.io/femled/masseuse-video-tee"
+"minRelease": "v0.12.4",
+"sourceUri": "github.com/Masseuse-ai/masseuse-video-tee",
+"imageRepo": "ghcr.io/masseuse-ai/masseuse-video-tee"
 ```
 
-(`sourceUri` and `imageRepo` name where the enclave image that is running
-today was built and published; the connector's compiled floors,
-`internal/attest/floors.go`, carry the same values. Both move together with
-the first enclave image released from `github.com/Masseuse-ai/masseuse-video-tee`.)
+(`sourceUri` and `imageRepo` name where the enclave image is built and
+published; the connector's compiled floors, `internal/attest/floors.go`,
+carry the same values and refuse a policy that names anything else.
+Connectors up to v0.25.1 carried the enclave's previous home,
+`github.com/FemLed/masseuse-video-tee` and `ghcr.io/femled/masseuse-video-tee`,
+where images up to v0.12.3 were built and published; they meet a policy
+naming this one only after updating.)
 
 `imageSignatures` is the key the Confidential Space launcher must have
 verified a signature from before it started the image (the token lists the
