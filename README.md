@@ -121,9 +121,19 @@ day (`Update v0.11.1 did not verify; staying on v0.11.0.`); a copy of the
 program this user cannot replace where it is (`Masseuse` run from the disk
 image rather than from Applications, a binary under `/usr/local/bin`) says
 so at start and is left to be updated by hand. The version replaced is kept
-beside the new one (`Masseuse.previous.app`, `.previous/`) until the new
-one has connected to the service once, then removed; if a new version
+out of sight (a Mac bundle under the state directory, `previous/`; the
+files of the other layouts in `.previous/` inside the install) until the
+new one has connected to the service once, then removed; if a new version
 would not start, the previous one is put back and the window says so.
+The restart itself is the window's shell's on a Mac: the `.command` file
+the bundle writes runs the program in a loop, and an update ends the
+program with exit code 75 for it to run the new version at the same path;
+a Mac program started some other way opens the new bundle through
+LaunchServices (a window of its own) and ends. The program never replaces
+itself by `execve` there: Go's runtime, before an exec on Darwin, waits for
+every preemption signal it has sent to be received, and a program that runs
+Go code on CoreBluetooth's threads can wait forever (`update.ErrRelaunch`).
+Linux keeps the exec; Windows starts the new program and ends.
 
 `-no-update` (or `MASSEUSE_CAMLINK_UPDATE=off`) turns it off, for people
 who manage their installs; `masseuse-camlink update` installs the latest

@@ -20,6 +20,9 @@ func (i *Installer) swapBundle(string, string) error {
 	return errors.New("update: no application bundles on this system")
 }
 
+// sameVolume is for bundles, which this system has none of.
+func sameVolume(string, string) bool { return false }
+
 // Restart starts the new program at the install's path with args, sharing
 // this process's console (the window stays while the child lives), and
 // returns; the caller exits. Windows has no exec.

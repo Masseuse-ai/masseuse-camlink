@@ -33,9 +33,11 @@ the universal binary made from the two signed release binaries with
 terminal to print the pairing code to, so it writes a small
 `Masseuse.ai.command` file into its state directory and asks the system to
 open it; Terminal runs it, and it runs the connector in that window in
-console mode (`cmd/masseuse-camlink/desktop.go`). If a connector is already
-running on that state directory, opening the app again only brings Terminal
-forward. The bundle is `LSUIElement`, so nothing bounces in the Dock.
+console mode, in a loop that runs it again when it ends with exit code 75,
+which is how an update restarts it as the new version at the same path
+(`cmd/masseuse-camlink/desktop.go`, `internal/update` `ErrRelaunch`). If a
+connector is already running on that state directory, opening the app
+again only brings Terminal forward. The bundle is `LSUIElement`, so nothing bounces in the Dock.
 `ffmpeg` ships inside (`Contents/Helpers/ffmpeg`, built by
 `packaging/ffmpeg/build.sh`), and the connector looks there before it looks
 at `PATH`, so there is no Homebrew step. The unit driver helpers ship

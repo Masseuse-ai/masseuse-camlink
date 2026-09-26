@@ -21,6 +21,15 @@ func (i *Installer) swapBundle(string, string) error {
 	return errors.New("update: no application bundles on this system")
 }
 
+// sameVolume says whether two paths are on one file system.
+func sameVolume(a, b string) bool {
+	var sa, sb syscall.Stat_t
+	if syscall.Stat(a, &sa) != nil || syscall.Stat(b, &sb) != nil {
+		return false
+	}
+	return sa.Dev == sb.Dev
+}
+
 // Restart replaces this process with the new program at the install's
 // path, with args; the pid and the terminal are kept.
 func (i *Installer) Restart(args []string, env []string) error {

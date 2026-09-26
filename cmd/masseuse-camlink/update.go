@@ -47,6 +47,10 @@ const (
 	updateFirstAfter = 15 * time.Second
 	updateEvery      = 6 * time.Hour
 	updateIdlePoll   = 30 * time.Second
+	// How long the handoff before a restart may take in all (the unit
+	// runtime's close alone allows itself 20 s): past it the restart goes
+	// ahead with what is still held (updater.handOver).
+	updateHandoffTimeout = 20 * time.Second
 )
 
 // updater runs the update loop beside the manager.
@@ -74,6 +78,8 @@ type updater struct {
 	exit    func(code int)
 
 	firstAfter, every, idlePoll time.Duration
+	// handoffTimeout bounds handoff (handOver).
+	handoffTimeout time.Duration
 	// warnedAt keeps the console to one line a day per failure kind.
 	warnedAt map[string]time.Time
 }
@@ -123,20 +129,23 @@ func newUpdater(stateDir string, log *slog.Logger, out func(string, ...any)) (*u
 			StateDir:    stateDir,
 			Logger:      log,
 		},
-		inst:       &update.Installer{Install: in, Logger: log},
-		state:      update.LoadState(stateDir),
-		log:        log,
-		out:        out,
-		idle:       func() bool { return true },
-		handoff:    func() {},
-		args:       os.Args[1:],
-		env:        withoutEnv(os.Environ(), "MASSEUSE_CAMLINK_UPDATE_AS"),
-		now:        time.Now,
-		firstAfter: updateFirstAfter,
-		every:      updateEvery,
-		idlePoll:   updateIdlePoll,
-		warnedAt:   map[string]time.Time{},
-		exit:       exit,
+		// A bundle moved aside goes under the state directory, so the
+		// Applications folder shows one application (update.PreviousName).
+		inst:           &update.Installer{Install: in, Logger: log, Aside: filepath.Join(stateDir, "previous")},
+		state:          update.LoadState(stateDir),
+		log:            log,
+		out:            out,
+		idle:           func() bool { return true },
+		handoff:        func() {},
+		args:           os.Args[1:],
+		env:            withoutEnv(os.Environ(), "MASSEUSE_CAMLINK_UPDATE_AS"),
+		now:            time.Now,
+		firstAfter:     updateFirstAfter,
+		every:          updateEvery,
+		idlePoll:       updateIdlePoll,
+		handoffTimeout: updateHandoffTimeout,
+		warnedAt:       map[string]time.Time{},
+		exit:           exit,
 	}
 	u.restart = u.inst.Restart
 	return u, ""
@@ -413,8 +422,21 @@ func (u *updater) apply(ctx context.Context, staged *update.Staged, root string)
 	u.save()
 	update.Cleanup(filepath.Join(u.client.UpdatesDir(), staged.Tag))
 	u.log.Info("update: installed; restarting", "tag", staged.Tag, "previous", previous)
-	u.handoff()
-	if err := u.restart(u.args, u.env); err != nil {
+	u.out("Handing over: camera off, unit released, restarting.\n")
+	u.handOver()
+	err = u.restart(u.args, u.env)
+	switch {
+	case errors.Is(err, update.ErrRelaunch):
+		// The shell that started this program starts the new one in the
+		// same window on this exit code (desktop.go commandScript).
+		u.log.Info("update: ending for the shell to start the new program", "code", update.RelaunchExitCode)
+		u.exit(update.RelaunchExitCode)
+		return true
+	case errors.Is(err, update.ErrStartedApart):
+		u.out("%s %s is starting in a window of its own; this one is done.\n", appName, staged.Tag)
+		u.exit(0)
+		return true
+	case err != nil:
 		// Put the old program back and stop: the camera, the unit and the
 		// lock were let go for the handoff.
 		u.undo(previous)
@@ -427,6 +449,26 @@ func (u *updater) apply(ctx context.Context, staged *update.Staged, root string)
 	// Windows: the new program has the console; this one ends.
 	u.exit(0)
 	return true
+}
+
+// handOver runs the handoff (tunnels closed, camera off, unit released,
+// the awake hold and the instance lock let go) under a deadline: a step
+// that does not finish (a unit runtime that will not close, a camera
+// process that will not end) is logged and left behind, and the restart
+// goes ahead. The new program takes the camera and the unit for itself,
+// and what the old one left ends with it.
+func (u *updater) handOver() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		u.handoff()
+	}()
+	select {
+	case <-done:
+		u.log.Info("update: handed over")
+	case <-time.After(u.handoffTimeout):
+		u.log.Warn("update: the handoff did not finish in time; restarting anyway", "after", u.handoffTimeout)
+	}
 }
 
 // undo puts the previous install back after a failed restart: the bundle

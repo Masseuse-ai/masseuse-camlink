@@ -2,7 +2,10 @@ package main
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/FemLed/masseuse-camlink/internal/update"
 )
 
 // The macOS application bundle (packaging/macos) has this very program as
@@ -33,14 +36,24 @@ func bundleExecutable(exe string) bool {
 }
 
 // commandScript is the .command file Terminal runs: it names the window and
-// replaces itself with this program in console mode, on the same state
-// directory, so the connector in the window is the one the bundle carries.
+// runs this program in console mode, on the same state directory, so the
+// connector in the window is the one the bundle carries; and runs it again
+// when it ends with update.RelaunchExitCode, which is how an update
+// restarts (the new version is at the same path by then). The program
+// itself never execs the new one on a Mac (update.ErrRelaunch), so the
+// shell stays, and it says so in the environment (update.RelaunchEnv).
 func commandScript(exe, stateDir string) string {
 	return "#!/bin/sh\n" +
 		"# Written by " + appName + " (masseuse-camlink) when opened from its application bundle:\n" +
-		"# Terminal runs this file, and this file runs the program in that window.\n" +
+		"# Terminal runs this file, and this file runs the program in that window,\n" +
+		"# again after an update (exit " + strconv.Itoa(update.RelaunchExitCode) + ": the new version is in place).\n" +
 		"printf '\\033]0;" + appName + "\\007'\n" +
-		"exec " + shellQuote(exe) + " -console -state-dir " + shellQuote(stateDir) + " \"$@\"\n"
+		"export " + update.RelaunchEnv + "=1\n" +
+		"while :; do\n" +
+		"  " + shellQuote(exe) + " -console -state-dir " + shellQuote(stateDir) + " \"$@\"\n" +
+		"  status=$?\n" +
+		"  [ \"$status\" -eq " + strconv.Itoa(update.RelaunchExitCode) + " ] || exit \"$status\"\n" +
+		"done\n"
 }
 
 // shellQuote quotes s for /bin/sh: single quotes, with any single quote in

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // AppleTeamID is the Developer ID team the releases are signed with
@@ -111,6 +112,10 @@ func (i *Installer) swapBundle(staged, previous string) error {
 		}
 		src = beside
 	}
+	if err := os.MkdirAll(filepath.Dir(previous), 0o700); err != nil {
+		_ = os.RemoveAll(beside)
+		return fmt.Errorf("update: making room for the previous application: %w", err)
+	}
 	if err := os.Rename(root, previous); err != nil {
 		_ = os.RemoveAll(beside)
 		return fmt.Errorf("update: moving the application aside: %w", err)
@@ -131,11 +136,27 @@ func sameVolume(a, b string) bool {
 	return sa.Dev == sb.Dev
 }
 
-// Restart replaces this process with the new program at the install's
-// path, with args (the arguments this run was started with). The pid and
-// the terminal session are kept, so the Terminal window the bundle opened
-// stays the program's.
+// Restart starts the new program at the install's path, never by an
+// execve of this process (ErrRelaunch says why). Started by the shell the
+// bundle wrote for Terminal (RelaunchEnv is set), it answers ErrRelaunch:
+// the caller ends with RelaunchExitCode and that shell starts the new
+// program in the same window, with the same arguments. Started some other
+// way, a bundle is opened through LaunchServices (`open`), which gives the
+// new program a Terminal window of its own, and the caller ends
+// (ErrStartedApart). A program that is no bundle, run from a shell by
+// hand, is replaced in place as on Linux; that is a developer's run.
 func (i *Installer) Restart(args []string, env []string) error {
+	if os.Getenv(RelaunchEnv) == "1" {
+		return ErrRelaunch
+	}
+	if i.Install.Layout == LayoutBundle {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if out, err := i.run(ctx, "/usr/bin/open", "-a", i.Install.Root); err != nil {
+			return fmt.Errorf("%w: opening %s: %v: %s", ErrRestart, i.Install.Root, err, strings.TrimSpace(string(out)))
+		}
+		return ErrStartedApart
+	}
 	argv := append([]string{i.Install.Exe}, args...)
 	if err := syscall.Exec(i.Install.Exe, argv, env); err != nil {
 		return fmt.Errorf("%w: %v", ErrRestart, err)

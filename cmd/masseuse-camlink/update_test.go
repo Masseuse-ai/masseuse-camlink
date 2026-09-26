@@ -119,20 +119,21 @@ func testUpdater(t *testing.T, srv *httptest.Server, in update.Install, out *str
 			}
 			return nil, errors.New("unexpected " + name)
 		}},
-		state:      update.LoadState(stateDir),
-		log:        log,
-		out:        func(format string, args ...any) { fmt.Fprintf(out, format, args...) },
-		idle:       func() bool { return true },
-		handoff:    func() {},
-		args:       []string{"-console", "-state-dir", stateDir},
-		env:        []string{"X=1"},
-		now:        time.Now,
-		firstAfter: time.Millisecond,
-		every:      time.Hour,
-		idlePoll:   5 * time.Millisecond,
-		warnedAt:   map[string]time.Time{},
-		restart:    func([]string, []string) error { return nil },
-		exit:       func(int) {},
+		state:          update.LoadState(stateDir),
+		log:            log,
+		out:            func(format string, args ...any) { fmt.Fprintf(out, format, args...) },
+		idle:           func() bool { return true },
+		handoff:        func() {},
+		args:           []string{"-console", "-state-dir", stateDir},
+		env:            []string{"X=1"},
+		now:            time.Now,
+		firstAfter:     time.Millisecond,
+		every:          time.Hour,
+		idlePoll:       5 * time.Millisecond,
+		handoffTimeout: time.Second,
+		warnedAt:       map[string]time.Time{},
+		restart:        func([]string, []string) error { return nil },
+		exit:           func(int) {},
 	}
 	return u
 }
@@ -186,6 +187,9 @@ func TestUpdaterWaitsForIdleThenSwapsAndHandsOver(t *testing.T) {
 	}
 	if !strings.Contains(text, "Updating to v0.11.0; back in a moment.") {
 		t.Fatalf("no updating line:\n%s", text)
+	}
+	if !strings.Contains(text, "Handing over: camera off, unit released, restarting.") {
+		t.Fatalf("no handing-over line:\n%s", text)
 	}
 	if strings.Join(sequence, ",") != "handoff,restart" {
 		t.Fatalf("sequence %v", sequence)
@@ -296,6 +300,88 @@ func TestUpdaterPutsThePreviousBackWhenTheNewOneWillNotStart(t *testing.T) {
 	st := update.LoadState(u.stateDir())
 	if st.Installed != "" || st.Previous != "" || !st.FailedRecently("v0.11.0", time.Now()) {
 		t.Fatalf("state %+v", st)
+	}
+}
+
+func TestUpdaterEndsWithTheRelaunchCodeWhenTheShellStartsTheNewProgram(t *testing.T) {
+	// On a Mac the program is not replaced by an exec of its own (the
+	// runtime's wait before an exec on Darwin never ended, 2026-09-17): the
+	// .command shell that started it runs it again on the relaunch code.
+	in, exe := fakeInstall(t)
+	archive := tarOf(t, map[string]string{filepath.Base(exe): "new binary"})
+	var hits atomic.Int32
+	srv := fakeRelease(t, in, archive, true, &hits)
+	var out strings.Builder
+	u := testUpdater(t, srv, in, &out)
+	u.restart = func([]string, []string) error { return update.ErrRelaunch }
+	code := -1
+	u.exit = func(c int) { code = c }
+	if !u.once(context.Background()) {
+		t.Fatalf("once did not hand over:\n%s", out.String())
+	}
+	if code != update.RelaunchExitCode {
+		t.Fatalf("exit %d, want %d", code, update.RelaunchExitCode)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "new binary" {
+		t.Fatal("the new program is not in place for the shell to start")
+	}
+	st := update.LoadState(u.stateDir())
+	if st.Installed != "v0.11.0" || st.Previous == "" {
+		t.Fatalf("state %+v", st)
+	}
+	if strings.Contains(out.String(), "could not be started") {
+		t.Fatalf("read as a failure:\n%s", out.String())
+	}
+
+	// Started some other way, the new version opens on its own and this
+	// program ends cleanly.
+	var out2 strings.Builder
+	in2, exe2 := fakeInstall(t)
+	srv2 := fakeRelease(t, in2, tarOf(t, map[string]string{filepath.Base(exe2): "new binary"}), true, &hits)
+	u2 := testUpdater(t, srv2, in2, &out2)
+	u2.restart = func([]string, []string) error { return update.ErrStartedApart }
+	code = -1
+	u2.exit = func(c int) { code = c }
+	if !u2.once(context.Background()) || code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out2.String())
+	}
+	if !strings.Contains(out2.String(), "Masseuse.ai v0.11.0 is starting in a window of its own; this one is done.") {
+		t.Fatalf("no word of the new window:\n%s", out2.String())
+	}
+}
+
+func TestUpdaterRestartsEvenWhenTheHandoffHangs(t *testing.T) {
+	// A unit runtime that will not close, a camera that will not stop: the
+	// handoff is bounded, and the restart goes ahead past the bound with a
+	// warning. Before, any step could hold the update forever.
+	in, exe := fakeInstall(t)
+	archive := tarOf(t, map[string]string{filepath.Base(exe): "new binary"})
+	var hits atomic.Int32
+	srv := fakeRelease(t, in, archive, true, &hits)
+	var out strings.Builder
+	u := testUpdater(t, srv, in, &out)
+	u.handoffTimeout = 50 * time.Millisecond
+	var logged strings.Builder
+	u.log = slog.New(slog.NewTextHandler(&logged, nil))
+	release := make(chan struct{})
+	u.handoff = func() { <-release }
+	restarted := false
+	u.restart = func([]string, []string) error { restarted = true; return update.ErrRelaunch }
+	code := -1
+	u.exit = func(c int) { code = c }
+	started := time.Now()
+	if !u.once(context.Background()) {
+		t.Fatalf("once did not hand over:\n%s", out.String())
+	}
+	close(release)
+	if !restarted || code != update.RelaunchExitCode {
+		t.Fatalf("restarted %v, exit %d", restarted, code)
+	}
+	if took := time.Since(started); took > 2*time.Second {
+		t.Fatalf("the hung handoff held the restart for %v", took)
+	}
+	if !strings.Contains(logged.String(), "the handoff did not finish in time; restarting anyway") {
+		t.Fatalf("no warning:\n%s", logged.String())
 	}
 }
 

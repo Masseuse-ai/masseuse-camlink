@@ -23,7 +23,40 @@ type Installer struct {
 	// Run runs a program for its combined output, with a timeout; tests
 	// replace it. Nil is the real thing.
 	Run func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// Aside is the directory a bundle moved aside by Swap goes to (the
+	// state directory's `previous`), when it is on the bundle's volume: an
+	// Applications folder shows one application, not the new one and the
+	// old one beside it. Empty, or another volume, and the previous bundle
+	// is kept beside the new one under a hidden name (PreviousName).
+	Aside string
 }
+
+// RelaunchExitCode is the exit code with which the program asks the shell
+// that started it to start it again: the new version is in place at the
+// same path (Restart, ErrRelaunch). The .command file the macOS bundle
+// writes for Terminal runs the program in a loop on it.
+const RelaunchExitCode = 75
+
+// RelaunchEnv is the environment variable that shell sets ("1") so the
+// program knows it will be started again on RelaunchExitCode.
+const RelaunchEnv = "MASSEUSE_CAMLINK_RELAUNCH"
+
+// ErrRelaunch is Restart's answer when the process is not to be replaced
+// in place but ended with RelaunchExitCode: the shell that started it
+// (RelaunchEnv) starts the new version. An execve from this process is
+// not safe on a Mac: Go's runtime, before an exec on Darwin, waits for
+// every preemption signal it sent to be received (golang.org/issue/41702),
+// and a thread that never takes delivery (this program runs Go code on
+// CoreBluetooth's own threads) leaves it waiting forever: 2026-09-17, the
+// bundle swapped, "installed; restarting" logged, the old program still
+// on screen an hour later.
+var ErrRelaunch = errors.New("update: the shell that started the program starts the new version")
+
+// ErrStartedApart is Restart's answer when the new version has been
+// started as a program of its own (the bundle opened through
+// LaunchServices, which gives it a Terminal window of its own) and this
+// process is to end.
+var ErrStartedApart = errors.New("update: the new version is starting on its own; this program ends")
 
 func (i *Installer) logger() *slog.Logger {
 	if i.Logger != nil {
@@ -120,13 +153,23 @@ func (i *Installer) stageFiles(s *Staged, dir string) (string, error) {
 	return dir, nil
 }
 
-// PreviousName is what the install moved aside is called, beside the new
-// one: Masseuse.previous.app for a bundle, .previous/ for the files of a
-// package or archive install.
+// PreviousName is where the install moved aside goes: a bundle under Aside
+// (the state directory's `previous/Masseuse.app`) when Aside is on the
+// bundle's volume, otherwise beside the new one under a hidden name
+// (.Masseuse.previous.app: the Finder and Launchpad do not list it);
+// .previous/ inside the install for the files of a package or archive.
+// Until 2026-09-17 a bundle went aside as Masseuse.previous.app in
+// Applications, and a person saw two applications for a while.
 func (i *Installer) PreviousName() string {
 	if i.Install.Layout == LayoutBundle {
 		base := strings.TrimSuffix(filepath.Base(i.Install.Root), ".app")
-		return filepath.Join(filepath.Dir(i.Install.Root), base+".previous.app")
+		if i.Aside != "" {
+			// The directory has to be there to be on a volume at all.
+			if err := os.MkdirAll(i.Aside, 0o700); err == nil && sameVolume(i.Aside, filepath.Dir(i.Install.Root)) {
+				return filepath.Join(i.Aside, base+".app")
+			}
+		}
+		return filepath.Join(filepath.Dir(i.Install.Root), "."+base+".previous.app")
 	}
 	return filepath.Join(i.Install.Root, ".previous")
 }

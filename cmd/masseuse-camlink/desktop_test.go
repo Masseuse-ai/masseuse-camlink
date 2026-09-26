@@ -1,11 +1,15 @@
 package main
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/FemLed/masseuse-camlink/internal/update"
 )
 
 func TestBundleExecutable(t *testing.T) {
@@ -47,15 +51,61 @@ func TestCommandScript(t *testing.T) {
 	if !strings.HasPrefix(script, "#!/bin/sh\n") {
 		t.Fatalf("no sh shebang:\n%s", script)
 	}
-	want := `exec '/Applications/Masseuse.app/Contents/MacOS/Masseuse' -console -state-dir '/Users/o'\''brien/Library/Application Support/masseuse-camlink' "$@"` + "\n"
+	// The program runs in a loop, not by exec: an update ends it with the
+	// relaunch code and the shell starts the new version at the same path,
+	// in the same window (update.ErrRelaunch says why no exec).
+	want := "export MASSEUSE_CAMLINK_RELAUNCH=1\n" +
+		"while :; do\n" +
+		`  '/Applications/Masseuse.app/Contents/MacOS/Masseuse' -console -state-dir '/Users/o'\''brien/Library/Application Support/masseuse-camlink' "$@"` + "\n" +
+		"  status=$?\n" +
+		`  [ "$status" -eq 75 ] || exit "$status"` + "\n" +
+		"done\n"
 	if !strings.HasSuffix(script, want) {
-		t.Fatalf("exec line wrong:\n%s\nwant suffix:\n%s", script, want)
+		t.Fatalf("run loop wrong:\n%s\nwant suffix:\n%s", script, want)
+	}
+	if strings.Contains(script, "exec ") {
+		t.Fatalf("the script execs the program:\n%s", script)
 	}
 	if !strings.Contains(script, "printf '\\033]0;Masseuse.ai\\007'\n") {
 		t.Fatalf("window title line wrong:\n%s", script)
 	}
-	if strings.Count(script, "\n") != 5 {
-		t.Fatalf("script has %d lines, want 5:\n%s", strings.Count(script, "\n"), script)
+	if strings.Count(script, "\n") != 11 {
+		t.Fatalf("script has %d lines, want 11:\n%s", strings.Count(script, "\n"), script)
+	}
+	if update.RelaunchExitCode != 75 || update.RelaunchEnv != "MASSEUSE_CAMLINK_RELAUNCH" {
+		t.Fatalf("the script and the program disagree: %d %s", update.RelaunchExitCode, update.RelaunchEnv)
+	}
+}
+
+func TestCommandScriptRelaunchesOnTheCodeAndEndsOnOthers(t *testing.T) {
+	// The loop itself, run by sh with a stand-in program: it runs again on
+	// the relaunch code and ends with any other code.
+	if runtime.GOOS == "windows" {
+		t.Skip("no sh")
+	}
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "runs")
+	program := filepath.Join(dir, "program")
+	// Ends with the relaunch code the first two times, then with 3.
+	body := "#!/bin/sh\n" +
+		"n=$(cat " + shellQuote(counter) + " 2>/dev/null || echo 0); n=$((n+1)); echo $n > " + shellQuote(counter) + "\n" +
+		"[ -n \"$MASSEUSE_CAMLINK_RELAUNCH\" ] || exit 9\n" +
+		"[ \"$n\" -lt 3 ] && exit 75\n" +
+		"exit 3\n"
+	if err := os.WriteFile(program, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "run.command")
+	if err := os.WriteFile(script, []byte(commandScript(program, dir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("/bin/sh", script).CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
+		t.Fatalf("exit %v, output %q", err, out)
+	}
+	if b, _ := os.ReadFile(counter); strings.TrimSpace(string(b)) != "3" {
+		t.Fatalf("the program ran %s times, want 3", strings.TrimSpace(string(b)))
 	}
 }
 

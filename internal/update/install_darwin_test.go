@@ -54,6 +54,8 @@ func (m *fakeMac) run(_ context.Context, name string, args ...string) ([]byte, e
 		return exec.Command("/usr/bin/ditto", args...).CombinedOutput()
 	case "Masseuse":
 		return []byte(m.version + " go1.27.1\n"), nil
+	case "open":
+		return nil, nil
 	}
 	return nil, errors.New("unexpected " + name)
 }
@@ -75,7 +77,10 @@ func TestStageAndSwapABundle(t *testing.T) {
 		t.Fatalf("layout %s", in.Layout)
 	}
 	mac := &fakeMac{team: AppleTeamID, verdict: "accepted", runtime: true, version: "v0.11.0"}
-	inst := &Installer{Install: in, Run: mac.run}
+	// The previous bundle goes under the state directory (Aside), on the
+	// same volume here, not beside the new one in Applications.
+	aside := filepath.Join(t.TempDir(), "state", "previous")
+	inst := &Installer{Install: in, Run: mac.run, Aside: aside}
 	staged := &Staged{Tag: "v0.11.0", Name: "Masseuse.ai-0.11.0.dmg", Path: filepath.Join(t.TempDir(), "Masseuse.ai-0.11.0.dmg")}
 	_ = os.WriteFile(staged.Path, []byte("dmg"), 0o600)
 	dir := filepath.Join(t.TempDir(), "staged")
@@ -111,8 +116,11 @@ func TestStageAndSwapABundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if previous != filepath.Join(filepath.Dir(in.Root), "Masseuse.previous.app") {
+	if previous != filepath.Join(aside, "Masseuse.app") {
 		t.Fatalf("previous at %s", previous)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(in.Root)); len(entries) != 1 || entries[0].Name() != "Masseuse.app" {
+		t.Fatalf("the Applications folder shows %v, want the one application", entries)
 	}
 	if b, _ := os.ReadFile(in.Exe); string(b) != "new app" {
 		t.Fatal("the new application is not in place")
@@ -152,5 +160,44 @@ func TestStageRefusesAnApplicationGatekeeperOrTheTeamWouldNot(t *testing.T) {
 		if b, _ := os.ReadFile(in.Exe); string(b) != "old app" {
 			t.Fatalf("%s: the running application was touched", c.name)
 		}
+	}
+}
+
+func TestPreviousNameHidesTheBundleBesideWhenThereIsNoRoomAside(t *testing.T) {
+	in := bundleInstall(t)
+	// No Aside: beside the new one, hidden from the Finder.
+	if got := (&Installer{Install: in}).PreviousName(); got != filepath.Join(filepath.Dir(in.Root), ".Masseuse.previous.app") {
+		t.Fatalf("previous name %s", got)
+	}
+	// An Aside that cannot be made: the same.
+	blocked := filepath.Join(t.TempDir(), "file")
+	_ = os.WriteFile(blocked, nil, 0o600)
+	if got := (&Installer{Install: in, Aside: filepath.Join(blocked, "previous")}).PreviousName(); got != filepath.Join(filepath.Dir(in.Root), ".Masseuse.previous.app") {
+		t.Fatalf("previous name %s", got)
+	}
+	// An Aside on the volume: under it, by the bundle's own name.
+	aside := filepath.Join(t.TempDir(), "previous")
+	if got := (&Installer{Install: in, Aside: aside}).PreviousName(); got != filepath.Join(aside, "Masseuse.app") {
+		t.Fatalf("previous name %s", got)
+	}
+}
+
+func TestRestartNeverExecsTheProgramItself(t *testing.T) {
+	// Started by the .command shell: the relaunch code is the shell's cue.
+	in := bundleInstall(t)
+	t.Setenv(RelaunchEnv, "1")
+	if err := (&Installer{Install: in}).Restart(nil, nil); !errors.Is(err, ErrRelaunch) {
+		t.Fatalf("Restart = %v, want ErrRelaunch", err)
+	}
+	// Started otherwise, a bundle is opened through LaunchServices and this
+	// program ends.
+	t.Setenv(RelaunchEnv, "")
+	mac := &fakeMac{}
+	err := (&Installer{Install: in, Run: mac.run}).Restart(nil, nil)
+	if !errors.Is(err, ErrStartedApart) {
+		t.Fatalf("Restart = %v, want ErrStartedApart", err)
+	}
+	if joined := strings.Join(mac.commands, "\n"); !strings.Contains(joined, "open -a "+in.Root) {
+		t.Fatalf("the bundle was not opened:\n%s", joined)
 	}
 }
