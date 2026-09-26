@@ -1,8 +1,10 @@
 package helper_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -517,5 +519,116 @@ func TestNoDeviceCrossesTheWireOnceWorded(t *testing.T) {
 	_, err = h.Find(ctx)
 	if !errors.Is(err, estim.ErrNoDevice) || err.Error() != estim.ErrNoDevice.Error() {
 		t.Fatalf("bare find = %v", err)
+	}
+}
+
+// oneDriver is a family whose Find always hands out the one driver given.
+type oneDriver struct{ d estim.Driver }
+
+func (o oneDriver) Find(context.Context) (estim.Driver, error) { return o.d, nil }
+func (o oneDriver) Describe(_ context.Context, w io.Writer) error {
+	_, err := io.WriteString(w, "one\n")
+	return err
+}
+
+// blockingClose is a driver whose Close waits until released, recording
+// what it was asked and whether its context was cancelled while it waited.
+type blockingClose struct {
+	*fakeDriver
+	proceed   chan struct{}
+	entered   chan struct{}
+	restore   atomic.Bool
+	cancelled atomic.Bool
+}
+
+func (d *blockingClose) Close(ctx context.Context, restore bool) error {
+	d.restore.Store(restore)
+	close(d.entered)
+	select {
+	case <-d.proceed:
+	case <-ctx.Done():
+		d.cancelled.Store(true)
+		return ctx.Err()
+	}
+	if ctx.Err() != nil {
+		d.cancelled.Store(true)
+	}
+	return d.fakeDriver.Close(ctx, restore)
+}
+
+// When stdin ends with a close already running, Serve lets it finish
+// (restore and all) instead of cancelling it under the driver: the dead
+// end that abandoned a device still keyed when the connector quit during
+// a health tick (the plan's connector-exit-grace).
+func TestServeLetsAnInFlightCloseFinishOnEOF(t *testing.T) {
+	drv := &blockingClose{fakeDriver: newFakeDriver("port-1"), proceed: make(chan struct{}), entered: make(chan struct{})}
+	hostToGuestR, hostToGuestW := io.Pipe()
+	guestToHostR, guestToHostW := io.Pipe()
+	served := make(chan error, 1)
+	go func() {
+		served <- helper.Serve(context.Background(), hostToGuestR, guestToHostW, oneDriver{drv}, helper.Options{Name: "fake", Kinds: []estim.Kind{"fakekind"}})
+	}()
+	replies := bufio.NewScanner(guestToHostR)
+	readReply := func(what string) map[string]any {
+		if !replies.Scan() {
+			t.Fatalf("no reply for %s: %v", what, replies.Err())
+		}
+		var m map[string]any
+		if err := json.Unmarshal(replies.Bytes(), &m); err != nil {
+			t.Fatalf("reply for %s: %v", what, err)
+		}
+		return m
+	}
+	write := func(v any) {
+		b, _ := json.Marshal(v)
+		if _, err := hostToGuestW.Write(append(b, '\n')); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	// find, and wait for its reply, so the driver is open before the close.
+	write(map[string]any{"id": 1, "method": helper.MethodFind})
+	if r := readReply("find"); r["result"] == nil {
+		t.Fatalf("find failed: %v", r["error"])
+	}
+	// close(restore=true), then end stdin under it, mid-close.
+	write(map[string]any{"id": 2, "method": helper.MethodClose, "params": map[string]any{"restore": true}})
+	select {
+	case <-drv.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the close was never dispatched")
+	}
+	_ = hostToGuestW.Close() // stdin EOF while the close runs
+
+	// Serve must wait for the in-flight close, not return and cancel it.
+	select {
+	case <-served:
+		t.Fatal("Serve returned before the in-flight close finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if drv.cancelled.Load() {
+		t.Fatal("the in-flight close was cancelled by the stdin EOF")
+	}
+
+	close(drv.proceed) // let the close finish
+	if r := readReply("close"); r["error"] != nil {
+		t.Fatalf("close reply carried an error: %v", r["error"])
+	}
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after the close finished")
+	}
+	if !drv.restore.Load() {
+		t.Fatal("the close did not carry restore=true")
+	}
+	if drv.cancelled.Load() {
+		t.Fatal("the close saw its context cancelled")
+	}
+	if !drv.closed {
+		t.Fatal("the device was not closed")
 	}
 }

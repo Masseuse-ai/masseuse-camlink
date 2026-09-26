@@ -360,6 +360,109 @@ func (f *flaky) Status(ctx context.Context) (estim.Status, error) {
 func (f *flaky) setFail(n int) { f.mu.Lock(); f.fail = n; f.mu.Unlock() }
 func (f *flaky) count() int    { f.mu.Lock(); defer f.mu.Unlock(); return f.asked }
 
+// A reading that fails because the context was cancelled is the connector
+// shutting down, not the device faulting: the device stays held so Run's
+// exit closes it cleanly (released and unkeyed) rather than abandoning it
+// still keyed for the next start to have to resume. Release the same.
+func TestRuntimeContextCancelIsNotAFault(t *testing.T) {
+	u := fakeunit.New("id-1", "MASTOGO G-12AB")
+	rt, seen := watched(t, u)
+	if err := rt.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Arm(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reports := len(seen())
+
+	// The health tick runs while the connector is quitting: a cancelled
+	// reading must not fault the device.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !rt.HealthCheck(ctx) {
+		t.Fatal("a cancelled health check faulted the device")
+	}
+	if !rt.Connected() || !rt.Armed() || rt.CancelLatched() {
+		t.Fatal("a cancelled health check must leave the device held and armed")
+	}
+	if len(seen()) != reports {
+		t.Fatal("a cancelled health check reported a device change")
+	}
+
+	// A release racing the shutdown is not a fault either.
+	if _, err := rt.Release(ctx, "cancelled"); err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("release under a cancelled context: %v", err)
+	}
+	if !rt.Connected() {
+		t.Fatal("a cancelled release faulted the device")
+	}
+	if len(seen()) != reports {
+		t.Fatal("a cancelled release reported a device change")
+	}
+
+	// The clean exit still releases and unkeys.
+	if err := rt.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rt.Connected() || u.Outputting() || u.Connections() != 0 {
+		t.Fatal("the clean close must release and disconnect")
+	}
+}
+
+// A released device is read a few times over a marginal link before it is
+// given up, where an armed one fails closed after two: it holds nothing at
+// level 0, so a run of garbled replies costs it nothing.
+func TestRuntimeReleasedDeviceIsGivenLongerBeforeAFault(t *testing.T) {
+	ctx := context.Background()
+	u := fakeunit.New("id-1", "MASTOGO G-12AB")
+	rt := unitRuntime(t, u)
+	var f *flaky
+	inner := rt.Connect
+	rt.Connect = func(ctx context.Context) (estim.Driver, error) {
+		d, err := inner(ctx)
+		if err != nil {
+			return nil, err
+		}
+		f = &flaky{Driver: d}
+		return f, nil
+	}
+	if err := rt.Open(ctx); err != nil { // opens released, not armed
+		t.Fatal(err)
+	}
+	if rt.Armed() {
+		t.Fatal("a fresh connection is not armed")
+	}
+	// Two garbled readings in a row: an armed device would be gone, but a
+	// released one is read a third time and recovers.
+	asked := f.count()
+	f.setFail(2)
+	if !rt.HealthCheck(ctx) {
+		t.Fatal("a released device was given up after two garbled readings")
+	}
+	if f.count()-asked != 3 {
+		t.Fatalf("readings taken for a released device = %d, want 3", f.count()-asked)
+	}
+	if !rt.Connected() {
+		t.Fatal("the released device should still be held")
+	}
+	// Garbled every time: it is given up after the three.
+	asked = f.count()
+	f.setFail(healthReleasedFailAll)
+	if rt.HealthCheck(ctx) {
+		t.Fatal("a released device that never answered passed its check")
+	}
+	if f.count()-asked != 3 {
+		t.Fatalf("readings before the fault = %d, want 3", f.count()-asked)
+	}
+	if rt.Connected() || !rt.CancelLatched() {
+		t.Fatal("fault must forget the device and latch")
+	}
+}
+
+// healthReleasedFailAll is more failures than a released check ever takes,
+// so every reading in the check fails.
+const healthReleasedFailAll = 5
+
 func TestRuntimeHealthCheckReadsOnceMoreBeforeAFault(t *testing.T) {
 	ctx := context.Background()
 	u := fakeunit.New("id-1", "MASTOGO G-12AB")

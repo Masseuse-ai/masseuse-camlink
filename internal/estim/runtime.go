@@ -18,10 +18,22 @@ const (
 	// HealthInterval is how often the device is read in full while idle.
 	HealthInterval = 5 * time.Second
 	// HealthRetryPause separates a full reading that failed from the one
-	// more taken before the device is given up on: a serial or radio link
-	// garbles a reply now and then, and one garbled reply is not a lost
-	// device.
+	// more taken before an armed device is given up on: a serial or radio
+	// link garbles a reply now and then, and one garbled reply is not a
+	// lost device. A device serving a live session fails closed promptly,
+	// so it is read twice, a short pause apart.
 	HealthRetryPause = 250 * time.Millisecond
+	// HealthRetryPatient separates the readings of a released device, which
+	// can afford to wait out a marginal link (it holds nothing at level 0).
+	HealthRetryPatient = time.Second
+	// healthTriesReleased is how many full readings a released device is
+	// given, about HealthRetryPatient apart, before it is given up: three,
+	// where an armed one gets two.
+	healthTriesReleased = 3
+	// DeadLinkGrace bounds the release and close of a device that just
+	// failed its health check: the link has misbehaved, and a release over
+	// it may hang, so it is not waited on longer than this.
+	DeadLinkGrace = 3 * time.Second
 	// DefaultListInterval is how often the units in reach are listed while
 	// the program runs (Runtime.ListInterval). A listing is a scan window
 	// on the Bluetooth family, so it is not the health tick's.
@@ -502,24 +514,50 @@ func (r *Runtime) HealthCheck(ctx context.Context) bool {
 	if r.device == nil {
 		return false
 	}
-	status, err := r.device.Status(ctx)
-	if err != nil && ctx.Err() == nil {
-		r.log().Debug("estim: reading the device failed; reading once more", "err", err)
-		if perr := pause(ctx, HealthRetryPause); perr == nil {
-			status, err = r.device.Status(ctx)
+	// An armed device fails closed promptly (two readings, a short pause
+	// apart); a released one waits out a marginal link (three, about a
+	// second apart) since it holds nothing at level 0.
+	tries, gap := 2, HealthRetryPause
+	if !r.Armed() {
+		tries, gap = healthTriesReleased, HealthRetryPatient
+	}
+	var status Status
+	var err error
+	for attempt := 1; attempt <= tries; attempt++ {
+		status, err = r.device.Status(ctx)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+		if attempt < tries {
+			r.log().Debug("estim: reading the device failed; reading again", "err", err, "attempt", attempt, "of", tries)
+			if perr := pause(ctx, gap); perr != nil {
+				break
+			}
 		}
 	}
 	if err == nil {
 		r.setStatus(status)
 		return true
 	}
+	if ctx.Err() != nil {
+		// The connector is shutting down, not a device fault: leave the
+		// device held so Run's exit closes it cleanly (released and
+		// unkeyed) instead of abandoning it, still keyed, for the next
+		// start to have to resume.
+		return true
+	}
 	r.log().Warn("estim: device stopped answering; released and disconnected", "err", err)
 	failed := r.fault(err)
-	if rerr := failed.Release(ctx); rerr != nil {
+	// Tell the service the unit is gone before the release is attempted on
+	// the link that just failed: that release can hang for seconds on a
+	// dead line, and the phone should hear at once rather than wait it out.
+	r.notify(ctx, r.Descriptor())
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DeadLinkGrace)
+	defer cancel()
+	if rerr := failed.Release(rctx); rerr != nil {
 		r.log().Debug("estim: release of a failed device", "err", rerr)
 	}
-	r.closeFailed(ctx, failed, false)
-	r.notify(ctx, r.Descriptor())
+	r.closeFailed(rctx, failed, false)
 	return false
 }
 
@@ -655,6 +693,11 @@ func (r *Runtime) Release(ctx context.Context, reason string) (Status, error) {
 		}
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			// Shutting down mid-release, not a device fault: leave the
+			// device for Run's exit to close cleanly, not abandoned keyed.
+			return r.LastStatus(), err
+		}
 		failed := r.fault(err)
 		r.closeFailed(ctx, failed, false)
 		r.notify(ctx, r.Descriptor())

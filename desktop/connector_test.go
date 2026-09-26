@@ -160,6 +160,26 @@ func TestServiceReadsStateAndRelaunches(t *testing.T) {
 	}
 }
 
+func TestServiceStopGraceFollowsWhetherAUnitIsHeld(t *testing.T) {
+	s := newConnectorService()
+	s.log = slog.New(slog.DiscardHandler)
+	// Nothing held yet: the quick grace.
+	if g := s.stopGrace(); g != stopGraceIdle {
+		t.Fatalf("grace with nothing held = %v, want %v", g, stopGraceIdle)
+	}
+	// A device event with a connected unit: the longer grace, so the unit
+	// is released and unkeyed before the process is killed.
+	s.take(map[string]any{"type": "device", "descriptor": map[string]any{"connected": true}})
+	if g := s.stopGrace(); g != stopGraceHolding {
+		t.Fatalf("grace while a unit is held = %v, want %v", g, stopGraceHolding)
+	}
+	// The unit is lost (connected false): back to the quick grace.
+	s.take(map[string]any{"type": "device", "descriptor": map[string]any{"connected": false}})
+	if g := s.stopGrace(); g != stopGraceIdle {
+		t.Fatalf("grace after the unit went = %v, want %v", g, stopGraceIdle)
+	}
+}
+
 func TestServiceReportsAConnectorThatStopped(t *testing.T) {
 	s := newConnectorService()
 	s.log = slog.New(slog.DiscardHandler)

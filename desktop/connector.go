@@ -58,6 +58,10 @@ type ConnectorService struct {
 	// linkActive and armed are what shouldQuit asks about.
 	linkActive bool
 	armed      bool
+	// deviceHeld says the connector holds a stimulation unit (the last
+	// `device` event was connected): the stop at quit then waits longer,
+	// so the unit is released and unkeyed rather than abandoned still keyed.
+	deviceHeld bool
 	// forceQuit is set once the person has confirmed a quit during a
 	// session; shouldQuit then answers yes.
 	forceQuit atomic.Bool
@@ -163,16 +167,40 @@ func (s *ConnectorService) ServiceStartup(ctx context.Context, _ application.Ser
 	return nil
 }
 
+// Stop grace: how long the connector is given to end on its own after a
+// quit before it is killed. A connector holding a stimulation unit needs
+// long enough to release and unkey it (a few serial round trips over a
+// link that may be marginal, the connector's own 20 s exit budget within
+// it); one holding nothing is quick.
+const (
+	stopGraceIdle    = 5 * time.Second
+	stopGraceHolding = 25 * time.Second
+)
+
+// stopGrace is how long the connector is given to end on its own at a
+// quit: longer while it holds a stimulation unit, so the unit is released
+// and unkeyed before the process is killed.
+func (s *ConnectorService) stopGrace() time.Duration {
+	s.mu.Lock()
+	held := s.deviceHeld
+	s.mu.Unlock()
+	if held {
+		return stopGraceHolding
+	}
+	return stopGraceIdle
+}
+
 // ServiceShutdown ends the connector: quit on its standard input, which
 // ends it cleanly (the camera off, the unit released), a bounded wait,
 // then the process is killed.
 func (s *ConnectorService) ServiceShutdown() error {
+	grace := s.stopGrace()
 	s.mu.Lock()
 	s.stopping = true
 	p := s.proc
 	s.mu.Unlock()
 	if p != nil {
-		p.stop(5 * time.Second)
+		p.stop(grace)
 	}
 	if s.logFile != nil {
 		s.logFile.Close()
@@ -232,7 +260,7 @@ func (s *ConnectorService) relay(p *connectorProcess) {
 	code := p.wait()
 	s.mu.Lock()
 	stopping := s.stopping
-	s.wired, s.linkActive, s.armed = false, false, false
+	s.wired, s.linkActive, s.armed, s.deviceHeld = false, false, false, false
 	s.mu.Unlock()
 	switch {
 	case code == relaunchExitCode:
@@ -285,8 +313,11 @@ func (s *ConnectorService) take(ev map[string]any) {
 		s.linkActive = state == "active"
 	case "device":
 		s.armed = false
+		s.deviceHeld = false
 		if d, ok := ev["descriptor"].(map[string]any); ok {
 			_, s.armed = d["armed"].(map[string]any)
+			held, _ := d["connected"].(bool)
+			s.deviceHeld = held
 		}
 	}
 	s.mu.Unlock()

@@ -29,11 +29,23 @@ type Options struct {
 	Log   *slog.Logger
 }
 
+// ExitGrace is how long Serve lets requests already running finish once
+// stdin ends, before it cancels them: enough for an in-flight
+// close(restore=true) to release and unkey the device over a marginal
+// link, bounded so a stuck one does not hang the exit.
+const ExitGrace = 20 * time.Second
+
+// ExitCloseGrace bounds the close of a device the Host left open without
+// closing itself (Serve's own fallback release).
+const ExitCloseGrace = 5 * time.Second
+
 // Serve answers a Host on in/out from finder until in ends or ctx is done.
 // Requests are served concurrently, each answered on its own line; the
 // finder's and the driver's own locking is theirs, as in the connector.
 // One device is open at a time: `find` closes a device still open before
-// looking again.
+// looking again. When stdin ends, requests already running are given
+// ExitGrace to finish (an in-flight close especially) before they are
+// cancelled.
 func Serve(ctx context.Context, in io.Reader, out io.Writer, finder estim.Finder, opts Options) error {
 	if opts.Name == "" {
 		return errors.New("helper: Serve needs a name")
@@ -64,15 +76,28 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, finder estim.Finder
 			g.answer(ctx, env)
 		}(env)
 	}
+	// Stdin ended: the Host is going away. Let requests already running
+	// finish first, within a bounded grace — a close(restore=true) the
+	// connector sent to release and unkey the device must not be cut off
+	// midway, which left the device keyed for the next start to resume —
+	// then cancel whatever has not finished.
+	finished := make(chan struct{})
+	go func() { wg.Wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(ExitGrace):
+		cancel()
+		<-finished
+	}
 	cancel()
-	wg.Wait()
-	// The Host is gone: leave no current flowing behind.
+	// If the Host went away with a device still open (no close reached
+	// us), leave no current flowing behind.
 	g.mu.Lock()
 	d := g.driver
 	g.driver = nil
 	g.mu.Unlock()
 	if d != nil {
-		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cctx, ccancel := context.WithTimeout(context.Background(), ExitCloseGrace)
 		defer ccancel()
 		_ = d.Close(cctx, true)
 	}
