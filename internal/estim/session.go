@@ -155,8 +155,25 @@ func (s *Session) queueRuntimeState(sessionID string) {
 	s.queue(sessionID, false, map[string]any{"type": "armed", "armed": armed, "expiresAt": expires, "heldOff": false})
 }
 
-func (s *Session) queueNack(sessionID string, commandID any, msg string) {
-	s.queue(sessionID, false, map[string]any{"type": "device_ack", "commandId": commandID, "ok": false, "error": truncate(msg, 300), "status": s.Runtime.LastStatus()})
+// The connector's own refusals of a command, named so the service can
+// tell them from a device fault (PROTOCOL.md 7.3, `device_ack.code`): the
+// unit is as it was, nothing has been tried on it.
+const (
+	// NackBusy: another command is still running; one at a time.
+	NackBusy = "busy"
+	// NackNoSession: no live session is attached.
+	NackNoSession = "no_session"
+	// NackSessionMismatch: the command names another session than the attached one.
+	NackSessionMismatch = "session_mismatch"
+	// NackInvalid: the command does not parse.
+	NackInvalid = "invalid"
+)
+
+// queueNack refuses a command the connector never tried on the unit: `code`
+// names why, `msg` says it. A command the unit itself failed is acked with
+// ok:false and no code (runCommand): that one is a fault, and released.
+func (s *Session) queueNack(sessionID string, commandID any, code, msg string) {
+	s.queue(sessionID, false, map[string]any{"type": "device_ack", "commandId": commandID, "ok": false, "code": code, "error": truncate(msg, 300), "status": s.Runtime.LastStatus()})
 }
 
 // Flush sends everything queued, grouped by session. Failures keep the
@@ -493,7 +510,7 @@ func (s *Session) handleControl(ctx context.Context, envelopeSession string, p c
 		sid, attached := s.sessionID, s.attached
 		s.mu.Unlock()
 		if !attached {
-			s.queueNack(envelopeSession, p.CommandID, "no live session is attached")
+			s.queueNack(envelopeSession, p.CommandID, NackNoSession, "no live session is attached")
 			return
 		}
 		var cmd Command
@@ -503,7 +520,7 @@ func (s *Session) handleControl(ctx context.Context, envelopeSession string, p c
 		}
 		isRelease := perr == nil && cmd.Verb == "release"
 		if (p.SessionID != sid || (envelopeSession != "" && envelopeSession != sid)) && !isRelease {
-			s.queueNack(sid, p.CommandID, "live session ID mismatch")
+			s.queueNack(sid, p.CommandID, NackSessionMismatch, "live session ID mismatch")
 			return
 		}
 		if isRelease {
@@ -516,7 +533,7 @@ func (s *Session) handleControl(ctx context.Context, envelopeSession string, p c
 			}
 			s.mu.Unlock()
 			if busy {
-				s.queueNack(sid, p.CommandID, "another command is still in progress")
+				s.queueNack(sid, p.CommandID, NackBusy, "another command is still in progress")
 				return
 			}
 		}
@@ -604,7 +621,7 @@ func (s *Session) runCommand(ctx context.Context, sid string, p controlPayload, 
 		if perr != nil {
 			msg = perr.Error()
 		}
-		s.queueNack(sid, p.CommandID, msg)
+		s.queueNack(sid, p.CommandID, NackInvalid, msg)
 		return
 	}
 	res, status, err := s.Runtime.Execute(ctx, cmd)

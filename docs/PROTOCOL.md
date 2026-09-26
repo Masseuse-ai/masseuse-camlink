@@ -570,7 +570,7 @@ session:
 | `device_status` | `status` | after every command, arm, release and heartbeat |
 | `armed` | `armed`, `expiresAt` (RFC 3339 or null), `heldOff` (always false) | with `device_status` |
 | `device_telemetry` | `frames` (at most 32) | every 2 s while attached, when frames were sampled |
-| `device_ack` | `commandId`, `ok`, `result` or `error`, `status` | for every command |
+| `device_ack` | `commandId`, `ok`, `result` or `error`, `status`; `code` on a refusal | for every command |
 | `device_settings` | `powerMode` (`normal` or `high`), `levelMax` (0..99) | the settings in force: after every attach and every `device_settings` control |
 | `detached` | `reason` | when the connector detaches on its own |
 
@@ -642,6 +642,18 @@ from `capabilities.modes`); `set_level {channel:"a", level}`;
 {delta}` (the last two only for a device with `capabilities.tempo`). A
 command whose `sessionId` is not the attached session is refused (`release`
 excepted).
+
+Commands run one at a time. A second command arriving while one runs is
+refused, not queued; `release` is the exception, taken at any time and
+cancelling what is running. A refusal is a `device_ack` with `ok` false,
+an `error` sentence and a `code` naming the reason, since the unit is as
+it was and the service has nothing to release: `busy` (another command is
+still in progress), `no_session` (no live session is attached),
+`session_mismatch` (the command names another session), `invalid` (the
+command does not parse). A command the unit itself failed is acked with
+`ok` false and no `code`: the connector has released the unit, and the
+service treats it as the fault it is. A service older than the `code`
+reads every `ok` false alike, as before.
 
 `status` in every message above is the device reading. Its field names are
 shared by every kind: `connected`, `port` (the system's identifier for the

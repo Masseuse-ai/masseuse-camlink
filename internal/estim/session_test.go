@@ -316,7 +316,7 @@ func TestSessionCommandsAckAndNack(t *testing.T) {
 	// A command for another session is refused; release is not.
 	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c2","sessionId":"other","command":{"verb":"set_level","level":1}}`))
 	got = up.drain(ctx, s)
-	if n := find(got, "device_ack"); n == nil || n["ok"] != false || n["error"] != "live session ID mismatch" {
+	if n := find(got, "device_ack"); n == nil || n["ok"] != false || n["error"] != "live session ID mismatch" || n["code"] != estim.NackSessionMismatch {
 		t.Fatalf("mismatch nack = %v", n)
 	}
 	if u.Level() != 9 {
@@ -326,7 +326,8 @@ func TestSessionCommandsAckAndNack(t *testing.T) {
 	// A command that fails caps is nacked and the device released.
 	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c3","sessionId":"sess-1","command":{"verb":"set_level","level":16}}`))
 	got = up.drain(ctx, s)
-	if n := find(got, "device_ack"); n == nil || n["ok"] != false {
+	// A fault of the unit's, not a refusal of the connector's: no code.
+	if n := find(got, "device_ack"); n == nil || n["ok"] != false || n["code"] != nil {
 		t.Fatalf("cap nack = %v", n)
 	}
 	if u.Level() != 0 || u.Outputting() || rt.Armed() {
@@ -438,7 +439,7 @@ func TestSessionOneCommandAtATime(t *testing.T) {
 	up.sent = nil
 	up.mu.Unlock()
 	n := find(got, "device_ack")
-	if n == nil || n["commandId"] != "second" || n["ok"] != false || n["error"] != "another command is still in progress" {
+	if n == nil || n["commandId"] != "second" || n["ok"] != false || n["error"] != "another command is still in progress" || n["code"] != estim.NackBusy {
 		t.Fatalf("busy nack = %v", n)
 	}
 	// Telemetry sampled meanwhile records the device as busy.
