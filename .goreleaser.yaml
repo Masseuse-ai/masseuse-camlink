@@ -167,11 +167,12 @@ release:
     unpack under %LOCALAPPDATA%\masseuse-camlink on the first start). It is
     added by the `windows-app` job after the archives; it is the
     `windows_amd64` archive's binary byte for byte with the payload
-    appended and signed by Principled Labs, Inc. (Azure Artifact Signing),
-    listed in `checksums-windows.txt` (signed,
-    `checksums-windows.txt.sigstore.json`; provenance `windows.intoto.jsonl`).
-    While a release is new to Microsoft, Windows may still ask before the
-    first start: More info, then Run anyway. Installs of releases before
+    appended, listed in `checksums-windows.txt` (signed,
+    `checksums-windows.txt.sigstore.json`; provenance `windows.intoto.jsonl`);
+    it carries an Authenticode signature when the release was built with
+    signing credentials (VERIFY.md, "The Windows package", says how to tell).
+    Windows may ask before the first start: More info, then Run anyway.
+    Installs of releases before
     0.13 update themselves from `Masseuse.ai-{{ .Version }}-windows.zip`,
     which holds the same file.
 
