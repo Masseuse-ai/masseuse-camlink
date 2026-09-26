@@ -192,21 +192,6 @@ export const scenarios: Scenario[] = [
         }),
     },
     {
-        id: 'camera-ffmpeg-missing',
-        group: 'Cameras and microphone',
-        title: 'ffmpeg missing (Linux archive)',
-        note: 'The bare archive needs the distribution’s ffmpeg to send the computer’s camera.',
-        platform: 'linux',
-        step: 'camera',
-        script: [
-            { at: 0, event: { type: 'hello', hello: hello({ phones: 1, stateDir: stateDirs.linux, drivers: 'Mastago (built in); no helpers in /home/you/masseuse-camlink/units.' }) } },
-            { at: 250, event: { type: 'devices', cameras: [], mics: [], substitutions: [], error: 'ffmpeg was not found on PATH. Install it: sudo apt install ffmpeg (or your distribution’s package).' } },
-            { at: 300, event: { type: 'source', kind: 'capture', label: "This computer's camera", ready: false, note: 'ffmpeg was not found on PATH', share: shareOffered, face: null } },
-            { at: 700, event: { type: 'online', online: true } },
-            { at: 1200, event: unitsEvent([]) },
-        ],
-    },
-    {
         id: 'camera-locked',
         group: 'Cameras and microphone',
         title: 'A session has the camera',
@@ -429,6 +414,29 @@ export const scenarios: Scenario[] = [
             { at: 1800, event: { type: 'link', state: 'active', enclave } },
             { at: 2000, event: { type: 'camera', on: true, stats: { videoBps: 1_600_000, audioBps: 64_000, congested: true, backlogS: 1.4 } } },
             { at: 2100, event: { type: 'notice', level: 'warn', text: 'Connection cannot keep up: video now 1.6 Mb/s.' } },
+        ],
+    },
+    {
+        id: 'home-no-picture',
+        group: 'Ready',
+        title: 'Session active, the camera delivers no picture',
+        note: 'ffmpeg runs but never publishes, as when macOS has refused the camera; the meters sit at zero with the connector’s reason, said once as a notice.',
+        step: 'home',
+        setupDone: true,
+        script: [
+            ...opening({ phones: 1 }),
+            { at: 1800, event: { type: 'link', state: 'active', enclave } },
+            { at: 2000, event: { type: 'camera', on: true } },
+            { at: 3000, event: { type: 'camera', on: true, stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0 } } },
+            {
+                at: 4500,
+                event: {
+                    type: 'camera',
+                    on: true,
+                    stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0, reason: 'the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it' },
+                },
+            },
+            { at: 4600, event: { type: 'notice', level: 'warn', text: 'Camera on but not sending yet: the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it.' } },
         ],
     },
     {

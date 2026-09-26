@@ -51,9 +51,11 @@ jobs:
       - name: cross-compile the connector without cgo
         # The Bluetooth, serial port and USB discovery code has a file per
         # system; every release target must build with CGO_ENABLED=0 as the
-        # release does.
+        # release does. linux/amd64 is not a release target of the connector
+        # (nothing is published for Linux) but the gateway is a Linux
+        # program, and the per-system files must keep compiling there.
         run: |
-          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 linux/arm windows/amd64 windows/arm64; do
+          for target in darwin/amd64 darwin/arm64 linux/amd64 windows/amd64 windows/arm64; do
             GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /dev/null ./cmd/masseuse-camlink
             GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go vet ./internal/ble/ ./internal/serialport/ ./internal/estim/...
           done
@@ -122,8 +124,15 @@ jobs:
           # The window answers --version without opening; the connector beside it is the console program.
           test "$(dist/Masseuse.app/Contents/MacOS/Masseuse --version | cut -d' ' -f1)" = v0.0.0
           dist/Masseuse.app/Contents/MacOS/masseuse-camlink --version
-          codesign --force --deep --sign - dist/Masseuse.app
-          codesign --verify --deep --strict --verbose=2 dist/Masseuse.app
+          # The release's signing plan, ad hoc: the bundle's executable and
+          # ffmpeg carry the camera and microphone entitlements, the
+          # connector and the helpers none (packaging/macos/sign-app.sh,
+          # device.entitlements); assess.sh reads them back the way the
+          # release does. v0.16.0 and v0.17.0 shipped the executable without
+          # them, and macOS refused the camera without a prompt.
+          plutil -lint packaging/macos/device.entitlements
+          sh packaging/macos/sign-app.sh -i - dist/Masseuse.app
+          sh packaging/macos/assess.sh entitlements dist/Masseuse.app
           sh packaging/macos/build-dmg.sh -a dist/Masseuse.app -v 0.0.0 -o dist
           hdiutil imageinfo dist/Masseuse.ai-0.0.0.dmg | grep -E '^Format: UDZO'
           # The volume is named after the app, so the Finder's sidebar says so.
@@ -227,13 +236,13 @@ jobs:
     # The desktop shell (desktop/, docs/DESKTOP.md): its own Go module, so
     # the connector's `go vet ./...` above never sees it. The page must
     # typecheck and build, the Go shell must vet, build and pass its tests
-    # on each of the three systems it ships for (cgo: the window toolkit is
+    # on each of the two systems it ships for (cgo: the window toolkit is
     # native), and the generated bindings committed under frontend/bindings
     # must be what the Go services say.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, windows-2022, ubuntu-24.04]
+        os: [macos-26, windows-2022]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -255,11 +264,6 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/frontend/package-lock.json
-      - name: Linux toolkit
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
       - name: frontend
         working-directory: desktop/frontend
         run: |

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The camera and the microphone, for the two programs macOS holds to
+	     account when ffmpeg opens them. Under the hardened runtime a process
+	     may open either only with these entitlements, and the system checks
+	     them on the process that opens the device (ffmpeg, the accessing
+	     process) and on the application it runs under (the bundle's
+	     executable, the desktop window, which macOS calls the responsible
+	     process); a responsible process without them is refused without a
+	     prompt, so the camera never comes on and Privacy & Security never
+	     lists the application. v0.16.0 and v0.17.0 signed the bundle without
+	     them. sign-app.sh puts this file on both; the connector between them
+	     and the unit driver helpers open neither device and get none
+	     (docs/UNITS.md). Bluetooth is not a hardened-runtime gate. -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

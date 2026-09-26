@@ -17,8 +17,8 @@ so the connector's `go.mod` never learns about the window toolkit.
 `ConnectorService` (`connector.go`) starts the connector on
 `ServiceStartup`: `masseuse-camlink -ipc -state-dir DIR -install-root ROOT`,
 found beside the shell (`Contents/MacOS/masseuse-camlink` in the bundle,
-the unpacked payload on Windows, the same directory on Linux, or
-`MASSEUSE_CAMLINK_BIN` while working on it; `locate.go`). Each JSON line
+the unpacked payload on Windows, or `MASSEUSE_CAMLINK_BIN` while working
+on it; `locate.go`). Each JSON line
 the connector writes is relayed to the page as the Wails event `connector`
 and the last of each kind kept for a page that mounts later (`Snapshot`);
 the page's requests are the typed methods (`ListDevices`, `SetSource`,
@@ -42,7 +42,7 @@ render waits for it (`runtimeReady`, bounded) instead of deciding without it.
 ```sh
 cd desktop/frontend && npm install          # once
 npm run dev                                 # the page in a browser, http://127.0.0.1:9245/
-                                            # with the scenario panel (every state; ?scenario=<id>&os=<darwin|windows|linux>)
+                                            # with the scenario panel (every state; ?scenario=<id>&os=<darwin|windows>)
 npm run typecheck && npm run build          # what CI runs
 
 cd desktop

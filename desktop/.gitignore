@@ -2,7 +2,6 @@
 bin
 frontend/dist
 frontend/node_modules
-build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 # Generated from build/appicon.png and build/appicon.icon by `wails3 task common:generate:icons`.
 build/darwin/Assets.car

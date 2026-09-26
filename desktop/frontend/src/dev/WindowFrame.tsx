@@ -3,8 +3,8 @@
 // with the chrome the platform would add, scaled down as a whole when the
 // browser is smaller than that so the layout stays the window's. On macOS
 // the chrome is the three traffic lights over the page's own top bar (the
-// native title bar is hidden; main.go); on Windows and Linux a title bar
-// and the menu bar the application menu is shown in. Inside the desktop
+// native title bar is hidden; main.go); on Windows a title bar and the
+// menu bar the application menu is shown in. Inside the desktop
 // shell none of this renders; the operating system draws the real thing.
 
 import { useEffect, useState, type ReactNode } from 'react';
@@ -13,7 +13,7 @@ import type { Platform } from '../bridge/store';
 
 export const WINDOW = { width: 1040, height: 720 };
 
-/** The title bar and menu bar Windows and Linux draw above the page; macOS draws none (the page's top bar is the title bar). */
+/** The title bar and menu bar Windows draws above the page; macOS draws none (the page's top bar is the title bar). The linux entry only completes the Platform type; nothing is drawn for it. */
 const CHROME_HEIGHT = { darwin: 0, windows: 60, linux: 60 } as const;
 
 function useFitScale(height: number, margin = 32): number {

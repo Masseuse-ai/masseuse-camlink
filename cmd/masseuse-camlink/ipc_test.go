@@ -113,6 +113,56 @@ func TestIPCReporterBlockedGoesOutAtOnce(t *testing.T) {
 	}
 }
 
+// TestIPCReporterNotSendingCarriesTheReasonOnce: a camera that is on but
+// sending nothing reports idle meters with the reason on them every time,
+// and a notice the first time each reason is given; sending, or the camera
+// going off and on, lets the same reason be noticed again.
+func TestIPCReporterNotSendingCarriesTheReasonOnce(t *testing.T) {
+	var out lockedBuffer
+	r := newIPCReporter(&out, slog.New(slog.DiscardHandler))
+	r.Ready()
+	r.CameraOn("Cam")
+	r.NotSending("")
+	r.NotSending("the camera delivered no picture in 10 s")
+	r.NotSending("the camera delivered no picture in 10 s")
+	r.NotSending("ffmpeg stopped as soon as it started")
+	r.Sending("1280x720 30 fps", 2.5e6, 64e3, false, 0)
+	r.NotSending("the camera delivered no picture in 10 s")
+	r.CameraOff()
+	r.CameraOn("Cam")
+	r.NotSending("the camera delivered no picture in 10 s")
+	var got []string
+	for _, line := range ipcLines(t, []byte(out.String()))[1:] {
+		switch line["type"] {
+		case "camera":
+			s, _ := line["stats"].(map[string]any)
+			reason, _ := s["reason"].(string)
+			got = append(got, fmt.Sprintf("camera on=%v stats=%v reason=%q", line["on"], s != nil, reason))
+		case "notice":
+			got = append(got, fmt.Sprintf("notice %s: %s", line["level"], line["text"]))
+		}
+	}
+	want := []string{
+		`camera on=true stats=false reason=""`,
+		`camera on=true stats=true reason=""`,
+		`camera on=true stats=true reason="the camera delivered no picture in 10 s"`,
+		`notice warn: Camera on but not sending yet: the camera delivered no picture in 10 s.`,
+		`camera on=true stats=true reason="the camera delivered no picture in 10 s"`,
+		`camera on=true stats=true reason="ffmpeg stopped as soon as it started"`,
+		`notice warn: Camera on but not sending yet: ffmpeg stopped as soon as it started.`,
+		`camera on=true stats=true reason=""`,
+		`camera on=true stats=true reason="the camera delivered no picture in 10 s"`,
+		`notice warn: Camera on but not sending yet: the camera delivered no picture in 10 s.`,
+		`camera on=false stats=false reason=""`,
+		`camera on=true stats=false reason=""`,
+		`camera on=true stats=true reason="the camera delivered no picture in 10 s"`,
+		`notice warn: Camera on but not sending yet: the camera delivered no picture in 10 s.`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestIPCReporterDeviceCarriesStatusAndArm(t *testing.T) {
 	var out lockedBuffer
 	r := newIPCReporter(&out, slog.New(slog.DiscardHandler))

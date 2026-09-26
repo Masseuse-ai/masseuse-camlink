@@ -75,6 +75,12 @@ type Source struct {
 	// earlyExit is how soon an exit counts as "failed to start" (encoder
 	// fallback, growing backoff) rather than a stream that ran and broke.
 	earlyExit time.Duration
+	// announceGrace is how long a running ffmpeg may go without publishing
+	// before trouble says the camera delivered no picture (stalled). An
+	// ffmpeg that exits says why; one the system refuses the camera does
+	// not: on a Mac the avfoundation input waits for a first frame that
+	// never comes, without a word, for as long as it is left running.
+	announceGrace time.Duration
 }
 
 // New resolves ffmpeg and the devices now, so a wrong selector or a
@@ -115,6 +121,7 @@ func newSource(sink Sink, opts Options, logger *slog.Logger, goos, ffmpeg string
 		sink: sink, opts: opts, log: logger, goos: goos, ffmpeg: ffmpeg, cam: cam, mic: mic,
 		list: Devices, encoders: listEncoders,
 		encoder: enc, bitrate: opts.Bitrate, stopGrace: 3 * time.Second, earlyExit: 5 * time.Second,
+		announceGrace: 10 * time.Second,
 	}
 }
 
@@ -230,13 +237,15 @@ func (s *Source) Publishing() bool {
 
 // Start turns the camera on: ffmpeg is started and kept running (restarted
 // with backoff if it exits) until Stop. Calling it while running does
-// nothing.
+// nothing. A start is a fresh attempt: what went wrong the last time the
+// camera was on is not said of this one.
 func (s *Source) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cancel != nil {
 		return
 	}
+	s.trouble = ""
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.done = make(chan struct{})
@@ -297,7 +306,11 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 		s.mu.Lock()
 		s.procCancel = pcancel
 		s.mu.Unlock()
+		// An ffmpeg that runs on without publishing is said so of after
+		// the announce grace (stalled); one that exits is read below.
+		stall := time.AfterFunc(s.announceGrace, func() { s.stalled(pctx) })
 		err := s.runFFmpeg(pctx, in.URL())
+		stall.Stop()
 		pcancel()
 		s.mu.Lock()
 		s.procCancel = nil
@@ -364,6 +377,54 @@ func (s *Source) pause(ctx context.Context, d time.Duration) bool {
 		s.log.Info("capture: camera off")
 		return false
 	}
+}
+
+// stalled is the announce grace running out on the ffmpeg whose context is
+// ctx: it has been running since then and has not published. Trouble says
+// so, in the words of the system it runs on (stallTrouble), and one line
+// is logged. Nothing is restarted: a camera the system refuses would be
+// refused again, a camera that is merely slow to start would be set back
+// to zero, and the enclave's relay asks for the stream again on its own.
+// An ffmpeg that has published, or ended, in the meantime is left alone.
+func (s *Source) stalled(ctx context.Context) {
+	s.mu.Lock()
+	quiet := !s.publishing && ctx.Err() == nil
+	cam, grace := s.cam, s.announceGrace
+	if quiet {
+		s.trouble = stallTrouble(s.goos, grace)
+	}
+	s.mu.Unlock()
+	if quiet {
+		s.log.Warn("capture: ffmpeg is running but has not started publishing; the camera delivered no picture", "camera", cam.Name, "after", grace.String())
+	}
+}
+
+// stallTrouble is what to say when ffmpeg has run for grace without
+// publishing: the camera delivered no picture. On a Mac that is what a
+// camera the system refuses looks like, and the refusal is silent when the
+// application may not ask (a hardened-runtime application without the
+// camera entitlement, as v0.16.0 and v0.17.0 were), so the words point at
+// Privacy & Security; on Windows, at the camera privacy switch for desktop
+// programs. Without a trailing stop: the reporters add their own.
+func stallTrouble(goos string, grace time.Duration) string {
+	after := "the camera delivered no picture in " + describeDuration(grace)
+	switch goos {
+	case "darwin":
+		return after + "; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it"
+	case "windows":
+		return after + "; Windows may have refused it: Settings › Privacy & security › Camera, Let desktop apps access your camera, must be on, and the same under Microphone"
+	default:
+		return after + "; the camera may be refused to this program, or held by another"
+	}
+}
+
+// describeDuration is d for a person: whole seconds as "10 s", anything
+// else as Go prints it.
+func describeDuration(d time.Duration) string {
+	if d >= time.Second && d%time.Second == 0 {
+		return fmt.Sprintf("%d s", int(d/time.Second))
+	}
+	return d.String()
 }
 
 // rechoose lists the devices again and picks by the configured selectors,

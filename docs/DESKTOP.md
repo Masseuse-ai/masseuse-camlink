@@ -43,8 +43,8 @@ The window is 1040 x 720, no smaller, dark only,
 in the masseuse.ai web app's brand (its colour tokens, type and components,
 verbatim; `desktop/frontend/src/index.css`). On macOS the title bar is
 hidden and the page's own title strip stands in for it, the traffic lights
-over it; Windows and Linux keep their title bar and show the application
-menu under it.
+over it; Windows keeps its title bar and shows the application menu under
+it.
 
 ### Shape
 
@@ -60,7 +60,7 @@ radio rows for cameras, microphones and units share it.
 
 The chrome is three rows on that grid (`ui/TopBar.tsx`): the title strip
 with the wordmark alone (52 pt on macOS, inset for the traffic lights; 44
-on Windows and Linux, at the content inset) and, at its right, a word about
+on Windows, at the content inset) and, at its right, a word about
 the service only while there is one, *Reaching masseuse.ai…* or
 *Reconnecting…*; connected, nothing, since Ready's Session box carries the
 link's standing where it matters. Under it the masthead (`ui/Masthead.tsx`),
@@ -101,7 +101,7 @@ the reducer's `ui/go` and `hello` in `frontend/src/bridge/store.tsx`).
 | Screen | What it shows | States |
 | --- | --- | --- |
 | **Pair** | Under the heading, the line on what the code does ("The code securely connects your masseuse to this computer."). The code, large, in the cells the phone's code input draws, with a ring under it that is wiped clockwise over the code's ten-minute life, as an authenticator app draws one, and the time left in words beside the ring ("Code rotates in 9 minutes and 5 seconds", counting down by the second); the three things to do on the phone, one line each. | fresh code (nothing leads on until a phone pairs); the last minute (ring, code and the words in ember; the code's cells breathing, the ring still); not yet reachable (empty cells, "Reaching masseuse.ai…"); a lapsed code waiting for the next (empty cells); a phone just paired (straight on to the camera; the check on Pair in the bar is the confirmation); back here after pairing in this run (the way on is the camera); pairing another phone from Ready; a computer paired on an earlier run opens on Ready instead |
-| **Cameras and microphone** | Two tabs, one per view the room shows; under the heading, for Behind you, a line on what the camera behind the person watches and what the face alone accounts for. **Behind you**: this computer's cameras as ffmpeg lists them, each a card with what it is (built in, USB, virtual camera, Continuity Camera), and last in the list "A camera on your network", which opens inline to the RTSPS address and an optional certificate pin; the microphones, with "No microphone" last. A virtual camera such as OBS's carries the word that it shows what its program outputs. The picture itself (size, rate, bit rate, encoder) is the connector's and the enclave's to manage between them and is not offered; nothing on the screen names the encoding. **Your face**: which picture the room shows as the person's face and streams on: *Your phone's camera* (the default: "As captured; nothing passes through this computer") or *OBS Studio* (advanced, "Apply filters or use a dedicated front-facing camera"), which opens three steps: "Pull your phone's camera into OBS Studio", marked optional (the loopback address with a copy button; or a dedicated camera on the computer as OBS's source instead, only step 2's camera going back to masseuse.ai), "Apply filters in OBS Studio, then select your post-processed front-facing camera" (this computer's cameras, virtual ones first; the camera chosen behind the person greyed), and "Enable it in https://masseuse.ai" (under Setup on the phone: *Show the computer's picture as my face*, and *Send my phone's picture to the computer* if step 1 was used). The page says nothing of the loop's latency or of what the analysis reads (the room keeps reading the phone's own picture): that is plumbing, not the person's concern. | Behind you: the usual; looking (the cards' shapes until the connector's first answer); no camera the connector can serve (in the first run, Continue waits, "Connect a camera to continue."); a virtual camera chosen; a remembered device not connected (the stand-in shown, the missing one greyed and named); no camera; ffmpeg missing (the Linux archive); locked while a session has the camera; a network camera. Your face: the phone's camera; processed and setting up (the address up, the phone not sending, no virtual camera yet); processed and ready (the phone's picture arriving, OBS Virtual Camera chosen); the face camera also chosen behind you; locked while the room shows OBS's picture; an older connector (no share or face in its report: one line, nothing to choose) |
+| **Cameras and microphone** | Two tabs, one per view the room shows; under the heading, for Behind you, a line on what the camera behind the person watches and what the face alone accounts for. **Behind you**: this computer's cameras as ffmpeg lists them, each a card with what it is (built in, USB, virtual camera, Continuity Camera), and last in the list "A camera on your network", which opens inline to the RTSPS address and an optional certificate pin; the microphones, with "No microphone" last. A virtual camera such as OBS's carries the word that it shows what its program outputs. The picture itself (size, rate, bit rate, encoder) is the connector's and the enclave's to manage between them and is not offered; nothing on the screen names the encoding. **Your face**: which picture the room shows as the person's face and streams on: *Your phone's camera* (the default: "As captured; nothing passes through this computer") or *OBS Studio* (advanced, "Apply filters or use a dedicated front-facing camera"), which opens three steps: "Pull your phone's camera into OBS Studio", marked optional (the loopback address with a copy button; or a dedicated camera on the computer as OBS's source instead, only step 2's camera going back to masseuse.ai), "Apply filters in OBS Studio, then select your post-processed front-facing camera" (this computer's cameras, virtual ones first; the camera chosen behind the person greyed), and "Enable it in https://masseuse.ai" (under Setup on the phone: *Show the computer's picture as my face*, and *Send my phone's picture to the computer* if step 1 was used). The page says nothing of the loop's latency or of what the analysis reads (the room keeps reading the phone's own picture): that is plumbing, not the person's concern. | Behind you: the usual; looking (the cards' shapes until the connector's first answer); no camera the connector can serve (in the first run, Continue waits, "Connect a camera to continue."); a virtual camera chosen; a remembered device not connected (the stand-in shown, the missing one greyed and named); no camera; locked while a session has the camera; a network camera. Your face: the phone's camera; processed and setting up (the address up, the phone not sending, no virtual camera yet); processed and ready (the phone's picture arriving, OBS Virtual Camera chosen); the face camera also chosen behind you; locked while the room shows OBS's picture; an older connector (no share or face in its report: one line, nothing to choose) |
 | **Unit** | The units found (Bluetooth or USB serial by their family), the one served, the one another program has open; the served unit's standing (held at zero or armed, battery, level, bound). With none found, the units masseuse.ai works with, each with its maker's mark, as the phone's "Which units work?" sheet lists them (Mastogo units and the DG-Lab Coyote over Bluetooth, the E-Stim Systems 2B and the ErosTek MK-312BT over a serial link cable), with the trademark line; with units found, the same list behind "Which units work?". | looking, none yet (in the first run, Done waits for a unit); one connected; several; another program has it open; Bluetooth permission needed (macOS); Bluetooth off; disconnected, by reason (idle, battery, button, link); armed by a session (switching waits) |
 | **Ready** | What this computer offers (behind you, microphone, your face, unit, each with Change) and what the session is doing: waiting; the camera link active with its rates and the enclave's proof (release, commit, source, registry, signer: the three `enclave …` log lines made readable); with the face through OBS, a Face meter and the loop's three hops (the phone's picture to this computer, OBS's picture back, shown as the face); congested; on hold; closed. | idle; session active; face processed through OBS and live; congested; on hold; update downloaded and waiting; updates off; without a unit |
 | **Blocked** | Whole-window: the program cannot run as it is, and the one thing to do. | already running in another window; the connector stopped (its last lines); the state folder cannot be written |
@@ -136,11 +136,11 @@ Native, built in `desktop/menu.go`, in each platform's shape.
   version and the update state as two lines that cannot be chosen · Hide,
   Hide Others, Show All · Quit Masseuse.ai ⌘Q) · **Edit** · **Window** ·
   **Help**.
-- Windows and Linux: **File** (Check for updates… · the same two status
-  lines · Quit Masseuse.ai Ctrl+Q) · **Edit** · **Help** (… · About
-  Masseuse.ai). On Windows the title bar and the menu bar are drawn in the
-  brand's colours whatever mode Windows itself is in (`desktop/theme.go`;
-  the dropdowns stay the system's).
+- Windows: **File** (Check for updates… · the same two status lines · Quit
+  Masseuse.ai Ctrl+Q) · **Edit** · **Help** (… · About Masseuse.ai). The
+  title bar and the menu bar are drawn in the brand's colours whatever mode
+  Windows itself is in (`desktop/theme.go`; the dropdowns stay the
+  system's).
 - The status lines say what the connector's first lines and update lines
   say in the terminal today (`Masseuse.ai v0.13.0 · masseuse-camlink`; `Up
   to date`, `Looking for a newer release…`, `v0.13.1 downloaded and
@@ -247,19 +247,23 @@ The bindings are generated as TypeScript with interfaces
    executable and the connector at `Contents/MacOS/masseuse-camlink`
    (signed as `ai.masseuse.camlink.connector`), ffmpeg and
    `Helpers/units` inside (`packaging/macos`, `LSUIElement` gone, the
-   usage strings in the application's name); `Masseuse.exe` as the shell
+   usage strings in the application's name). The shell being the
+   executable makes it the process macOS holds responsible for what its
+   children open: under the hardened runtime it needs the camera and
+   microphone entitlements itself for ffmpeg's opening them to be allowed,
+   or even asked about (`packaging/macos/device.entitlements`, on the
+   shell and on ffmpeg; v0.16.0 and v0.17.0 signed the shell without them
+   and the camera stayed off, silently; `assess.sh entitlements` now gates
+   every bundle). `Masseuse.exe` as the shell
    (GUI subsystem, `desktop/rsrc_windows_amd64.syso`) with the connector
-   added to the payload (`packaging/windows/pack -s`); the Linux desktop
-   archive `Masseuse.ai-<version>-linux-amd64.tar.gz` with both binaries,
-   `units/`, a desktop entry and its installer (`packaging/linux`). The
-   shell is built per platform in the release (`macos-26` universal,
-   `windows-2022`, `ubuntu-24.04` with GTK 4 and WebKitGTK 6.0), the
+   added to the payload (`packaging/windows/pack -s`). The shell is built
+   per platform in the release (`macos-26` universal, `windows-2022`), the
    connector stays the goreleaser build and is compared byte for byte
-   inside every download; `checksums-linux.txt` and `linux.intoto.jsonl`
-   join the others, and `update-check-*` run the connector from inside
-   each download with `-install-root`. VERIFY.md gained "The desktop
-   window" and "The Linux desktop archive"; README's Install is the
-   window's.
+   inside every download, and `update-check-*` run the connector from
+   inside each download with `-install-root`. VERIFY.md gained "The
+   desktop window"; README's Install is the window's. (A Linux desktop
+   archive was published up to v0.17.0 and is no longer: the program is
+   offered for macOS and Windows.)
 
 ### The face view and OBS
 

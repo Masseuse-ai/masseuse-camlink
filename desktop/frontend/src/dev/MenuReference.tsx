@@ -1,8 +1,8 @@
 // The native menus, drawn for review (development only): the real ones are
 // the operating system's, built in main.go / menu.go. Two shapes, as Wails'
 // platform conventions have them: on macOS the application menu carries
-// About and Quit; on Windows and Linux there is no application menu, so
-// File carries the update check and Quit, and Help carries About.
+// About and Quit; on Windows there is no application menu, so File carries
+// the update check and Quit, and Help carries About.
 
 import { Fragment } from 'react';
 
@@ -86,7 +86,7 @@ export function MenuReference({ platform, onClose }: { platform: Platform; onClo
         <div className="screen-body flex flex-1 flex-col overflow-auto px-8 pt-2 pb-6">
             <div className="flex items-end justify-between gap-6">
                 <div>
-                    <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-bone">Native menus · {mac ? 'macOS' : platform === 'windows' ? 'Windows' : 'Linux'}</h1>
+                    <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-bone">Native menus · {mac ? 'macOS' : 'Windows'}</h1>
                     <p className="mt-1.5 max-w-[70ch] text-[15px] leading-snug text-bone/75">
                         For review only; the menus themselves are the operating system's (desktop/menu.go). Items marked <span className="italic text-bone/60">role</span> are Wails' standard items; the dimmed ones are status lines (the connector's version, the state of updates) that cannot be chosen; the others either open a page in the browser or send a request to this window.
                     </p>

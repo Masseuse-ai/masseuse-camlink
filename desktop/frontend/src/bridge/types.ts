@@ -129,6 +129,12 @@ export interface CameraStats {
     audioBps: number;
     congested: boolean;
     backlogS: number;
+    /**
+     * Why the camera is on but nothing is being sent, when the connector can
+     * say (the camera delivered no picture, ffmpeg could not open it, ...);
+     * absent while sending or while it is too soon to say.
+     */
+    reason?: string;
 }
 
 export type UpdateState = 'current' | 'checking' | 'staged' | 'installing' | 'failed' | 'off';

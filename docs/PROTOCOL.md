@@ -397,8 +397,8 @@ found, and nothing but `phone` takes a publisher.
 What `camera` carries is one source:
 
 - **The computer's camera and microphone** (`capture`). The connector runs
-  ffmpeg as a child process: avfoundation on macOS, dshow on Windows, v4l2
-  and PulseAudio on Linux; 1280x720 at 30 frames per second by default, H.264
+  ffmpeg as a child process: avfoundation on macOS, dshow on Windows;
+  1280x720 at 30 frames per second by default, H.264
   from the hardware encoder (VideoToolbox, Media Foundation) or libx264, a
   keyframe every two seconds, Opus mono audio. ffmpeg publishes over plain
   RTSP to a loopback port the connector chose, on a path that is a fresh
@@ -542,9 +542,8 @@ helper is behind the same `Driver` interface, bounds and all.
 
 The Mastago is found over Bluetooth Low Energy, in pure Go so the releases
 stay reproducible: CoreBluetooth through the Objective-C runtime on macOS,
-BlueZ over D-Bus on Linux, the Windows Runtime's
-`Windows.Devices.Bluetooth` through its COM vtables on Windows (Windows 10
-version 1703 or newer). The finder looks first among the peripherals the
+the Windows Runtime's `Windows.Devices.Bluetooth` through its COM vtables
+on Windows (Windows 10 version 1703 or newer). The finder looks first among the peripherals the
 system already holds a connection to that offer the unit's service
 (`FFF0`): on macOS a unit the vendor's own app has open is shared with the
 connector without that app being touched, and such a unit answers in well
@@ -562,7 +561,7 @@ see, runs the same search once and prints the device's status.
 The system's identifier for a unit, the `id` of `device` and `units`
 (7.3) and what a selection may name, is a CoreBluetooth identifier on
 macOS (a UUID the computer gives the unit) and the unit's Bluetooth
-address on Linux and Windows (`C4:BE:84:70:29:3F`). On Windows a unit that
+address on Windows (`C4:BE:84:70:29:3F`). On Windows a unit that
 advertises with a random address is looked up by that address type, which
 the scan remembers for the run; an identifier remembered from an earlier
 run is tried as given, then as a public and as a random address.

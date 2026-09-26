@@ -51,6 +51,13 @@ func fakeFFmpeg(args []string) int {
 		}
 		return 0
 	}
+	if os.Getenv("CAPTURE_FAKE_STALL") == "1" {
+		// A camera the system refuses: the avfoundation input waits for a
+		// first frame that never comes, so this ffmpeg announces nothing,
+		// writes nothing and reads nothing (not even the q on standard
+		// input, which only the transcoding loop reads) until it is killed.
+		select {}
+	}
 	url, encoder, bitrate, input := args[len(args)-1], "", "", ""
 	for i, a := range args {
 		if a == "-c:v" && i+1 < len(args) {
@@ -762,6 +769,61 @@ func TestSourceStartsFFmpegAndPublishes(t *testing.T) {
 	defer c2.Close()
 	waitFor(t, "packets again", func() bool { return n2.n.Load() >= 5 })
 	src.Stop()
+}
+
+// TestSourceReportsAnFFmpegThatNeverPublishes: an ffmpeg that runs on
+// without announcing, as one does on a Mac whose system has refused the
+// camera, is not restarted (it has not exited) but after the announce grace
+// the trouble says the camera delivered no picture, in the words of the
+// system it runs on; Stop still ends it, by force once its grace is up; and
+// the next Start begins with a clean slate.
+func TestSourceReportsAnFFmpegThatNeverPublishes(t *testing.T) {
+	for _, goos := range []string{"darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			t.Setenv("CAPTURE_FAKE_FFMPEG", "1")
+			t.Setenv("CAPTURE_FAKE_STALL", "1")
+			_, src := testSourceOn(t, goos, Options{}, os.Args[0])
+			src.announceGrace = 100 * time.Millisecond
+			src.stopGrace = 200 * time.Millisecond
+			src.Start()
+			want := stallTrouble(goos, src.announceGrace)
+			waitFor(t, "the stall to be reported", func() bool { return src.Trouble() == want })
+			if src.Publishing() {
+				t.Fatal("publishing, with an ffmpeg that never announced")
+			}
+			if !src.Running() {
+				t.Fatal("not running: the ffmpeg was given up on")
+			}
+			started := time.Now()
+			src.Stop()
+			if d := time.Since(started); d < src.stopGrace {
+				t.Fatalf("Stop returned in %s, before the grace: the fake quit on its own", d)
+			}
+			if src.Trouble() != want {
+				t.Fatalf("trouble after Stop %q", src.Trouble())
+			}
+			// The wording names the system's own settings.
+			mention := map[string]string{"darwin": "Privacy & Security", "windows": "Let desktop apps access your camera"}[goos]
+			if !strings.Contains(want, mention) || !strings.Contains(want, "100ms") {
+				t.Fatalf("trouble %q", want)
+			}
+			// A new start does not carry the old trouble.
+			t.Setenv("CAPTURE_FAKE_STALL", "")
+			src.Start()
+			if got := src.Trouble(); got != "" {
+				t.Fatalf("trouble at the next start %q", got)
+			}
+			src.Stop()
+		})
+	}
+}
+
+func TestDescribeDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{10 * time.Second: "10 s", time.Second: "1 s", 1500 * time.Millisecond: "1.5s", 100 * time.Millisecond: "100ms"} {
+		if got := describeDuration(d); got != want {
+			t.Errorf("describeDuration(%s) = %q, want %q", d, got, want)
+		}
+	}
 }
 
 func TestReshapeRestartsTheEncoderWithoutLosingTheReader(t *testing.T) {

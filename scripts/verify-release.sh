@@ -4,17 +4,22 @@
 #      release workflow on the tag,
 #   2. every downloaded artifact matches the checksum file,
 #   3. the SLSA provenance names each artifact and this source at this tag,
-#   4. (optional) the container image is signed and has provenance,
+#      (4 was the container image, which is no longer published; the
+#      numbers below are kept so the docs' references stay right),
 #   5. (optional, needs Go) the gateway binary rebuilds to the same bytes,
-#   6. (optional, needs Go) so does the connector in the linux/amd64 archive,
+#   6. (optional, needs Go and unzip) so does the connector in the
+#      windows/amd64 archive (the one archive published unsigned),
 #   7. (optional, needs Go) so do the darwin connectors once their Apple
 #      signature is stripped from both sides; on a Mac, the signature itself
 #      is checked (team id, certificate fingerprint, notarization),
 #   8. when the release carries the macOS app (checksums-darwin.txt): its
 #      checksum file's signature, the disk image's and the ffmpeg source
-#      tarballs' hashes and provenance; on a Mac, that the app's executable
-#      is the archives' binaries (signature stripped, per architecture) and
-#      Gatekeeper's own verdict on the app and the image,
+#      tarballs' hashes and provenance; on a Mac, that the app's connector
+#      is the archives' binaries (signature stripped, per architecture),
+#      that the app's executable and its ffmpeg are signed with the camera
+#      and microphone entitlements (v0.18.0 and later; without them macOS
+#      refuses the camera silently) and Gatekeeper's own verdict on the app
+#      and the image,
 #   9. when the release carries the Windows package (checksums-windows.txt):
 #      its checksum file's signature, the package's (and the older
 #      installs' zip's) hash and provenance, and, with Go, that the package
@@ -24,18 +29,17 @@
 #  10. when the release bundles unit driver helpers (packaging/units/VERSION
 #      at the tag; v0.10.0 and later): the helpers manifest's signature by
 #      the key whose public half the tag carries, and that every helper in
-#      the linux/amd64 archive and, signature stripped, in the Windows
+#      the windows/amd64 archive and, signature stripped, in the Windows
 #      package's payload is the manifest's byte for byte (the app's are
 #      compared by the release itself, signature stripped; VERIFY.md "Unit
 #      driver helpers" says how by hand).
 #
 # usage: scripts/verify-release.sh vX.Y.Z [download dir]
-# needs: curl, sha256sum (or shasum), cosign (3 or later for the image),
-# slsa-verifier; docker or crane, go and unzip optional.
+# needs: curl, sha256sum (or shasum), cosign, slsa-verifier; go and unzip
+# optional.
 set -eu
 
 REPO="FemLed/masseuse-camlink"
-IMAGE="ghcr.io/femled/masseuse-camlink"
 # [.] rather than \. : Git Bash on Windows rewrites a backslash in an argument
 # to a native program (cosign) as a path separator.
 WORKFLOW_RE='^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v'
@@ -57,6 +61,16 @@ if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"; else need shasum;
 
 base="https://github.com/$REPO/releases/download/$tag"
 fetch() { [ -s "$1" ] || curl -fsSL -o "$1" "$base/$1"; }
+
+# at_least X.Y.Z: whether the release being verified is that version or a
+# later one, for the checks that only apply from a release on.
+at_least() {
+  # shellcheck disable=SC2046
+  set -- $(printf '%s %s' "$version" "$1" | tr . ' ')
+  [ "$1" -gt "$4" ] && return 0; [ "$1" -lt "$4" ] && return 1
+  [ "$2" -gt "$5" ] && return 0; [ "$2" -lt "$5" ] && return 1
+  [ "${3%%[!0-9]*}" -ge "${6%%[!0-9]*}" ]
+}
 
 echo "==> downloading release files for $tag"
 fetch checksums.txt
@@ -84,32 +98,6 @@ awk '{print $2}' checksums.txt | while read -r f; do
   echo "    ok  $f"
 done
 
-if ! command -v docker >/dev/null 2>&1 && ! command -v crane >/dev/null 2>&1; then
-  echo "==> 4. container image: skipped (no docker or crane)"
-elif [ "$(cosign version 2>&1 | sed -n 's/^GitVersion: *v\([0-9]*\).*/\1/p')" -lt 3 ] 2>/dev/null; then
-  # The release workflow signs the image with cosign 3, which attaches the
-  # signature as a Sigstore bundle (an OCI referrer); cosign 2 cannot read
-  # it and reports "no signatures found".
-  echo "==> 4. container image: skipped (cosign 3 or later is needed for the image signature; $(cosign version 2>&1 | sed -n 's/^GitVersion: *//p') found)"
-else
-  echo "==> 4. container image"
-  if command -v crane >/dev/null 2>&1; then
-    digest=$(crane digest "$IMAGE:$tag")
-  else
-    # The digest of the index is the hash of its bytes; --raw prints them
-    # exactly, where --format templates differ between buildx versions.
-    digest="sha256:$(docker buildx imagetools inspect --raw "$IMAGE:$tag" | $SHA | cut -d' ' -f1)"
-  fi
-  echo "    $IMAGE@$digest"
-  cosign verify "$IMAGE@$digest" \
-    --certificate-identity-regexp "$WORKFLOW_RE" \
-    --certificate-oidc-issuer "$ISSUER" >/dev/null
-  echo "    ok  keyless signature"
-  slsa-verifier verify-image "$IMAGE@$digest" \
-    --source-uri "github.com/$REPO" --source-tag "$tag" >/dev/null
-  echo "    ok  provenance"
-fi
-
 if command -v go >/dev/null 2>&1; then
   echo "==> 5. rebuild the gateway from the module proxy and compare (VERIFY.md 3)"
   export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GOFLAGS=
@@ -134,19 +122,26 @@ if command -v go >/dev/null 2>&1; then
   fi
 
   echo "==> 6. rebuild the connector the way goreleaser's proxy mode does and compare"
+  # The windows/amd64 archive is the one published as built: the darwin
+  # binaries are signed (step 7 strips the signature), and the Windows
+  # signature goes on the package, not on the archive.
   mkdir -p "$work/connector"
   printf 'module connector\n' > "$work/connector/go.mod"
   (cd "$work/connector" \
     && go get "github.com/FemLed/masseuse-camlink@$tag" >/dev/null 2>&1 \
-    && GOOS=linux GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-         -o masseuse-camlink github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink)
-  rebuilt=$($SHA "$work/connector/masseuse-camlink" | cut -d' ' -f1)
-  published=$(tar -xzOf "masseuse-camlink_${version}_linux_amd64.tar.gz" masseuse-camlink | $SHA | cut -d' ' -f1)
-  if [ "$rebuilt" = "$published" ]; then
-    echo "    ok  linux/amd64 connector reproduces: $rebuilt"
+    && GOOS=windows GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+         -o masseuse-camlink.exe github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink)
+  rebuilt=$($SHA "$work/connector/masseuse-camlink.exe" | cut -d' ' -f1)
+  if command -v unzip >/dev/null 2>&1; then
+    published=$(unzip -p "masseuse-camlink_${version}_windows_amd64.zip" masseuse-camlink.exe | $SHA | cut -d' ' -f1)
+    if [ "$rebuilt" = "$published" ]; then
+      echo "    ok  windows/amd64 connector reproduces: $rebuilt"
+    else
+      echo "    MISMATCH: rebuilt $rebuilt, in archive $published" >&2
+      exit 1
+    fi
   else
-    echo "    MISMATCH: rebuilt $rebuilt, in archive $published" >&2
-    exit 1
+    echo "    skipped the comparison with the archive (no unzip); rebuilt $rebuilt"
   fi
 
   echo "==> 7. rebuild the darwin connectors and compare with the signature stripped (VERIFY.md 3)"
@@ -267,6 +262,24 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
       echo "$info" | grep -q 'flags=0x10000(runtime)' \
         || { echo "    $f: not signed with the hardened runtime" >&2; hdiutil detach "$mount" -quiet; exit 1; }
     done
+    # The camera and microphone entitlements, on the app's executable (the
+    # process macOS holds responsible for what ffmpeg opens) and on ffmpeg:
+    # under the hardened runtime, a responsible process without them is
+    # refused the camera without a prompt, which is how v0.16.0 and v0.17.0
+    # shipped (VERIFY.md, "The macOS app"). The dots are escaped: plutil
+    # reads an unescaped one as a step down a key path.
+    if at_least 0.18.0; then
+      exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
+      for f in "$exe" "$app/Contents/Helpers/ffmpeg"; do
+        for key in 'com\.apple\.security\.device\.camera' 'com\.apple\.security\.device\.audio-input'; do
+          [ "$(codesign -d --entitlements - --xml "$f" 2>/dev/null | plutil -extract "$key" raw -o - - 2>/dev/null)" = true ] \
+            || { echo "    $f: not signed with the entitlement $key" >&2; hdiutil detach "$mount" -quiet; exit 1; }
+        done
+      done
+      echo "    ok  the app's executable and its ffmpeg may open the camera and the microphone"
+    else
+      echo "    (entitlements not checked: releases before v0.18.0 signed the executable without them)"
+    fi
     assess=$(spctl --assess --type execute -vv "$app" 2>&1 || true)
     echo "$assess" | grep -q 'source=Notarized Developer ID' \
       || { echo "    the app is not accepted as notarized:"; echo "$assess" | grep -v '^origin=' | sed 's/^/      /'; hdiutil detach "$mount" -quiet; exit 1; }
@@ -363,48 +376,6 @@ else
   echo "==> 9. the Windows package: none in this release (no checksums-windows.txt)"
 fi
 
-# The Linux desktop archive (VERIFY.md, "The Linux desktop archive"): the
-# window with the connector beside it, from the release that brought the
-# window; releases before it have no such file.
-if [ -s checksums-linux.txt ] || curl -fsSL -o checksums-linux.txt "$base/checksums-linux.txt" 2>/dev/null; then
-  echo "==> 9b. the Linux desktop archive: checksum signature, hash and provenance"
-  fetch checksums-linux.txt.sigstore.json
-  fetch linux.intoto.jsonl
-  cosign verify-blob \
-    --bundle checksums-linux.txt.sigstore.json \
-    --certificate-identity-regexp "$WORKFLOW_RE" \
-    --certificate-oidc-issuer "$ISSUER" \
-    checksums-linux.txt
-  awk '{print $2}' checksums-linux.txt | while read -r f; do fetch "$f"; done
-  $SHA -c checksums-linux.txt
-  awk '{print $2}' checksums-linux.txt | while read -r f; do
-    slsa-verifier verify-artifact "$f" \
-      --provenance-path linux.intoto.jsonl \
-      --source-uri "github.com/$REPO" \
-      --source-tag "$tag" >/dev/null
-    echo "    ok  $f"
-  done
-  desktop=$(awk '{print $2}' checksums-linux.txt | grep -E '^Masseuse\.ai-.*-linux-amd64\.tar\.gz$' | head -n 1)
-  archive="masseuse-camlink_${version}_linux_amd64.tar.gz"
-  if [ -n "$desktop" ] && [ -s "$desktop" ] && [ -s "$archive" ]; then
-    # The connector inside the desktop archive is the published one, byte
-    # for byte; the window beside it is covered by the checksum file and
-    # the provenance, not rebuilt.
-    inside=$(tar -xzOf "$desktop" masseuse-camlink | $SHA | cut -d' ' -f1)
-    published=$(tar -xzOf "$archive" masseuse-camlink | $SHA | cut -d' ' -f1)
-    [ "$inside" = "$published" ] \
-      || { echo "    MISMATCH: the connector in $desktop ($inside) is not the published linux/amd64 connector ($published)" >&2; exit 1; }
-    echo "    ok  the connector in $desktop is the published linux/amd64 connector: $published"
-    tar -tzf "$desktop" | grep -qx 'Masseuse' || { echo "    no window (Masseuse) in $desktop" >&2; exit 1; }
-    echo "    ok  $desktop carries the window, the connector and $(tar -tzf "$desktop" | grep -c '^units/') helper(s)"
-  else
-    echo "    skipped the connector comparison (needs $archive)"
-  fi
-else
-  rm -f checksums-linux.txt
-  echo "==> 9b. the Linux desktop archive: none in this release (no checksums-linux.txt)"
-fi
-
 # Unit driver helpers (VERIFY.md 3, "Unit driver helpers"): programs the
 # downloads carry that are not built from this repository; each is named,
 # with its hash, in a manifest signed by masseuse.ai's helpers key, whose
@@ -420,13 +391,15 @@ if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
   cosign verify-blob --key units-cosign.pub --bundle units-manifest.json.sigstore.json units-manifest.json >/dev/null
   echo "    ok  manifest.json signed by the helpers' key at $tag"
   if command -v jq >/dev/null 2>&1; then
-    # linux/amd64 archive: units/<name> hashes to the manifest's linux/amd64 entry.
-    archive="masseuse-camlink_${version}_linux_amd64.tar.gz"
-    if [ -s "$archive" ]; then
-      tar -tzf "$archive" | grep '^units/[^/]' | while read -r f; do
+    # windows/amd64 archive: units/<name>.exe hashes to the manifest's
+    # windows/amd64 entry (the archive's helpers are unsigned; the
+    # package's are signed and compared below with the signature stripped).
+    archive="masseuse-camlink_${version}_windows_amd64.zip"
+    if [ -s "$archive" ] && command -v unzip >/dev/null 2>&1; then
+      unzip -Z1 "$archive" | grep '^units/[^/]' | while read -r f; do
         name=${f#units/}
-        want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "linux" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
-        got=$(tar -xzOf "$archive" "$f" | $SHA | cut -d' ' -f1)
+        want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "windows" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
+        got=$(unzip -p "$archive" "$f" | $SHA | cut -d' ' -f1)
         [ -n "$want" ] && [ "$got" = "$want" ] \
           || { echo "    MISMATCH: $f in $archive is not the manifest's ($got, manifest $want)" >&2; exit 1; }
         echo "    ok  $f in $archive is the manifest's: $got"

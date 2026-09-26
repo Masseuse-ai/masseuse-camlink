@@ -100,6 +100,11 @@ type ipcStats struct {
 	AudioBps  float64 `json:"audioBps"`
 	Congested bool    `json:"congested"`
 	BacklogS  float64 `json:"backlogS"`
+	// Reason is why the camera is on but nothing is being sent, when the
+	// source can say (capture.Source.Trouble: the camera delivered no
+	// picture, ffmpeg could not open it, ...), for the page to show beside
+	// the idle meters; empty while sending or while it is too soon to say.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ipcDescriptor is the served unit for the page: the connector's
@@ -134,7 +139,11 @@ type ipcReporter struct {
 	hello   ipcHello
 	source  *sourceReport
 	enclave *ipcEnclave
-	log     *slog.Logger
+	// notSending is the reason last given for a camera that is on but not
+	// sending (NotSending), so the notice about it is raised once, not at
+	// every report; sending, or the camera going off, forgets it.
+	notSending string
+	log        *slog.Logger
 }
 
 func newIPCReporter(w io.Writer, log *slog.Logger) *ipcReporter {
@@ -326,18 +335,44 @@ type ipcCamera struct {
 	Stats *ipcStats `json:"stats,omitempty"`
 }
 
-func (r *ipcReporter) CameraOn(string) { r.emit(ipcCamera{Type: "camera", On: true}) }
-func (r *ipcReporter) CameraOff()      { r.emit(ipcCamera{Type: "camera", On: false}) }
+func (r *ipcReporter) CameraOn(string) {
+	r.forgetNotSending()
+	r.emit(ipcCamera{Type: "camera", On: true})
+}
+
+func (r *ipcReporter) CameraOff() {
+	r.forgetNotSending()
+	r.emit(ipcCamera{Type: "camera", On: false})
+}
 
 func (r *ipcReporter) Sending(_ string, videoBps, audioBps float64, congested bool, backlog time.Duration) {
+	r.forgetNotSending()
 	r.emit(ipcCamera{Type: "camera", On: true, Stats: &ipcStats{VideoBps: videoBps, AudioBps: audioBps, Congested: congested, BacklogS: backlog.Seconds()}})
 }
 
+// NotSending is the camera on with nothing sent, every report: the idle
+// meters carry the reason, when there is one, for the page to show for as
+// long as it holds, and a notice says it the first time it is given (a
+// reason that stands for a whole session would otherwise be raised every
+// ten seconds).
 func (r *ipcReporter) NotSending(reason string) {
-	r.emit(ipcCamera{Type: "camera", On: true, Stats: &ipcStats{}})
-	if reason != "" {
+	r.emit(ipcCamera{Type: "camera", On: true, Stats: &ipcStats{Reason: reason}})
+	if reason == "" {
+		return
+	}
+	r.mu.Lock()
+	said := r.notSending == reason
+	r.notSending = reason
+	r.mu.Unlock()
+	if !said {
 		r.Notice(noticeWarn, "Camera on but not sending yet: "+reason+".")
 	}
+}
+
+func (r *ipcReporter) forgetNotSending() {
+	r.mu.Lock()
+	r.notSending = ""
+	r.mu.Unlock()
 }
 
 func (r *ipcReporter) FaceOn(string) { r.emit(ipcCamera{Type: "face", On: true}) }

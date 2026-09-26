@@ -6,8 +6,8 @@
 // figures), then the steps (ui/StepBar.tsx), both on the content inset. On
 // macOS the native title bar is hidden and the strip is where the traffic
 // lights sit (main.go, MacTitleBarHiddenInset), so the wordmark insets for
-// them and the strip drags the window; on Windows and Linux the native
-// title bar and menu bar are above, and the strip is shorter.
+// them and the strip drags the window; on Windows the native title bar and
+// menu bar are above, and the strip is shorter.
 
 import { LoaderCircle } from 'lucide-react';
 

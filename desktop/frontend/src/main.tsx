@@ -35,7 +35,7 @@ function readParams() {
     const os = p.get('os');
     return {
         scenario: p.get('scenario') ?? DEFAULT_SCENARIO,
-        os: os === 'darwin' || os === 'windows' || os === 'linux' ? (os as Platform) : null,
+        os: os === 'darwin' || os === 'windows' ? (os as Platform) : null,
         menu: p.get('page') === 'menu',
         // `panel=0` hides the scenario pill, for clean screenshots.
         panel: p.get('panel') !== '0',

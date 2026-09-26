@@ -89,10 +89,16 @@ export function Home() {
 
     const inSession = link.state === 'active';
     const stats: CameraStats | undefined = camera.stats;
+    // The connector's word on a camera that is on but sending nothing (the
+    // camera delivered no picture, ffmpeg could not open it, ...): shown for
+    // as long as it holds, so "camera on" is not taken for a picture going.
+    const notSending = camera.on ? stats?.reason : undefined;
     const headline = inSession ? 'Session in progress' : 'Your session is about to start.';
     const lead = inSession
         ? camera.on
-            ? 'The camera link is up and the picture is going to the verified enclave, and nowhere else.'
+            ? notSending
+                ? 'The camera link is up, but no picture is being sent yet.'
+                : 'The camera link is up and the picture is going to the verified enclave, and nowhere else.'
             : 'The camera link is up; the camera comes on when the session reads it.'
         : phones > 0
           ? 'Follow along on your phone. If at any point you experience discomfort, switch your unit to OFF.'
@@ -101,6 +107,7 @@ export function Home() {
     const linkChip: { tone: Tone; text: string } = (() => {
         switch (link.state) {
             case 'active':
+                if (notSending) return { tone: 'warn', text: 'Camera link active · no picture yet' };
                 return { tone: 'live', text: camera.on ? 'Camera link active · camera on' : 'Camera link active' };
             case 'on-hold':
                 return { tone: 'warn', text: 'Camera link on hold' };
@@ -199,6 +206,13 @@ export function Home() {
                                         </span>
                                     ))}
                                 </div>
+                            ) : null}
+                            {notSending ? (
+                                <Alert variant="warn">
+                                    <TriangleAlert />
+                                    <AlertTitle>Camera on, but no picture is being sent</AlertTitle>
+                                    <AlertDescription>{notSending.charAt(0).toUpperCase() + notSending.slice(1)}. The session waits for the picture; the link is not the trouble.</AlertDescription>
+                                </Alert>
                             ) : null}
                             {stats?.congested ? (
                                 <Alert variant="warn">

@@ -8,8 +8,6 @@ carries:
   checksum file, signed by this repository's release workflow;
 - `multiple.intoto.jsonl`: SLSA v1 provenance for every artifact, produced by
   the SLSA generic generator in a separate, isolated job;
-- container images at `ghcr.io/femled/masseuse-camlink`, signed keyless by
-  digest, with SBOMs and their own SLSA container provenance;
 - `Masseuse.ai-X.Y.Z.dmg`: the Mac download, the application bundle
   `Masseuse.app` in a disk image, built by a second job of the same
   workflow after the archives are published; listed with the ffmpeg source
@@ -56,29 +54,15 @@ sha256sum -c checksums.txt --ignore-missing
 ## 2. Provenance
 
 ```sh
-slsa-verifier verify-artifact masseuse-camlink_X.Y.Z_linux_amd64.tar.gz \
+slsa-verifier verify-artifact masseuse-camlink_X.Y.Z_windows_amd64.zip \
   --provenance-path multiple.intoto.jsonl \
   --source-uri github.com/FemLed/masseuse-camlink \
   --source-tag vX.Y.Z
 ```
 
-For the image (the digest is the one `docker pull` prints, or
-`docker buildx imagetools inspect ghcr.io/femled/masseuse-camlink:vX.Y.Z`):
-
-```sh
-cosign verify ghcr.io/femled/masseuse-camlink@sha256:... \
-  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-slsa-verifier verify-image ghcr.io/femled/masseuse-camlink@sha256:... \
-  --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
-```
-
-The image signature needs cosign 3 or later: the release workflow signs
-with cosign 3, which stores the signature as a Sigstore bundle attached to
-the image (an OCI referrer, the `sha256-<digest>` tag on the registry)
-rather than the older `.sig` tag, and cosign 2 answers `no signatures
-found` even with `--new-bundle-format`. The checksum file's bundle in
-step 1 verifies with either major version.
+(Releases up to v0.17.0 also published a container image,
+`ghcr.io/femled/masseuse-camlink`, signed by digest with its own provenance;
+none is published since.)
 
 ## 3. Reproduce the binaries
 
@@ -122,15 +106,15 @@ module), so repeat it the same way:
 export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOFLAGS=
 mkdir connector && cd connector && printf 'module connector\n' > go.mod
 go get github.com/FemLed/masseuse-camlink@vX.Y.Z
-GOOS=linux GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-  -o masseuse-camlink github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink
-sha256sum masseuse-camlink
-tar -xzOf ../masseuse-camlink_X.Y.Z_linux_amd64.tar.gz masseuse-camlink | sha256sum
+GOOS=windows GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+  -o masseuse-camlink.exe github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink
+sha256sum masseuse-camlink.exe
+unzip -p ../masseuse-camlink_X.Y.Z_windows_amd64.zip masseuse-camlink.exe | sha256sum
 ```
 
-Use `GOOS`/`GOARCH` (and `GOARM=7` for `linux_armv7`) to match the archive;
-Windows archives are zips and the binary is `masseuse-camlink.exe`. The
-container image holds the very same binaries as the archives.
+Use `GOOS`/`GOARCH` to match the archive (`darwin_arm64`, `darwin_amd64`,
+`windows_amd64`, `windows_arm64`); the darwin binaries carry a signature on
+top, which the next section strips before comparing.
 
 ### The macOS binaries
 
@@ -196,19 +180,18 @@ is established by the rebuild above, not by the signature.
 From the release that brought it, every download opens a window: the
 desktop application in `desktop/` (docs/DESKTOP.md), a Go program built
 with the platform's own window toolkit (Wails; WebKit on a Mac, WebView2
-on Windows, WebKitGTK on Linux) that runs the connector as a child and
-shows what it says. The window is built by the release workflow on each
-platform's runner (`macos-app`, `windows-app`, `linux-app` in
-`.github/workflows/release.yml`), from the same commit as everything else,
-and it is **not** rebuilt byte for byte: it links against the toolkit and
-the system's libraries with cgo, which no proxy rebuild reproduces. What
-covers it is the same as what covers ffmpeg: the checksum file for its
-platform (`checksums-darwin.txt`, `checksums-windows.txt`,
-`checksums-linux.txt`), signed keyless by the release workflow at the tag,
-the SLSA provenance for that file's subjects (`darwin.intoto.jsonl`,
-`windows.intoto.jsonl`, `linux.intoto.jsonl`), which names the workflow
-run and the commit, and on a Mac and on Windows the platform's signature
-(the Developer ID and the notarization; Authenticode). The window has no
+on Windows) that runs the connector as a child and shows what it says. The
+window is built by the release workflow on each platform's runner
+(`macos-app`, `windows-app` in `.github/workflows/release.yml`), from the
+same commit as everything else, and it is **not** rebuilt byte for byte: it
+links against the toolkit and the system's libraries with cgo, which no
+proxy rebuild reproduces. What covers it is the same as what covers ffmpeg:
+the checksum file for its platform (`checksums-darwin.txt`,
+`checksums-windows.txt`), signed keyless by the release workflow at the
+tag, the SLSA provenance for that file's subjects (`darwin.intoto.jsonl`,
+`windows.intoto.jsonl`), which names the workflow run and the commit, and
+the platform's signature (the Developer ID and the notarization;
+Authenticode). The window has no
 credentials and no network code of its own: it starts the connector,
 relays its lines to the page and its requests back, opens the Help pages
 in the browser, and starts the program again after an update
@@ -299,8 +282,34 @@ Both `spctl` verdicts are `accepted` with `source=Notarized Developer ID`;
 (identifier `ai.masseuse.camlink.connector`) and on
 `Contents/Helpers/ffmpeg` shows the same `TeamIdentifier=B8Z4RP3846` and
 `flags=0x10000(runtime)` as the bare binaries, signed by the certificate
-listed above. `scripts/verify-release.sh` runs all of this as step 8 when
-the release carries `checksums-darwin.txt`.
+listed above.
+
+The signatures also say who may open the camera and the microphone. Under
+the hardened runtime a process opens either only with the entitlements
+`com.apple.security.device.camera` and
+`com.apple.security.device.audio-input`, and macOS checks them on the
+process that opens the device (ffmpeg) and on the application it runs
+under, the bundle's executable, which the system holds responsible; a
+responsible process without them is refused without a prompt, and the
+application never appears under Privacy & Security. From v0.18.0 the
+release signs both with `packaging/macos/device.entitlements` (v0.16.0 and
+v0.17.0 signed the executable without them, and the camera stayed off); the
+connector and the unit driver helpers carry neither. Read them back (the
+dots escaped, or `plutil` takes each as a step down a key path):
+
+```sh
+for f in /Volumes/Masseuse.ai/Masseuse.app/Contents/MacOS/Masseuse \
+         /Volumes/Masseuse.ai/Masseuse.app/Contents/Helpers/ffmpeg; do
+  codesign -d --entitlements - --xml "$f" | plutil -extract 'com\.apple\.security\.device\.camera' raw -o - -
+  codesign -d --entitlements - --xml "$f" | plutil -extract 'com\.apple\.security\.device\.audio-input' raw -o - -
+done   # four lines of "true"
+codesign -d --entitlements - --xml /Volumes/Masseuse.ai/Masseuse.app/Contents/MacOS/masseuse-camlink   # no entitlements
+```
+
+`packaging/macos/assess.sh entitlements` makes the same reading, and the
+release fails without it, both on the bundle it signs and on the bundle
+after it has updated itself. `scripts/verify-release.sh` runs all of this
+as step 8 when the release carries `checksums-darwin.txt`.
 
 ### The Windows package
 
@@ -402,36 +411,6 @@ FileDescription `Masseuse.ai for your computer`); the resources carry no
 version number, the version being what `--version` and the build
 information say.
 
-### The Linux desktop archive
-
-The Linux desktop download, `Masseuse.ai-X.Y.Z-linux-amd64.tar.gz`, is the
-window (`Masseuse`), the connector from the `linux_amd64` archive
-(`masseuse-camlink`, byte for byte), the unit driver helpers (`units/`), a
-desktop entry with its installer, the icon and the notices, flat at the
-archive's root (`packaging/linux/`); the updater unpacks the same archive
-over the install. It has its own checksum file, signed and attested like
-the others:
-
-```sh
-cosign verify-blob \
-  --bundle checksums-linux.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  checksums-linux.txt
-sha256sum -c checksums-linux.txt
-slsa-verifier verify-artifact Masseuse.ai-X.Y.Z-linux-amd64.tar.gz \
-  --provenance-path linux.intoto.jsonl \
-  --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
-tar -xzOf Masseuse.ai-X.Y.Z-linux-amd64.tar.gz masseuse-camlink | sha256sum
-tar -xzOf masseuse-camlink_X.Y.Z_linux_amd64.tar.gz masseuse-camlink | sha256sum
-```
-
-The two hashes match, and so the rebuild of "The connector" above;
-`scripts/verify-release.sh` checks this as step 9b when the release
-carries `checksums-linux.txt`. The window is covered as "The desktop
-window" says. The other Linux downloads are the terminal connector's
-archives, unchanged.
-
 ### Unit driver helpers
 
 From v0.10.0 the downloads carry unit driver helpers ([docs/UNITS.md](docs/UNITS.md)):
@@ -487,13 +466,12 @@ stripped, like the Mac's: `pestrip -payload payload Masseuse.exe`
 writes them out, and `pestrip -sha256 payload/units/camlink-unit-<name>.exe`
 is the `windows/amd64` entry (a Go binary's stripped hash is its plain
 one). The archives' helpers carry no signature and hash as they are:
-`tar -xOf masseuse-camlink_X.Y.Z_linux_amd64.tar.gz units/camlink-unit-<name>
-| sha256sum` against `linux/amd64`. The release workflow runs the manifest
+`unzip -p masseuse-camlink_X.Y.Z_windows_amd64.zip units/camlink-unit-<name>.exe
+| sha256sum` against `windows/amd64`. The release workflow runs the manifest
 check itself (`packaging/units/fetch.sh`) before it bundles anything, so a
 release whose helpers were not the manifest's would not have them, and
 `checksums.txt`, `checksums-darwin.txt` and `checksums-windows.txt` cover
-the archives, the image and the package the helpers sit in, provenance and
-all.
+the archives and the package the helpers sit in, provenance and all.
 
 `scripts/verify-release.sh` runs the manifest check and the archive and
 package comparisons as step 10 when the tag carries `packaging/units/VERSION`.
@@ -648,11 +626,11 @@ enclave image) before any file is moved:
    goes further; pre-releases never do.
 2. The checksum file the artifact is listed in (`checksums-darwin.txt` for
    the disk image, `checksums-windows.txt` for the Windows package,
-   `checksums-linux.txt` for the Linux desktop archive, each with its own
-   bundle verified the same way at that exact tag), and the download's
-   SHA-256 against it: step 2.
+   `checksums.txt` for a bare archive, each with its own bundle verified
+   the same way at that exact tag), and the download's SHA-256 against
+   it: step 2.
 3. The SLSA provenance for the artifact (`multiple.intoto.jsonl`,
-   `darwin.intoto.jsonl`, `windows.intoto.jsonl` or `linux.intoto.jsonl`), a Sigstore bundle
+   `darwin.intoto.jsonl` or `windows.intoto.jsonl`), a Sigstore bundle
    signed by the SLSA generic generator for a build configured by this
    repository's release workflow at that tag, whose statement names the
    downloaded file and its digest among its subjects: step 3, as

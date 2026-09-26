@@ -17,8 +17,8 @@ the stream goes from your computer to the enclave inside TLS.
 ## Install
 
 On the computer in the room, open [masseuse.ai/app](https://masseuse.ai/app):
-it offers the download for that computer (Mac, Windows, Linux), and the app
-on your phone can send it the address. The same files are on the
+it offers the download for that computer (Mac or Windows), and the app on
+your phone can send it the address. The same files are on the
 [releases page](https://github.com/FemLed/masseuse-camlink/releases).
 
 The downloads are called **Masseuse.ai**: that is the one name a person
@@ -71,35 +71,15 @@ helper (see "Your stimulation device"). The `windows_*` archives carry the
 bare `masseuse-camlink.exe` for people who run it from a terminal with
 their own ffmpeg.
 
-**Linux.** The download is `Masseuse.ai-X.Y.Z-linux-amd64.tar.gz`: unpack
-it anywhere and run `./Masseuse` for the window (`sh install.sh` puts
-Masseuse.ai in the applications menu; the program stays where it was
-unpacked and updates itself there), or `./masseuse-camlink` alone in a
-terminal. The window needs GTK 4 and WebKitGTK 6.0 (`sudo apt install
-libgtk-4-1 libwebkitgtk-6.0-4`; `sudo dnf install gtk4 webkitgtk6.0`), and
-to send the computer's camera the connector needs
-[ffmpeg](https://ffmpeg.org), which does the capturing and encoding:
-`sudo apt install ffmpeg` (or your distribution's package). The unit
-drivers are in `units/` beside it.
+**The bare binaries.** The `masseuse-camlink_*` archives (`darwin_*` and
+`windows_*`, amd64 and arm64) carry the connector alone, for a terminal:
+unpack anywhere and run `masseuse-camlink`. It needs ffmpeg the same way:
 
-**The bare binaries.** The `masseuse-camlink_*` archives for every
-platform (Linux on arm64 and armv7 among them) carry the connector alone,
-for a terminal: unpack anywhere and run `masseuse-camlink`. It needs
-ffmpeg the same way:
-
-- Linux: `sudo apt install ffmpeg` (or your distribution's package)
 - Windows, with the bare binary rather than the one file: `winget install Gyan.FFmpeg`, then open a new terminal
 - macOS, with the bare binary rather than the app: `brew install ffmpeg`
 
-Without ffmpeg the program still runs and can send a home network camera.
-On a NAS or Raspberry Pi the container image does that:
-
-```sh
-docker run -d --name masseuse-camlink --restart unless-stopped --network host \
-  -v masseuse-camlink:/state ghcr.io/femled/masseuse-camlink:latest \
-  -camera-url rtsps://user:password@192.168.1.20:322/live
-docker logs masseuse-camlink
-```
+Without ffmpeg the program still runs and can send a home network camera
+(`-camera-url`).
 
 With Go installed, `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink@latest`
 builds the same code from the module proxy.
@@ -168,15 +148,13 @@ LaunchServices (a window of its own) and ends. The program never replaces
 itself by `execve` there: Go's runtime, before an exec on Darwin, waits for
 every preemption signal it has sent to be received, and a program that runs
 Go code on CoreBluetooth's threads can wait forever (`update.ErrRelaunch`).
-Without a shell, Linux keeps the exec and Windows starts the new program
-and ends.
+Without a shell, Windows starts the new program and ends.
 
 `-no-update` (or `MASSEUSE_CAMLINK_UPDATE=off`) turns it off, for people
 who manage their installs; `masseuse-camlink update` installs the latest
 release now, from a terminal, with the program stopped. Builds from a
-working tree and the container image do not update themselves (the image
-is updated by its tag). Whatever the update did is what an install by
-hand would have done: the same release files, the same checks
+working tree do not update themselves. Whatever the update did is what an
+install by hand would have done: the same release files, the same checks
 (VERIFY.md, "What the updater verifies").
 
 ### The desktop window
@@ -191,8 +169,8 @@ standard input the same way (`list_devices`, `set_source`, `select_unit`,
 `update_now`, `quit`), and the log stays on standard error. Standard input
 ending is a shutdown, so a window that was killed never leaves a connector
 behind. `-install-root` names what the window was started from
-(`Masseuse.app`, `Masseuse.exe`, or the directory of the Linux desktop
-archive), which is what an update then replaces, the window included. The
+(`Masseuse.app` or `Masseuse.exe`), which is what an update then replaces,
+the window included. The
 flags are the window's to pass; from a terminal, `masseuse-camlink` alone
 is the program as described above.
 
@@ -260,6 +238,20 @@ and back up once it has been clear for a while (see below). Leave the
 program running in the background, or set it up as a service; nothing else
 is needed.
 
+The first time a session turns the camera on, the system asks whether
+Masseuse.ai may use the camera and the microphone; allow both. If the
+camera's light never comes on and the window says the camera is on but no
+picture is being sent (after ten seconds the connector says so too, and
+why it thinks so), the system has refused it: on a Mac, System Settings ›
+Privacy & Security › Camera, and Microphone, must list Masseuse and allow
+it; on Windows, Settings › Privacy & security › Camera, *Let desktop apps
+access your camera*, must be on, and the same under Microphone. v0.16.0
+and v0.17.0 of the Mac app could not ask at all (the window was signed
+without the camera and microphone entitlements macOS requires of the
+application that runs ffmpeg, so the refusal was silent and Masseuse never
+appeared in that list); the update to the next release fixes that, and the
+question is asked at the first session after it.
+
 While it runs, the computer does not go to sleep on its own. A laptop
 left at the foot of the bed is not touched while the session's enclave
 boots, and on battery macOS and Windows would put it to sleep a few
@@ -267,8 +259,7 @@ minutes after the last touch, stopping the camera and the microphone and
 dropping the Bluetooth link to the unit; so the program holds the system's
 own "stay awake" for as long as it runs (a power assertion on macOS,
 `pmset -g assertions` lists it; a power request on Windows, `powercfg
-/requests`; a logind inhibitor on Linux, `systemd-inhibit --list`), and
-says so on its first lines. The screen may still go dark, which the camera
+/requests`), and says so on its first lines. The screen may still go dark, which the camera
 does not need; closing the lid still sleeps the computer, so leave it open.
 The hold ends with the program, however it ends. `-allow-sleep` runs
 without it; a computer running the program as a service on battery will
@@ -419,10 +410,8 @@ masseuse-camlink estim probe
 
 says what the connector can see over Bluetooth (units already open in
 another program, units advertising), finds the unit, prints what it reports
-and leaves it released. `-estim-ble off` leaves Bluetooth alone. On Linux
-the connector talks to BlueZ over D-Bus, so your user needs to be allowed
-to use Bluetooth (usually the `bluetooth` group). On Windows it talks to
-the Windows Runtime (Windows 10 version 1703 or newer) and names a unit by
+and leaves it released. `-estim-ble off` leaves Bluetooth alone. On Windows
+the connector talks to the Windows Runtime (Windows 10 version 1703 or newer) and names a unit by
 its Bluetooth address (`C4:BE:84:70:29:3F`), which is the identifier
 `-estim-ble` and `-estim-unit` take there; a unit another program has
 open is found where Windows lists it among its connected devices, and the

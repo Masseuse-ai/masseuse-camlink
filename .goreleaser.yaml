@@ -3,10 +3,10 @@
 # Two kinds of artifact, both rebuildable from the Go module proxy with a
 # pinned toolchain and no per-build inputs:
 #
-#   - the connector archives and the container image: goreleaser builds them
-#     in proxy mode (a scratch module named after the build id requiring
-#     github.com/FemLed/masseuse-camlink at the tag), so the binary embeds
-#     this module's version and sum.golang.org hash;
+#   - the connector archives (darwin and windows, amd64 and arm64): goreleaser
+#     builds them in proxy mode (a scratch module named after the build id
+#     requiring github.com/FemLed/masseuse-camlink at the tag), so the binary
+#     embeds this module's version and sum.golang.org hash;
 #   - the raw gateway binaries: produced by the release workflow with the one
 #     command the enclave image and anyone else can repeat,
 #     `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@vX.Y.Z`,
@@ -64,14 +64,11 @@ builds:
     ldflags:
       - -s -w -buildid=
     mod_timestamp: "{{ .CommitTimestamp }}"
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64, arm]
-    goarm: ["7"]
-    ignore:
-      - goos: darwin
-        goarch: arm
-      - goos: windows
-        goarch: arm
+    # The two systems the program is offered for. The connector still
+    # compiles for Linux (the gateway below is a Linux program, and ci.yml
+    # keeps the cross-compile), but no Linux archive is published.
+    goos: [darwin, windows]
+    goarch: [amd64, arm64]
 
 archives:
   - id: connector
@@ -80,7 +77,7 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - NOTICE
@@ -136,43 +133,6 @@ signs:
       - "--yes"
     output: true
 
-dockers_v2:
-  - id: image
-    ids: [connector]
-    dockerfile: Dockerfile
-    images:
-      - ghcr.io/femled/masseuse-camlink
-    tags:
-      - "v{{ .Version }}"
-      - "{{ if not .Prerelease }}latest{{ end }}"
-    platforms:
-      - linux/amd64
-      - linux/arm64
-      - linux/arm/v7
-    sbom: true
-    labels:
-      org.opencontainers.image.title: "{{ .ProjectName }}"
-      org.opencontainers.image.description: "Home camera connector for masseuse.ai"
-      org.opencontainers.image.source: "{{ .GitURL }}"
-      org.opencontainers.image.version: "{{ .Version }}"
-      org.opencontainers.image.revision: "{{ .FullCommit }}"
-      org.opencontainers.image.licenses: Apache-2.0
-    annotations:
-      org.opencontainers.image.description: "Home camera connector for masseuse.ai"
-      org.opencontainers.image.source: "{{ .GitURL }}"
-      org.opencontainers.image.version: "{{ .Version }}"
-      org.opencontainers.image.revision: "{{ .FullCommit }}"
-      org.opencontainers.image.licenses: Apache-2.0
-
-docker_signs:
-  - id: image
-    cmd: cosign
-    args:
-      - sign
-      - "${artifact}@${digest}"
-      - "--yes"
-    output: true
-
 release:
   github:
     owner: FemLed
@@ -190,9 +150,7 @@ release:
     Every archive and the raw gateway binaries are listed in `checksums.txt`,
     which is signed keyless by this repository's release workflow
     (`checksums.txt.sigstore.json`). `multiple.intoto.jsonl` is SLSA
-    provenance for all of them. The container image
-    `ghcr.io/femled/masseuse-camlink:{{ .Tag }}` is signed by digest and
-    carries an SBOM and its own provenance.
+    provenance for all of them.
 
     **Mac users:** the download is `Masseuse.ai-{{ .Version }}.dmg` (Apple
     silicon and Intel; open it, drag Masseuse to Applications, open it

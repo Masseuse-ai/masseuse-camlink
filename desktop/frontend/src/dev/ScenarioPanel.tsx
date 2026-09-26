@@ -1,6 +1,6 @@
 // The scenario panel: a floating picker of every state the window can be
 // in (src/bridge/mock/scenarios.ts), and the platform to draw it for. Only
-// in development builds; `?scenario=<id>&os=<darwin|windows|linux>` opens
+// in development builds; `?scenario=<id>&os=<darwin|windows>` opens
 // one directly, so each state can be screenshotted.
 
 import { FlaskConical, Info, Menu, RefreshCw, X } from 'lucide-react';
@@ -21,7 +21,6 @@ interface Props {
 const PLATFORMS: { id: Platform; label: string }[] = [
     { id: 'darwin', label: 'macOS' },
     { id: 'windows', label: 'Windows' },
-    { id: 'linux', label: 'Linux' },
 ];
 
 export function ScenarioPanel({ current, platform, onPick, onPlatform, onMenuReference }: Props) {
