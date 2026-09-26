@@ -407,19 +407,32 @@ func TestTimedWriterHoldsTheFirstPacketsForTheSourcesReport(t *testing.T) {
 		t.Fatalf("held %d, %d video packets written, reader saw %d", w.Held(), s.Stats().VideoPackets, r.video.Load())
 	}
 	clock.reported.Store(true)
-	for seq := uint16(5); seq <= 12; seq++ {
-		writeTimed(t, w, desc, seq)
-		if seq == 8 {
-			time.Sleep(100 * time.Millisecond) // lets the reader's report through
-		}
-	}
+	writeTimed(t, w, desc, 5)
 	if w.Held() != 0 {
 		t.Fatalf("still holding %d", w.Held())
 	}
-	waitFor(t, "packets", func() bool { return r.video.Load() >= 12 && r.audio.Load() >= 12 })
 	// The reader's report follows its first packet, and the flushed packets
-	// may all be on the wire before it: the ones it has timed - there must
-	// be some - carry the source's time, not the forwarding time 1.5 s later.
+	// may all be on the wire before it: packets keep coming, a frame apart,
+	// until the reader has timed a few - it must, once its report is out.
+	seq := uint16(5)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		timed := 0
+		for _, p := range r.timedPackets() {
+			if p.ok {
+				timed++
+			}
+		}
+		if timed >= 4 {
+			break
+		}
+		seq++
+		writeTimed(t, w, desc, seq)
+		time.Sleep(20 * time.Millisecond)
+	}
+	waitFor(t, "packets", func() bool { return r.video.Load() >= int64(seq) && r.audio.Load() >= int64(seq) })
+	// The ones it has timed carry the source's time, not the forwarding
+	// time 1.5 s later.
 	timed := 0
 	for i, p := range r.timedPackets() {
 		if p.ts != uint32(i+1)*3000 {

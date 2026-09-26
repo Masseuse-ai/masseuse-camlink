@@ -396,19 +396,33 @@ func (s *Server) handleExpect(w http.ResponseWriter, r *http.Request) {
 	copy(exp.ticketHash[:], hash)
 
 	s.mu.Lock()
+	prev := s.expect
 	s.expect = exp
 	att := s.attached
-	if att != nil && att.keyStr == exp.keyStr {
-		// Same connector, new ticket: keep the live tunnel and the target
-		// set for it (the camera the producer configured stays the same
-		// camera; the service re-expects on every new lease), and treat
-		// the expectation as already attached so its ticket outlives
-		// expiresAt.
+	// Whether this expectation names the connector the session already
+	// had: the one attached now, or, with none attached, the one the
+	// previous expectation named. The target is the producer's choice of
+	// camera for this session, reached through that connector; it survives
+	// a new ticket for the same connector whether or not the tunnel happens
+	// to be up at this moment - the service re-expects on every new lease,
+	// and a lease often follows the tunnel dropping (the connector's
+	// uplink stalled, its process was replaced), so an expectation that
+	// arrived between the drop and the re-dial used to forget the target
+	// and leave the relay refused for the rest of the session.
+	sameConnector := (att != nil && att.keyStr == exp.keyStr) ||
+		(att == nil && prev != nil && prev.keyStr == exp.keyStr)
+	switch {
+	case att != nil && sameConnector:
+		// Same connector, new ticket, tunnel up: keep the live tunnel and
+		// the target, and treat the expectation as already attached so its
+		// ticket outlives expiresAt.
 		exp.attachedOnce = true
 		att = nil
-	} else {
-		// Another connector, or none: a target reached through the old
-		// one means nothing through the new.
+	case sameConnector:
+		// Same connector, tunnel down: the target stays for its re-dial.
+	default:
+		// Another connector, or the first: a target reached through the
+		// old one means nothing through the new.
 		s.target = ""
 		s.attached = nil
 	}

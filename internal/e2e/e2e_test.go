@@ -665,6 +665,87 @@ func TestReExpectForTheSameConnectorKeepsTheTarget(t *testing.T) {
 	}
 }
 
+// A lease often follows the tunnel dropping - the connector's uplink
+// stalled, its process was replaced - so the service's re-expect for the
+// same connector can arrive while nothing is attached. The target set for
+// that connector must survive it: the connector re-dials with the new
+// ticket and the relay's next pull goes through. A different connector
+// expected meanwhile does drop it.
+func TestReExpectWhileDetachedKeepsTheTargetForTheSameConnector(t *testing.T) {
+	r := setup(t)
+	cam := startCamera(t)
+	tun, done := attach(t, r)
+
+	host, portStr, _ := net.SplitHostPort(cam.ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	if code, _ := r.ctl(t, "POST", "/target", map[string]any{"host": host, "port": port}); code != 200 {
+		t.Fatalf("target: %d", code)
+	}
+	if _, got, err := mediamtx(t, r.relay.Addr().String(), []byte("before")); err != nil || string(got) != "before" {
+		t.Fatalf("relay before the drop: %q %v", got, err)
+	}
+
+	// 1. The tunnel drops. The target is still the session's.
+	done()
+	select {
+	case <-tun.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("tunnel did not end")
+	}
+	waitStatus(t, r, func(s gateway.Status) bool { return !s.Connected })
+	if st := r.gw.Status(); !st.Target {
+		t.Fatalf("target lost with the tunnel: %+v", st)
+	}
+
+	// 2. The service re-expects the same connector with a new ticket while
+	// nothing is attached: the target stays.
+	ticket, ticketHash := mintTicket(t)
+	r.expect(t, ticketHash)
+	if st := r.gw.Status(); st.Connected || !st.Target || !st.Expecting {
+		t.Fatalf("after the re-expect while detached: %+v", st)
+	}
+
+	// 3. The connector re-dials with that ticket: attached, and the relay's
+	// next pull reaches the camera through the kept target.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	second, err := r.dialer.Dial(ctx, r.wsSrv.URL, ticket, ticketHash)
+	if err != nil {
+		t.Fatalf("re-dial: %v", err)
+	}
+	defer second.Close()
+	go func() { _ = second.Serve(ctx) }()
+	waitStatus(t, r, func(s gateway.Status) bool { return s.Connected && s.Target })
+	if _, got, err := mediamtx(t, r.relay.Addr().String(), []byte("after")); err != nil || string(got) != "after" {
+		t.Fatalf("relay after the re-dial: %q %v", got, err)
+	}
+	if n := cam.accepted.Load(); n != 2 {
+		t.Fatalf("camera accepted %d connections, want 2", n)
+	}
+
+	// 4. Detached again, then another connector is expected: the target
+	// meant nothing through it and goes.
+	cancel()
+	second.Close()
+	waitStatus(t, r, func(s gateway.Status) bool { return !s.Connected })
+	other, err := identity.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, otherHash := mintTicket(t)
+	if code, _ := r.ctl(t, "POST", "/expect", map[string]any{
+		"connectorKey": other.PublicKeyString(), "ticketHash": otherHash, "expiresAt": time.Now().Add(time.Minute).Unix(),
+	}); code != 200 {
+		t.Fatalf("expect another connector: %d", code)
+	}
+	if st := r.gw.Status(); st.Connected || st.Target {
+		t.Fatalf("after another connector's expectation while detached: %+v", st)
+	}
+	if _, _, err := mediamtx(t, r.relay.Addr().String(), []byte("x")); err == nil {
+		t.Fatal("relay accepted without a target")
+	}
+}
+
 func TestControlValidation(t *testing.T) {
 	r := setup(t)
 	key := r.connector.PublicKeyString()
