@@ -1,20 +1,27 @@
 // Ready: what this computer offers a session, and what the session is
 // doing with it. Idle, it waits; in a session, the camera link and its
 // rates, the unit's standing, and the proof of the enclave the picture
-// goes to, the three lines the connector logs made readable. A computer
-// paired on an earlier run opens here and skips the steps, so on a Mac
-// this is also where the system is asked for the camera and the microphone
-// if it has not been (ui/MediaAccess), and where a refusal is said with
-// the way back. On the grid (ui/Page.tsx): the phones as the screen's
-// control beside the title, the four choices as cards on three columns
-// each, the session on all twelve.
+// goes to, the three lines the connector logs made readable. The cameras
+// are the person's to switch off here, whatever a session asks: the
+// switch on the card behind them stops the capture at once (the light goes
+// out) and keeps it off until switched on again, and the front-facing
+// camera has one of its own while OBS Studio is the face view; the phone's
+// own camera has nothing on this computer to switch. A computer paired on
+// an earlier run opens here and skips the steps, so on a Mac this is also
+// where the system is asked for the camera and the microphone if it has
+// not been (ui/MediaAccess), and where a refusal is said with the way
+// back. On the grid (ui/Page.tsx): the phones as the screen's control
+// beside the title, the four choices as cards on three columns each, the
+// switch at the right of a card's eyebrow, the session on all twelve.
 
-import { Camera, Mic, MicOff, ShieldCheck, SlidersHorizontal, Smartphone, TriangleAlert, Zap } from 'lucide-react';
+import { Camera, CameraOff, Mic, MicOff, ShieldCheck, SlidersHorizontal, Smartphone, TriangleAlert, Zap } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { faceViewOf, useAppState, useDispatch, type Step } from '../bridge/store';
+import { Switch } from '@/components/ui/switch';
+import { faceViewOf, switchedOff, useAppState, useBridge, useDispatch, type Step } from '../bridge/store';
 import type { CameraStats } from '../bridge/types';
 import { Card, CardLabel } from '../ui/Card';
 import { MediaAccessAlert, mediaStanding, useMediaAsk } from '../ui/MediaAccess';
@@ -57,14 +64,17 @@ function Verified() {
     );
 }
 
-function SummaryCard({ icon: Icon, label, value, note, badge, step, tab, disabled }: { icon: typeof Camera; label: string; value: string; note?: string; badge?: { text: string; variant: 'mint' | 'rose' | 'amber' | 'secondary' }; step: Step; tab?: 'behind' | 'face'; disabled?: boolean }) {
+function SummaryCard({ icon: Icon, label, value, note, badge, step, tab, disabled, control }: { icon: typeof Camera; label: string; value: string; note?: string; badge?: { text: string; variant: 'mint' | 'rose' | 'amber' | 'secondary' }; step: Step; tab?: 'behind' | 'face'; disabled?: boolean; control?: ReactNode }) {
     const dispatch = useDispatch();
     return (
         <Card className="col-span-3 flex min-w-0 flex-col p-4 pb-2.5">
-            {/* The same rows in every card: the eyebrow, the standing, the choice, its note, the way to change it; a row keeps its height empty, so the four line up. */}
-            <div className="type-label flex items-center gap-2 text-bone-dim">
-                <Icon className="lucide h-4 w-4 shrink-0" strokeWidth={2.2} />
-                <span className="truncate">{label}</span>
+            {/* The same rows in every card: the eyebrow with the card's switch at its right when it has one, the standing, the choice, its note, the way to change it; a row keeps its height empty, so the four line up. */}
+            <div className="flex h-5 items-center justify-between gap-2">
+                <div className="type-label flex min-w-0 items-center gap-2 text-bone-dim">
+                    <Icon className="lucide h-4 w-4 shrink-0" strokeWidth={2.2} />
+                    <span className="truncate">{label}</span>
+                </div>
+                {control}
             </div>
             <div className="mt-2 flex h-5 items-center">
                 {badge ? (
@@ -90,8 +100,25 @@ export function Home() {
     const state = useAppState();
     const { source, unit, link, camera, faceCamera, phones, online } = state;
     const dispatch = useDispatch();
+    const bridge = useBridge();
     const processed = faceViewOf(source) === 'processed';
     const share = source?.share;
+
+    // The switches: the person's word over the session's. Shown only once
+    // a connector with a switch has spoken (an older one has none), and
+    // greyed while there is nothing to switch (no camera the connector can
+    // serve). The switch reads the connector's standing back, not its own
+    // hopes: it moves when the connector says so, a moment later.
+    const bodyOff = switchedOff(camera);
+    const faceOff = switchedOff(faceCamera);
+    const bodySwitch =
+        camera.enabled !== undefined ? (
+            <Switch checked={camera.enabled} onCheckedChange={(checked) => void bridge.send({ type: 'set_camera', view: 'body', enabled: checked })} disabled={!source?.ready} aria-label="Camera behind you" />
+        ) : undefined;
+    const faceSwitch =
+        processed && faceCamera.enabled !== undefined ? (
+            <Switch checked={faceCamera.enabled} onCheckedChange={(checked) => void bridge.send({ type: 'set_camera', view: 'face', enabled: checked })} disabled={!source?.face?.ready} aria-label="Front-facing camera" />
+        ) : undefined;
 
     // On a Mac, the system's question about the camera and the microphone,
     // asked here if it has not been answered yet (a paired computer opens
@@ -110,11 +137,13 @@ export function Home() {
     const notSending = camera.on ? stats?.reason : undefined;
     const headline = inSession ? 'Session in progress' : 'Your session is about to start.';
     const lead = inSession
-        ? camera.on
-            ? notSending
-                ? 'The camera link is up, but no picture is being sent yet.'
-                : 'The camera link is up and the picture is going to the verified enclave, and nowhere else.'
-            : 'The camera link is up; the camera comes on when the session reads it.'
+        ? bodyOff
+            ? 'The camera link is up, but the camera is switched off: nothing leaves this computer until it is on again.'
+            : camera.on
+              ? notSending
+                  ? 'The camera link is up, but no picture is being sent yet.'
+                  : 'The camera link is up and the picture is going to the verified enclave, and nowhere else.'
+              : 'The camera link is up; the camera comes on when the session reads it.'
         : phones > 0
           ? 'Follow along on your phone. If at any point you experience discomfort, switch your unit to OFF.'
           : 'Pair your phone first: type the code Masseuse.ai shows under Pair.';
@@ -122,6 +151,8 @@ export function Home() {
     const linkChip: { tone: Tone; text: string } = (() => {
         switch (link.state) {
             case 'active':
+                // Switched off by the person: deliberate, so no warning.
+                if (bodyOff) return { tone: 'neutral', text: 'Camera link active · camera switched off' };
                 if (notSending) return { tone: 'warn', text: 'Camera link active · no picture yet' };
                 return { tone: 'live', text: camera.on ? 'Camera link active · camera on' : 'Camera link active' };
             case 'on-hold':
@@ -145,41 +176,54 @@ export function Home() {
     return (
         <Page title={headline} lead={lead} control={control} bodyClassName="grid-rows-[auto_minmax(0,1fr)] gap-y-4">
             <SummaryCard
-                icon={Camera}
+                icon={bodyOff ? CameraOff : Camera}
                 label="Behind you"
                 value={source?.kind === 'camera' ? source.label : (source?.camera ?? source?.label ?? 'Finding…')}
-                note={source?.ready ? (camera.on ? 'Sending to the verified enclave' : 'On only while a session reads it') : source?.note}
-                badge={source?.ready ? (camera.on ? { text: 'On', variant: 'mint' } : { text: 'Off until watched', variant: 'secondary' }) : source ? { text: 'Not available', variant: 'amber' } : undefined}
+                note={source?.ready ? (bodyOff ? 'Switched off: no picture or sound leaves this computer.' : camera.on ? 'Sending to the verified enclave' : 'On only while a session reads it') : source?.note}
+                badge={source?.ready ? (bodyOff ? { text: 'Switched off', variant: 'secondary' } : camera.on ? { text: 'On', variant: 'mint' } : { text: 'Off until watched', variant: 'secondary' }) : source ? { text: 'Not available', variant: 'amber' } : undefined}
                 step="camera"
                 tab="behind"
                 disabled={camera.on}
+                control={bodySwitch}
             />
             <SummaryCard
                 icon={micName && micName !== 'none' ? Mic : MicOff}
                 label="Microphone"
                 value={source?.kind === 'camera' ? "The camera's own" : micName && micName !== 'none' ? micName : 'None · video only'}
-                note={micName && micName !== 'none' ? 'Sent with the picture' : source?.kind === 'camera' ? 'Whatever the camera carries' : "The session hears your phone's microphone"}
+                note={
+                    // The microphone rides in the camera's capture: the switch on the camera takes it too.
+                    bodyOff && ((micName && micName !== 'none') || source?.kind === 'camera')
+                        ? 'Off with the camera; the session hears your phone.'
+                        : micName && micName !== 'none'
+                          ? 'Sent with the picture'
+                          : source?.kind === 'camera'
+                            ? 'Whatever the camera carries'
+                            : "The session hears your phone's microphone"
+                }
                 step="camera"
                 tab="behind"
                 disabled={camera.on}
             />
             <SummaryCard
-                icon={processed ? SlidersHorizontal : Smartphone}
+                icon={processed ? (faceOff ? CameraOff : SlidersHorizontal) : Smartphone}
                 label="Your face"
                 value={processed ? 'OBS Studio' : "Your phone's camera"}
-                note={processed ? (source?.face?.camera ?? 'No camera carries it back yet') : 'Straight to the room, no detour'}
+                note={processed ? (faceOff ? "Switched off: OBS's picture is not sent back." : (source?.face?.camera ?? 'No camera carries it back yet')) : 'Straight to the room, no detour'}
                 badge={
                     processed
-                        ? faceCamera.on
-                            ? { text: 'Live', variant: 'mint' }
-                            : share?.receiving
-                              ? { text: 'Phone picture arriving', variant: 'rose' }
-                              : { text: 'Waiting for your phone', variant: 'secondary' }
+                        ? faceOff
+                            ? { text: 'Switched off', variant: 'secondary' }
+                            : faceCamera.on
+                              ? { text: 'Live', variant: 'mint' }
+                              : share?.receiving
+                                ? { text: 'Phone picture arriving', variant: 'rose' }
+                                : { text: 'Waiting for your phone', variant: 'secondary' }
                         : undefined
                 }
                 step="camera"
                 tab="face"
                 disabled={faceCamera.on}
+                control={faceSwitch}
             />
             <SummaryCard
                 icon={Zap}
@@ -200,7 +244,13 @@ export function Home() {
                     <div className="grid-12 min-h-0 flex-1">
                         <div className="col-span-7 flex min-w-0 flex-col justify-center gap-3">
                             <MediaAccessAlert />
-                            {stats ? (
+                            {bodyOff ? (
+                                <Alert variant="neutral">
+                                    <CameraOff />
+                                    <AlertTitle>Camera switched off</AlertTitle>
+                                    <AlertDescription>The session runs without this computer's picture or sound. Switch the camera on to send them again; the picture returns within seconds.</AlertDescription>
+                                </Alert>
+                            ) : stats ? (
                                 <>
                                     <Meter label="Video" value={stats.videoBps} ceiling={2_500_000} tone={stats.congested ? 'amber' : 'rose'} />
                                     <Meter label="Audio" value={stats.audioBps} ceiling={96_000} tone="mint" />
@@ -213,7 +263,7 @@ export function Home() {
                                 <div className="type-caption flex flex-wrap items-center gap-x-3 gap-y-1 text-bone/60">
                                     {[
                                         { text: "Phone picture to this computer", on: Boolean(share?.receiving) },
-                                        { text: 'OBS picture back', on: faceCamera.on },
+                                        { text: faceOff ? 'OBS picture back · switched off' : 'OBS picture back', on: faceCamera.on },
                                         { text: 'Shown as your face', on: faceCamera.on },
                                     ].map((hop) => (
                                         <span key={hop.text} className="inline-flex items-center gap-1.5">
@@ -259,11 +309,14 @@ export function Home() {
                             ) : link.state === 'closed' ? (
                                 <Alert variant="neutral">
                                     <AlertTitle>Camera link closed</AlertTitle>
-                                    <AlertDescription>The session let the camera go. It is off, and comes on again with the next session.</AlertDescription>
+                                    <AlertDescription>
+                                        {bodyOff ? 'The session let the camera go. It is off, and stays off for the next session while the switch is off.' : 'The session let the camera go. It is off, and comes on again with the next session.'}
+                                    </AlertDescription>
                                 </Alert>
                             ) : (
                                 <>
                                     <p className="type-body text-bone/80">{phones > 0 ? 'Waiting for a session on your phone.' : 'Waiting for a phone to pair.'}</p>
+                                    {bodyOff ? <p className="type-secondary text-bone/70">The camera is switched off: a session that starts gets no picture or sound from this computer until it is on again.</p> : null}
                                     <p className="type-secondary text-bone/55">
                                         To protect your privacy, we're setting up a confidential computing environment to process your video and protect your identity. Until then, your unit stays at zero. The computer stays awake while this window is open; the screen may go dark.
                                     </p>

@@ -42,6 +42,11 @@ type reporter interface {
 	NotSending(reason string)
 	FaceOn(label string)
 	FaceOff()
+	// CameraEnabled and FaceEnabled are the window's switches on the
+	// camera and the front-facing camera (camControl.setEnabled): off, the
+	// capture is stopped and not started for a session until on again.
+	CameraEnabled(enabled bool)
+	FaceEnabled(enabled bool)
 	// Share is the phone's picture starting or stopping to arrive.
 	Share(receiving bool, url string)
 
@@ -293,6 +298,22 @@ func (c *consoleReporter) NotSending(reason string) {
 
 func (c *consoleReporter) FaceOn(label string) { c.printf("Front-facing camera on: %s.\n", label) }
 func (c *consoleReporter) FaceOff()            { c.printf("Front-facing camera off.\n") }
+
+func (c *consoleReporter) CameraEnabled(enabled bool) {
+	if enabled {
+		c.printf("Camera switched on again: it comes on when a session reads it.\n")
+	} else {
+		c.printf("Camera switched off in the window: sessions get no picture or sound from this computer until it is switched on again.\n")
+	}
+}
+
+func (c *consoleReporter) FaceEnabled(enabled bool) {
+	if enabled {
+		c.printf("Front-facing camera switched on again: it comes on when a session shows it as your face.\n")
+	} else {
+		c.printf("Front-facing camera switched off in the window: its picture is not sent back until it is switched on again.\n")
+	}
+}
 
 func (c *consoleReporter) Share(receiving bool, url string) {
 	if receiving {

@@ -13,9 +13,13 @@ import type { Scenario } from './scenarios';
 type Handler = (event: ConnectorEvent) => void;
 type DevicesEvent = Extract<ConnectorEvent, { type: 'devices' }>;
 type MediaEvent = Extract<ConnectorEvent, { type: 'media' }>;
+type CaptureEvent = Extract<ConnectorEvent, { type: 'camera' | 'face' }>;
 
 /** How long the mock's person takes to answer the system's two prompts; long enough to see the card while they are up. */
 const PROMPTS_ANSWERED_MS = 5000;
+
+/** How long the enclave's relay takes to be back at a stream switched on again during a session (the connector's word: within seconds). */
+const RELAY_BACK_MS = 2000;
 
 export class MockBridge implements Bridge {
     private handlers = new Set<Handler>();
@@ -36,6 +40,15 @@ export class MockBridge implements Bridge {
     // The shell's word on the camera and the microphone, when the scenario
     // has one; null is a scenario that never speaks of it (nothing shown).
     private media: MediaEvent | null = null;
+    // The switches on Ready, as the connector would hold them: learned from
+    // the first camera or face event that speaks of `enabled` (a current
+    // connector says so right after its hello; an older one never does, and
+    // then nothing here is stamped) and moved by set_camera. While a switch
+    // is off no ffmpeg runs, so whatever the script says, that capture is
+    // off. linkActive says whether a session has the tunnel up, which is
+    // when a camera switched on again comes back on its own.
+    private switches: { camera?: boolean; face?: boolean } = {};
+    private linkActive = false;
 
     constructor(private readonly scenario: Scenario) {}
 
@@ -77,8 +90,32 @@ export class MockBridge implements Bridge {
             case 'media':
                 this.media = event;
                 break;
+            case 'link':
+                this.linkActive = event.state === 'active';
+                break;
         }
-        for (const h of this.handlers) h(event);
+        const said = event.type === 'camera' || event.type === 'face' ? this.stamped(event) : event;
+        for (const h of this.handlers) h(said);
+    }
+
+    /**
+     * A camera or face event as the connector would say it: the switch's
+     * standing stamped on, once the connector has one; and, switched off,
+     * the capture off and its meters gone whatever the script scheduled,
+     * since no ffmpeg runs then.
+     */
+    private stamped(event: CaptureEvent): CaptureEvent {
+        const key = event.type;
+        if (event.enabled !== undefined) this.switches[key] = event.enabled;
+        const enabled = this.switches[key];
+        if (enabled === undefined) return event;
+        if (!enabled) return key === 'camera' ? { type: 'camera', on: false, enabled: false } : { type: 'face', on: false, enabled: false };
+        return { ...event, enabled: true };
+    }
+
+    /** The meters a capture reports once it is sending, for a camera switched on again mid-session. */
+    private static sending(videoBps: number): CaptureEvent['stats'] {
+        return { videoBps, audioBps: 64_000, congested: false, backlogS: 0.2 };
     }
 
     private later(ms: number, event: ConnectorEvent | (() => ConnectorEvent | null)) {
@@ -148,6 +185,26 @@ export class MockBridge implements Bridge {
                 // phone switches the loop on a few seconds later in this mock.
                 if (face && share.address && !share.receiving) {
                     this.later(4500, () => (this.source ? { ...this.source, share: { ...share, receiving: true } } : null));
+                }
+                return;
+            }
+
+            case 'set_camera': {
+                // As the connector answers: the standing first, the capture
+                // off with it (stopped, if a session had it on; the light
+                // goes out within a few seconds). Switched on again during a
+                // session, nothing starts by itself: the relay is back at the
+                // stream within seconds and the camera comes on for it, the
+                // face camera only when one is configured and ready.
+                const key = command.view === 'body' ? 'camera' : 'face';
+                this.switches[key] = command.enabled;
+                this.later(150, key === 'camera' ? { type: 'camera', on: false, enabled: command.enabled } : { type: 'face', on: false, enabled: command.enabled });
+                if (command.enabled && this.linkActive) {
+                    this.later(RELAY_BACK_MS, () => {
+                        if (!this.switches[key] || !this.linkActive) return null;
+                        if (key === 'camera') return { type: 'camera', on: true, enabled: true, stats: MockBridge.sending(2_100_000) };
+                        return this.source?.face?.ready ? { type: 'face', on: true, enabled: true, stats: MockBridge.sending(1_750_000) } : null;
+                    });
                 }
                 return;
             }

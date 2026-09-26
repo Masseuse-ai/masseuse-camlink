@@ -51,14 +51,18 @@ func TestHandoverKeepsTheReaderAndTheStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	go pumpFrom(ctx1, pub, first, 1000, 90000, 0x11111111)
-
+	// The reader plays before the first packet is written: a packet written
+	// before PLAY is nobody's, and the check below that the first generation
+	// reached the reader unrewritten needs the reader to have seen its first
+	// packet (under -race on a shared runner, the TLS and RTSP exchange took
+	// longer than the pump's first tick, and the reader began at 1001).
 	r, err := play(t, s.Dial)
 	if err != nil {
 		t.Fatalf("play: %v", err)
 	}
 	defer r.c.Close()
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	go pumpFrom(ctx1, pub, first, 1000, 90000, 0x11111111)
 	waitFor(t, "first generation", func() bool { return r.video.Load() >= 10 })
 
 	// The encoder is about to restart: the publisher arms the handover and

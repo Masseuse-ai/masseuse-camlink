@@ -389,9 +389,21 @@ func listDevices(ctx context.Context, ffmpegPath string) int {
 // patience does not cover. A session's end turns the camera off at once.
 const cameraGrace = 15 * time.Second
 
+// The two cameras the window's switch names (set_camera, ipc.go): the
+// camera behind the person (the session's body view) and the front-facing
+// camera (their face through OBS).
+const (
+	viewBody = "body"
+	viewFace = "face"
+)
+
 // camControl turns the offer on at the first stream a session opens and
 // off when the session ends, or when its tunnel has been down for
 // cameraGrace with no stream opened since, and prints what is being sent.
+// The person can also switch either camera off from the window
+// (setEnabled): the capture stops at once, the light with it, and is not
+// started again, whatever a session asks, until it is switched on. The
+// switch is not remembered: every start has both cameras allowed.
 type camControl struct {
 	sink *serve.Server
 	// offer is the camera served; guarded by mu, replaced by setOffer
@@ -415,7 +427,11 @@ type camControl struct {
 	cancel     context.CancelFunc
 	faceOn     bool
 	faceCancel context.CancelFunc
-	backlog    func() time.Duration // the active tunnel's, nil between tunnels
+	// cameraOff and faceOff are the window's switches (setEnabled): while
+	// set, the camera (the front-facing camera) is not started for a
+	// session. Zero is allowed, so a camControl built plainly has both on.
+	cameraOff, faceOff bool
+	backlog            func() time.Duration // the active tunnel's, nil between tunnels
 	// pending turns the camera off when the grace runs out; nil while none
 	// is running. pendingGen tells a timer that fired whether it is still
 	// the one that counts.
@@ -501,6 +517,14 @@ func (c *camControl) currentBacklog() time.Duration {
 // dialLocal answers the enclave's OPEN for the connector's own stream.
 func (c *camControl) dialLocal() (net.Conn, error) {
 	c.mu.Lock()
+	if c.cameraOff {
+		// The person switched the camera off in the window: the stream is
+		// refused (the tunnel answers "camera unreachable", naming
+		// nothing), and the relay's next attempt finds the camera again
+		// once it is switched on.
+		c.mu.Unlock()
+		return nil, errors.New("the camera is switched off in the window")
+	}
 	if c.offer == nil || !c.offer.ready {
 		note := "no camera configured"
 		if c.offer != nil {
@@ -533,11 +557,12 @@ func (c *camControl) dialLocal() (net.Conn, error) {
 
 // startFace turns the front-facing camera on: the enclave asked for its
 // stream (a DESCRIBE with no source publishing yet). It goes off with the
-// camera (stopLocked). Nothing happens without one configured and ready.
+// camera (stopLocked). Nothing happens without one configured and ready,
+// or while the person has it switched off in the window.
 func (c *camControl) startFace() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.face == nil || !c.face.ready || c.faceOn {
+	if c.faceOff || c.face == nil || !c.face.ready || c.faceOn {
 		return
 	}
 	c.faceOn = true
@@ -585,7 +610,7 @@ func (c *camControl) off(later bool) {
 // turned it off.
 func (c *camControl) graceOver(gen uint64) {
 	c.mu.Lock()
-	if c.pending == nil || c.pendingGen != gen || !c.on {
+	if c.pending == nil || c.pendingGen != gen || (!c.on && !c.faceOn) {
 		c.mu.Unlock()
 		return
 	}
@@ -593,24 +618,96 @@ func (c *camControl) graceOver(gen uint64) {
 	c.stopLocked()
 }
 
+// setEnabled is the window's switch on the camera (viewBody) or the
+// front-facing camera (viewFace). Off stops the capture at once if a
+// session has it on, so the light goes out, and dialLocal (startFace)
+// refuses to start it again until it is on; on starts nothing by itself:
+// the enclave's relay is back at the stream within seconds, and the next
+// stream it opens brings the camera on as any does. The standing is said
+// first, so the capture going off (CameraOff) already carries it, and the
+// switch is the last word either way.
+func (c *camControl) setEnabled(view string, enabled bool) error {
+	c.mu.Lock()
+	switch view {
+	case viewBody:
+		c.cameraOff = !enabled
+		c.reporter().CameraEnabled(enabled)
+		if !enabled && c.on {
+			// A grace running for the next tunnel has nothing left to keep
+			// on, unless the front-facing camera is still on: then it runs
+			// on and takes that when it ends, as it would have both.
+			if c.pending != nil && !c.faceOn {
+				c.pending.Stop()
+				c.pending = nil
+			}
+			c.stopBodyLocked() // releases mu
+			return nil
+		}
+	case viewFace:
+		c.faceOff = !enabled
+		c.reporter().FaceEnabled(enabled)
+		if !enabled && c.faceOn {
+			c.stopFaceLocked() // releases mu
+			return nil
+		}
+	default:
+		c.mu.Unlock()
+		return fmt.Errorf("no camera called %q; the cameras are %q and %q", view, viewBody, viewFace)
+	}
+	c.mu.Unlock()
+	return nil
+}
+
+// enabled is the standing of the window's switches: whether the camera
+// and the front-facing camera may be started for a session.
+func (c *camControl) enabled() (camera, face bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.cameraOff, !c.faceOff
+}
+
 // stopLocked turns the camera off, and the front-facing camera with it;
 // the caller holds c.mu, which is released before the sources are stopped
 // (ffmpeg takes a moment to exit).
-func (c *camControl) stopLocked() {
-	on, cancel, offer := c.on, c.cancel, c.offer
-	c.on, c.cancel = false, nil
-	faceOn, faceCancel, face := c.faceOn, c.faceCancel, c.face
-	c.faceOn, c.faceCancel = false, nil
+func (c *camControl) stopLocked() { c.stopSomeLocked(true, true) }
+
+// stopBodyLocked turns the camera off alone (the window's switch), the
+// front-facing camera staying as it is; the caller holds c.mu, released as
+// by stopLocked.
+func (c *camControl) stopBodyLocked() { c.stopSomeLocked(true, false) }
+
+// stopFaceLocked turns the front-facing camera off alone; as stopBodyLocked.
+func (c *camControl) stopFaceLocked() { c.stopSomeLocked(false, true) }
+
+// stopSomeLocked turns off what it is told to of the camera and the
+// front-facing camera, each if on; the caller holds c.mu, which is released
+// before the sources are stopped (ffmpeg takes a moment to exit). A change
+// that waited for the camera to be let go is applied after (onOff),
+// whichever went off.
+func (c *camControl) stopSomeLocked(stopBody, stopFace bool) {
+	var (
+		on, faceOn           bool
+		cancel, faceCancel   context.CancelFunc
+		bodyOffer, faceOffer *offer
+	)
+	if stopBody && c.on {
+		on, cancel, bodyOffer = true, c.cancel, c.offer
+		c.on, c.cancel = false, nil
+	}
+	if stopFace && c.faceOn {
+		faceOn, faceCancel, faceOffer = true, c.faceCancel, c.face
+		c.faceOn, c.faceCancel = false, nil
+	}
 	onOff := c.onOff
 	c.mu.Unlock()
 	if on {
 		cancel()
-		offer.stop()
+		bodyOffer.stop()
 		c.reporter().CameraOff()
 	}
 	if faceOn {
 		faceCancel()
-		face.stop()
+		faceOffer.stop()
 		c.reporter().FaceOff()
 	}
 	if (on || faceOn) && onOff != nil {

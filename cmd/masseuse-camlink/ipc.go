@@ -143,7 +143,12 @@ type ipcReporter struct {
 	// sending (NotSending), so the notice about it is raised once, not at
 	// every report; sending, or the camera going off, forgets it.
 	notSending string
-	log        *slog.Logger
+	// cameraOff and faceOff are the window's switches as last said
+	// (CameraEnabled, FaceEnabled), stamped on every camera and face event
+	// so the last of each kind, which the shell keeps for a page that
+	// mounts late, carries the standing. Zero is on.
+	cameraOff, faceOff bool
+	log                *slog.Logger
 }
 
 func newIPCReporter(w io.Writer, log *slog.Logger) *ipcReporter {
@@ -218,6 +223,11 @@ func (r *ipcReporter) Ready() {
 	if r.source != nil {
 		r.write(r.sourceEvent(*r.source))
 	}
+	// The switches' standing, both cameras off and allowed: the page shows
+	// a switch only once a connector has spoken of `enabled`, so an older
+	// connector, which never does, shows none.
+	r.write(ipcCamera{Type: "camera", Enabled: !r.cameraOff})
+	r.write(ipcCamera{Type: "face", Enabled: !r.faceOff})
 	for _, v := range r.pending {
 		r.write(v)
 	}
@@ -329,25 +339,44 @@ func (r *ipcReporter) Enclave(p enclaveProof) {
 	r.mu.Unlock()
 }
 
+// ipcCamera is the "camera" event, and the "face" event in the same shape:
+// whether the capture is on, its rates while sending, and the standing of
+// the window's switch on it (Enabled), which a current connector always
+// says.
 type ipcCamera struct {
-	Type  string    `json:"type"`
-	On    bool      `json:"on"`
-	Stats *ipcStats `json:"stats,omitempty"`
+	Type    string    `json:"type"`
+	On      bool      `json:"on"`
+	Stats   *ipcStats `json:"stats,omitempty"`
+	Enabled bool      `json:"enabled"`
+}
+
+// camera is a camera event with the switch's standing stamped on.
+func (r *ipcReporter) camera(on bool, stats *ipcStats) ipcCamera {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return ipcCamera{Type: "camera", On: on, Stats: stats, Enabled: !r.cameraOff}
+}
+
+// face is a face event with the switch's standing stamped on.
+func (r *ipcReporter) face(on bool, stats *ipcStats) ipcCamera {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return ipcCamera{Type: "face", On: on, Stats: stats, Enabled: !r.faceOff}
 }
 
 func (r *ipcReporter) CameraOn(string) {
 	r.forgetNotSending()
-	r.emit(ipcCamera{Type: "camera", On: true})
+	r.emit(r.camera(true, nil))
 }
 
 func (r *ipcReporter) CameraOff() {
 	r.forgetNotSending()
-	r.emit(ipcCamera{Type: "camera", On: false})
+	r.emit(r.camera(false, nil))
 }
 
 func (r *ipcReporter) Sending(_ string, videoBps, audioBps float64, congested bool, backlog time.Duration) {
 	r.forgetNotSending()
-	r.emit(ipcCamera{Type: "camera", On: true, Stats: &ipcStats{VideoBps: videoBps, AudioBps: audioBps, Congested: congested, BacklogS: backlog.Seconds()}})
+	r.emit(r.camera(true, &ipcStats{VideoBps: videoBps, AudioBps: audioBps, Congested: congested, BacklogS: backlog.Seconds()}))
 }
 
 // NotSending is the camera on with nothing sent, every report: the idle
@@ -356,7 +385,7 @@ func (r *ipcReporter) Sending(_ string, videoBps, audioBps float64, congested bo
 // reason that stands for a whole session would otherwise be raised every
 // ten seconds).
 func (r *ipcReporter) NotSending(reason string) {
-	r.emit(ipcCamera{Type: "camera", On: true, Stats: &ipcStats{Reason: reason}})
+	r.emit(r.camera(true, &ipcStats{Reason: reason}))
 	if reason == "" {
 		return
 	}
@@ -375,8 +404,29 @@ func (r *ipcReporter) forgetNotSending() {
 	r.mu.Unlock()
 }
 
-func (r *ipcReporter) FaceOn(string) { r.emit(ipcCamera{Type: "face", On: true}) }
-func (r *ipcReporter) FaceOff()      { r.emit(ipcCamera{Type: "face", On: false}) }
+func (r *ipcReporter) FaceOn(string) { r.emit(r.face(true, nil)) }
+func (r *ipcReporter) FaceOff()      { r.emit(r.face(false, nil)) }
+
+// CameraEnabled is the window's switch on the camera: the standing is kept
+// for every camera event from here on and said at once, the camera off
+// (switched off, it is being stopped; switched on, nothing starts until a
+// session reads it).
+func (r *ipcReporter) CameraEnabled(enabled bool) {
+	r.mu.Lock()
+	r.cameraOff = !enabled
+	r.mu.Unlock()
+	r.forgetNotSending()
+	r.emit(r.camera(false, nil))
+}
+
+// FaceEnabled is the window's switch on the front-facing camera; as
+// CameraEnabled.
+func (r *ipcReporter) FaceEnabled(enabled bool) {
+	r.mu.Lock()
+	r.faceOff = !enabled
+	r.mu.Unlock()
+	r.emit(r.face(false, nil))
+}
 
 func (r *ipcReporter) Share(receiving bool, url string) {
 	r.mu.Lock()
@@ -473,6 +523,10 @@ type ipcCommand struct {
 	Type   string        `json:"type"`
 	Choice *sourceChoice `json:"choice,omitempty"`
 	ID     string        `json:"id,omitempty"`
+	// View and Enabled are a set_camera: the window's switch on the camera
+	// ("body") or the front-facing camera ("face"), off or on again.
+	View    string `json:"view,omitempty"`
+	Enabled *bool  `json:"enabled,omitempty"`
 }
 
 // sourceChoice is a set_source: the source flags as fields, each part
@@ -578,6 +632,17 @@ func (c *ipcCommands) handle(ctx context.Context, cmd ipcCommand) bool {
 			return false
 		}
 		if err := c.mgr.applySource(ctx, *cmd.Choice); err != nil {
+			c.ui.Notice(noticeError, firstLine(err))
+		}
+	case "set_camera":
+		// The switch on Ready: off stops the capture now and keeps it off
+		// for every session until on again (camControl.setEnabled); the
+		// standing comes back as a camera or face event.
+		if cmd.Enabled == nil {
+			c.ui.Notice(noticeError, "set_camera needs enabled, true or false.")
+			return false
+		}
+		if err := c.mgr.cam.setEnabled(cmd.View, *cmd.Enabled); err != nil {
 			c.ui.Notice(noticeError, firstLine(err))
 		}
 	case "select_unit":

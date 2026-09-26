@@ -107,6 +107,19 @@ export function SelectUnit(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * SetCamera is the switch on Ready: view names the camera behind the
+ * person ("body") or the front-facing camera ("face"). Off, the connector
+ * stops that capture at once, so the light goes out, and refuses to start
+ * it for any session until on again; on, nothing starts by itself, the
+ * next stream a session opens brings the camera on as any does. The
+ * standing comes back on the "camera" or "face" event as `enabled`. It is
+ * not remembered: every launch has both cameras allowed.
+ */
+export function SetCamera(view: string, enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(4231316045, view, enabled);
+}
+
+/**
  * SetSource chooses the camera and microphone (or the network camera), the
  * front-facing camera, or whether the phone's picture is wanted. The
  * connector applies it while no session reads the camera and remembers

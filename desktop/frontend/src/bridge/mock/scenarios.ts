@@ -69,7 +69,7 @@ const code = (minutes: number, value = CODE): ConnectorEvent => ({ type: 'code',
 /** The shell's word on the camera and the microphone (macOS); the real shell says it before the connector's hello, so it goes first. */
 const media = (camera: MediaPermission, mic: MediaPermission = camera): Timed => ({ at: 0, event: { type: 'media', camera, mic } });
 
-/** The connector's first moments: hello, the service answering, the devices, the camera chosen, the units seen. */
+/** The connector's first moments: hello, the service answering, the devices, the camera chosen, the switches' standing (both cameras off and allowed, as a current connector says right after its source), the units seen. */
 function opening(over: { phones?: number; platform?: Platform; cams?: Device[]; mics?: Device[]; src?: ConnectorEvent; units?: Unit[]; unit?: Descriptor | null; updates?: 'on' | 'off'; updatesNote?: string } = {}): Timed[] {
     const platform = over.platform ?? 'darwin';
     const list = over.units ?? [units.g12ab!];
@@ -78,12 +78,17 @@ function opening(over: { phones?: number; platform?: Platform; cams?: Device[]; 
         { at: 0, event: { type: 'hello', hello: hello({ phones: over.phones ?? 0, stateDir: stateDirs[platform], updates: over.updates ?? 'on', updatesNote: over.updatesNote }) } },
         { at: 250, event: devices(over.cams ?? defaultCameras, over.mics ?? defaultMics) },
         { at: 300, event: over.src ?? source(cameras.insta!, mics.yeti!) },
+        { at: 320, event: { type: 'camera', on: false, enabled: true } },
+        { at: 320, event: { type: 'face', on: false, enabled: true } },
         { at: 700, event: { type: 'online', online: true } },
         { at: 1200, event: unitsEvent(list, false) },
     ];
     if (unit) script.push({ at: 1500, event: device(unit) });
     return script;
 }
+
+/** The session the Ready scenarios share: a unit armed within its bound. */
+const armedUnit = () => descriptorFor(units.g12ab!, { armed: { levelBound: 15 }, status: { batteryPercent: 82, mode: 7, levelA: 6, outputting: true } });
 
 export const scenarios: Scenario[] = [
     // Pair
@@ -308,15 +313,18 @@ export const scenarios: Scenario[] = [
         id: 'face-older-connector',
         group: 'Cameras and microphone',
         title: 'Your face: an older connector',
-        note: 'The connector’s report has no share or face; the tab says the phone’s camera is the face.',
+        note: 'The connector’s report has no share or face; the tab says the phone’s camera is the face. It has no switches either: Ready shows none.',
         step: 'camera',
         tab: 'face',
         setupDone: true,
-        script: opening({ phones: 1 }).map((t) => {
-            if (t.event.type !== 'source') return t;
-            const { share: _share, face: _face, ...rest } = t.event;
-            return { ...t, event: rest };
-        }),
+        script: opening({ phones: 1 })
+            // An older connector says nothing of the switches.
+            .filter((t) => t.event.type !== 'camera' && t.event.type !== 'face')
+            .map((t) => {
+                if (t.event.type !== 'source') return t;
+                const { share: _share, face: _face, ...rest } = t.event;
+                return { ...t, event: rest };
+            }),
     },
     {
         id: 'face-obs-live',
@@ -430,6 +438,35 @@ export const scenarios: Scenario[] = [
             { at: 2000, event: { type: 'camera', on: true, stats: { videoBps: 2_100_000, audioBps: 64_000, congested: false, backlogS: 0.2 } } },
             { at: 4000, event: { type: 'camera', on: true, stats: { videoBps: 2_300_000, audioBps: 64_000, congested: false, backlogS: 0.3 } } },
             { at: 6000, event: { type: 'camera', on: true, stats: { videoBps: 2_050_000, audioBps: 63_000, congested: false, backlogS: 0.1 } } },
+        ],
+    },
+    {
+        id: 'home-camera-switched-off',
+        group: 'Ready',
+        title: 'Session active, the camera switched off',
+        note: 'The person switched the camera off on Ready during the session: the capture stopped and the light went out; the session runs without this computer’s picture or sound until the switch is on again (flip it: the relay is back within seconds).',
+        step: 'home',
+        setupDone: true,
+        script: [
+            ...opening({ phones: 1, unit: armedUnit() }),
+            { at: 1800, event: { type: 'link', state: 'active', enclave } },
+            { at: 2000, event: { type: 'camera', on: true, stats: stats(2_100_000) } },
+            { at: 3500, event: { type: 'camera', on: false, enabled: false } },
+        ],
+    },
+    {
+        id: 'face-obs-switched-off',
+        group: 'Ready',
+        title: 'Session active, face through OBS Studio switched off',
+        note: 'The loop was live; the person switched the front-facing camera off on Ready: OBS’s picture stops going back while the camera behind them keeps sending.',
+        step: 'home',
+        setupDone: true,
+        script: [
+            ...opening({ phones: 1, cams: obsCameras, src: source(cameras.insta!, mics.yeti!, { share: shareArriving, face: faceThrough(cameras.obs!) }), unit: armedUnit() }),
+            { at: 1800, event: { type: 'link', state: 'active', enclave } },
+            { at: 2000, event: { type: 'camera', on: true, stats: stats(2_100_000) } },
+            { at: 2600, event: { type: 'face', on: true, stats: stats(1_750_000) } },
+            { at: 4000, event: { type: 'face', on: false, enabled: false } },
         ],
     },
     {

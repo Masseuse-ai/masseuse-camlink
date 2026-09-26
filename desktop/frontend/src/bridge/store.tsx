@@ -47,6 +47,25 @@ export function offersFaceLoop(source: SourceState | null): boolean {
     return Boolean(source && source.share !== undefined && source.face !== undefined);
 }
 
+/** A capture of this computer's as the connector reports it: on while a session reads it, its rates while sending, and the switch on Ready. */
+export interface CameraState {
+    on: boolean;
+    stats?: CameraStats;
+    /**
+     * The switch on Ready (`set_camera`): false while the person has it
+     * switched off, so no session turns it on. Undefined until a connector
+     * that has the switch has spoken (its first `camera`/`face` event after
+     * the hello says so); an older connector never does, and Ready shows no
+     * switch for it.
+     */
+    enabled?: boolean;
+}
+
+/** Whether the person has the capture switched off on Ready. */
+export function switchedOff(camera: CameraState): boolean {
+    return camera.enabled === false;
+}
+
 export interface AppState {
     platform: Platform;
     shell: { version: string; wired: boolean; stateDir: string };
@@ -61,9 +80,10 @@ export interface AppState {
     devicesError: string | null;
     source: SourceState | null;
     link: { state: LinkState; reason?: string; enclave?: EnclaveProof };
-    camera: { on: boolean; stats?: CameraStats };
-    /** The face camera (OBS's picture going back), on only while the room reads it. */
-    faceCamera: { on: boolean; stats?: CameraStats };
+    /** The camera behind the person: on while a session reads it; `enabled` is the switch on Ready, undefined until a connector with one has spoken. */
+    camera: CameraState;
+    /** The face camera (OBS's picture going back), on only while the room reads it; `enabled` as for the camera. */
+    faceCamera: CameraState;
     units: Unit[];
     unitsScanning: boolean;
     unit: Descriptor | null;
@@ -201,9 +221,10 @@ function applyEvent(state: AppState, ev: ConnectorEvent): AppState {
         case 'link':
             return { ...state, link: { state: ev.state, reason: ev.reason, enclave: ev.enclave ?? state.link.enclave } };
         case 'camera':
-            return { ...state, camera: { on: ev.on, stats: ev.on ? ev.stats : undefined } };
+            // The switch's standing rides on every event from a connector that has one; an event without it (an older connector) leaves it as it was.
+            return { ...state, camera: { on: ev.on, stats: ev.on ? ev.stats : undefined, enabled: ev.enabled ?? state.camera.enabled } };
         case 'face':
-            return { ...state, faceCamera: { on: ev.on, stats: ev.on ? ev.stats : undefined } };
+            return { ...state, faceCamera: { on: ev.on, stats: ev.on ? ev.stats : undefined, enabled: ev.enabled ?? state.faceCamera.enabled } };
         case 'units':
             return { ...state, units: ev.units, unitsScanning: ev.scanning };
         case 'device':

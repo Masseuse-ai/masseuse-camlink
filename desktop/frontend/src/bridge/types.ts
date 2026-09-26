@@ -192,9 +192,17 @@ export type ConnectorEvent =
           type: 'face';
           on: boolean;
           stats?: CameraStats;
+          /** The switch on Ready: whether the person lets a session turn it on (`set_camera`). Absent from an older connector, which has no switch. */
+          enabled?: boolean;
       }
     | { type: 'link'; state: LinkState; reason?: string; enclave?: EnclaveProof }
-    | { type: 'camera'; on: boolean; stats?: CameraStats }
+    | {
+          type: 'camera';
+          on: boolean;
+          stats?: CameraStats;
+          /** The switch on Ready: whether the person lets a session turn the camera on (`set_camera`). Absent from an older connector, which has no switch. */
+          enabled?: boolean;
+      }
     | { type: 'units'; units: Unit[]; scanning: boolean }
     | { type: 'device'; descriptor: Descriptor }
     | { type: 'bluetooth'; state: 'ok' | 'permission' | 'off' }
@@ -208,10 +216,21 @@ export type ConnectorEvent =
     | { type: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
     | { type: 'blocked'; kind: 'already-running' | 'connector-stopped' | 'state-dir-unwritable'; detail?: string };
 
+/** The cameras the switch on Ready names: the camera behind the person (the session's body view) and the front-facing camera (their face through OBS). */
+export type CameraView = 'body' | 'face';
+
 /** Everything the window asks of the connector, and of the shell in the same breath (`request_media_access`, `quit`). */
 export type ConnectorCommand =
     | { type: 'list_devices' }
     | { type: 'set_source'; choice: SourceChoice }
+    /**
+     * The switch on Ready. Off stops that capture at once (the light goes
+     * out) and keeps it off for every session until on again; on starts
+     * nothing by itself, the next stream a session opens brings the camera
+     * on. Not remembered: every launch has both allowed. The standing comes
+     * back on the `camera` or `face` event as `enabled`.
+     */
+    | { type: 'set_camera'; view: CameraView; enabled: boolean }
     | { type: 'select_unit'; id: string }
     | { type: 'update_now' }
     /** The shell's: ask the system for the camera and the microphone (macOS's prompts); the answer is a `media` event. */

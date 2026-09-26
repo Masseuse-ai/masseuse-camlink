@@ -58,8 +58,8 @@ func TestIPCReporterHelloComesFirst(t *testing.T) {
 	}
 	r.Ready()
 	lines := ipcLines(t, []byte(out.String()))
-	if len(lines) != 4 {
-		t.Fatalf("got %d lines, want hello, source, update, units:\n%s", len(lines), []byte(out.String()))
+	if len(lines) != 6 {
+		t.Fatalf("got %d lines, want hello, source, camera, face, update, units:\n%s", len(lines), []byte(out.String()))
 	}
 	if lines[0]["type"] != "hello" {
 		t.Fatalf("first line %v", lines[0])
@@ -76,11 +76,19 @@ func TestIPCReporterHelloComesFirst(t *testing.T) {
 	if share := lines[1]["share"].(map[string]any); share["ready"] != true || share["address"] != "rtsp://127.0.0.1:7446/phone-abc" || share["receiving"] != false {
 		t.Fatalf("share %v", share)
 	}
-	if lines[2]["type"] != "update" || lines[2]["state"] != "off" {
-		t.Fatalf("update %v", lines[2])
+	// The switches' standing follows the source: both cameras off and
+	// allowed, said so the page knows a switch is there to show.
+	if lines[2]["type"] != "camera" || lines[2]["on"] != false || lines[2]["enabled"] != true || lines[2]["stats"] != nil {
+		t.Fatalf("camera standing %v", lines[2])
 	}
-	if lines[3]["type"] != "units" || lines[3]["scanning"] != false {
-		t.Fatalf("units %v", lines[3])
+	if lines[3]["type"] != "face" || lines[3]["on"] != false || lines[3]["enabled"] != true {
+		t.Fatalf("face standing %v", lines[3])
+	}
+	if lines[4]["type"] != "update" || lines[4]["state"] != "off" {
+		t.Fatalf("update %v", lines[4])
+	}
+	if lines[5]["type"] != "units" || lines[5]["scanning"] != false {
+		t.Fatalf("units %v", lines[5])
 	}
 	// After Ready everything goes out at once, and the phone's picture
 	// arriving re-says the source with receiving set.
@@ -88,17 +96,17 @@ func TestIPCReporterHelloComesFirst(t *testing.T) {
 	r.Link(linkReset, "no longer the session's camera")
 	r.Code("123456", time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC))
 	lines = ipcLines(t, []byte(out.String()))
-	if len(lines) != 7 {
+	if len(lines) != 9 {
 		t.Fatalf("got %d lines:\n%s", len(lines), []byte(out.String()))
 	}
-	if share := lines[4]["share"].(map[string]any); lines[4]["type"] != "source" || share["receiving"] != true {
-		t.Fatalf("share arriving: %v", lines[4])
+	if share := lines[6]["share"].(map[string]any); lines[6]["type"] != "source" || share["receiving"] != true {
+		t.Fatalf("share arriving: %v", lines[6])
 	}
-	if lines[5]["type"] != "link" || lines[5]["state"] != "closed" || lines[5]["reason"] != "no longer the session's camera" {
-		t.Fatalf("link %v", lines[5])
+	if lines[7]["type"] != "link" || lines[7]["state"] != "closed" || lines[7]["reason"] != "no longer the session's camera" {
+		t.Fatalf("link %v", lines[7])
 	}
-	if lines[6]["type"] != "code" || lines[6]["code"] != "123456" || lines[6]["expiresAt"] != "2026-09-19T20:00:00Z" {
-		t.Fatalf("code %v", lines[6])
+	if lines[8]["type"] != "code" || lines[8]["code"] != "123456" || lines[8]["expiresAt"] != "2026-09-19T20:00:00Z" {
+		t.Fatalf("code %v", lines[8])
 	}
 }
 
@@ -132,7 +140,8 @@ func TestIPCReporterNotSendingCarriesTheReasonOnce(t *testing.T) {
 	r.CameraOn("Cam")
 	r.NotSending("the camera delivered no picture in 10 s")
 	var got []string
-	for _, line := range ipcLines(t, []byte(out.String()))[1:] {
+	// Past the hello and the two standings Ready writes.
+	for _, line := range ipcLines(t, []byte(out.String()))[3:] {
 		switch line["type"] {
 		case "camera":
 			s, _ := line["stats"].(map[string]any)
@@ -172,7 +181,8 @@ func TestIPCReporterDeviceCarriesStatusAndArm(t *testing.T) {
 		Capabilities: estim.Capabilities{LevelMax: 25, Channels: []string{"A", "B"}, Modes: []int{1, 2}}}
 	r.DeviceState(d, estim.Status{LevelA: &level, BatteryPercent: &battery}, true, 12)
 	lines := ipcLines(t, []byte(out.String()))
-	desc := lines[1]["descriptor"].(map[string]any)
+	// Past the hello and the two standings Ready writes.
+	desc := lines[3]["descriptor"].(map[string]any)
 	if desc["label"] != "Mastago TENS G-12AB" || desc["connected"] != true {
 		t.Fatalf("descriptor %v", desc)
 	}
@@ -343,6 +353,174 @@ func TestApplySourceWaitsWhileTheCameraIsOn(t *testing.T) {
 	}
 }
 
+// cameraEvents is what the camera (or face) events said, in order: whether
+// the capture was on and the standing of the window's switch on it.
+func cameraEvents(t *testing.T, out []byte, kind string) []string {
+	t.Helper()
+	var got []string
+	for _, line := range ipcLines(t, out) {
+		if line["type"] == kind {
+			got = append(got, fmt.Sprintf("on=%v enabled=%v", line["on"], line["enabled"]))
+		}
+	}
+	return got
+}
+
+// TestSetCameraStopsTheCameraAndRefusesTheNextOpen: the window's switch
+// (set_camera) stops a camera a session has on, refuses the enclave's next
+// stream while off, and, once on again, lets the next stream bring the
+// camera on as any does; every camera event carries the standing, the
+// switch's word before the capture's.
+func TestSetCameraStopsTheCameraAndRefusesTheNextOpen(t *testing.T) {
+	var out lockedBuffer
+	ui := newIPCReporter(&out, slog.New(slog.DiscardHandler))
+	ui.Ready()
+	m := testManager(t, ui)
+	var started, stopped atomic.Int32
+	m.cam.offer = &offer{kind: "capture", label: "Cam", ready: true, start: func() { started.Add(1) }, stop: func() { stopped.Add(1) }, save: sourceConfig{Kind: "capture", Camera: "Cam"}}
+	c := &ipcCommands{ui: ui, mgr: m, log: slog.New(slog.DiscardHandler), stop: func() {}}
+	ctx := context.Background()
+	off, on := false, true
+
+	// A session reads the camera: on.
+	conn, err := m.cam.dialLocal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if cameraOn, _ := m.cam.busy(); !cameraOn || started.Load() != 1 {
+		t.Fatal("camera not on")
+	}
+	// Switched off: stopped at once, and the next stream is refused.
+	c.handle(ctx, ipcCommand{Type: "set_camera", View: "body", Enabled: &off})
+	if cameraOn, _ := m.cam.busy(); cameraOn || stopped.Load() != 1 {
+		t.Fatalf("camera on=%v stopped=%d after the switch", cameraOn, stopped.Load())
+	}
+	if camera, face := m.cam.enabled(); camera || !face {
+		t.Fatalf("enabled camera=%v face=%v", camera, face)
+	}
+	if _, err := m.cam.dialLocal(); err == nil || !strings.Contains(err.Error(), "switched off") {
+		t.Fatalf("a stream while switched off: %v", err)
+	}
+	if started.Load() != 1 {
+		t.Fatal("the refused stream started the camera")
+	}
+	// Switched on: nothing starts by itself; the next stream brings it on.
+	c.handle(ctx, ipcCommand{Type: "set_camera", View: "body", Enabled: &on})
+	if camera, _ := m.cam.enabled(); !camera {
+		t.Fatal("not enabled")
+	}
+	if cameraOn, _ := m.cam.busy(); cameraOn {
+		t.Fatal("switching on started the camera by itself")
+	}
+	conn, err = m.cam.dialLocal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if cameraOn, _ := m.cam.busy(); !cameraOn || started.Load() != 2 {
+		t.Fatal("camera not on again")
+	}
+	m.cam.off(false)
+	want := []string{
+		"on=false enabled=true",  // Ready's standing
+		"on=true enabled=true",   // the session's stream
+		"on=false enabled=false", // the switch
+		"on=false enabled=false", // the camera going off for it
+		"on=false enabled=true",  // the switch again
+		"on=true enabled=true",   // the next stream
+		"on=false enabled=true",  // the session's end
+	}
+	if got := cameraEvents(t, []byte(out.String()), "camera"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("camera events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// A view that is not a camera, or a switch without a position, is a
+	// notice and changes nothing.
+	c.handle(ctx, ipcCommand{Type: "set_camera", View: "hands", Enabled: &off})
+	c.handle(ctx, ipcCommand{Type: "set_camera", View: "body"})
+	var notices []string
+	for _, line := range ipcLines(t, []byte(out.String())) {
+		if line["type"] == "notice" && line["level"] == "error" {
+			notices = append(notices, line["text"].(string))
+		}
+	}
+	if len(notices) != 2 || !strings.Contains(notices[0], `"hands"`) || !strings.Contains(notices[1], "needs enabled") {
+		t.Fatalf("notices %q", notices)
+	}
+	if camera, face := m.cam.enabled(); !camera || !face {
+		t.Fatalf("a bad command moved a switch: camera=%v face=%v", camera, face)
+	}
+}
+
+// TestSetCameraOnTheFaceStopsItAlone: the front-facing camera's switch
+// stops that capture and leaves the camera on; while off the enclave's
+// DESCRIBE starts nothing; and the camera's own switch leaves the face
+// camera to the session's end.
+func TestSetCameraOnTheFaceStopsItAlone(t *testing.T) {
+	var out lockedBuffer
+	ui := newIPCReporter(&out, slog.New(slog.DiscardHandler))
+	ui.Ready()
+	m := testManager(t, ui)
+	var bodyStops, faceStarts, faceStops atomic.Int32
+	m.cam.offer = &offer{kind: "capture", label: "Cam", ready: true, start: func() {}, stop: func() { bodyStops.Add(1) }, save: sourceConfig{Kind: "capture", Camera: "Cam"}}
+	m.cam.face = &offer{kind: "capture", label: "OBS Virtual Camera", ready: true, start: func() { faceStarts.Add(1) }, stop: func() { faceStops.Add(1) }, save: sourceConfig{Kind: "capture", FaceCamera: "OBS Virtual Camera"}}
+	c := &ipcCommands{ui: ui, mgr: m, log: slog.New(slog.DiscardHandler), stop: func() {}}
+	ctx := context.Background()
+	off, on := false, true
+
+	// The session has both on.
+	conn, err := m.cam.dialLocal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	m.cam.startFace()
+	if cameraOn, faceOn := m.cam.busy(); !cameraOn || !faceOn {
+		t.Fatalf("camera=%v face=%v", cameraOn, faceOn)
+	}
+	// The face switched off: that capture stops, the camera stays on, and
+	// the enclave asking again starts nothing.
+	c.handle(ctx, ipcCommand{Type: "set_camera", View: "face", Enabled: &off})
+	if cameraOn, faceOn := m.cam.busy(); !cameraOn || faceOn || faceStops.Load() != 1 || bodyStops.Load() != 0 {
+		t.Fatalf("camera=%v face=%v faceStops=%d bodyStops=%d", cameraOn, faceOn, faceStops.Load(), bodyStops.Load())
+	}
+	m.cam.startFace()
+	if _, faceOn := m.cam.busy(); faceOn || faceStarts.Load() != 1 {
+		t.Fatal("the face camera started while switched off")
+	}
+	// On again: the next DESCRIBE brings it on.
+	c.handle(ctx, ipcCommand{Type: "set_camera", View: "face", Enabled: &on})
+	if _, faceOn := m.cam.busy(); faceOn {
+		t.Fatal("switching on started the face camera by itself")
+	}
+	m.cam.startFace()
+	if _, faceOn := m.cam.busy(); !faceOn || faceStarts.Load() != 2 {
+		t.Fatal("the face camera did not come on again")
+	}
+	// The camera switched off leaves the face camera on; the session's
+	// end takes it.
+	c.handle(ctx, ipcCommand{Type: "set_camera", View: "body", Enabled: &off})
+	if cameraOn, faceOn := m.cam.busy(); cameraOn || !faceOn || bodyStops.Load() != 1 || faceStops.Load() != 1 {
+		t.Fatalf("camera=%v face=%v bodyStops=%d faceStops=%d", cameraOn, faceOn, bodyStops.Load(), faceStops.Load())
+	}
+	m.cam.off(false)
+	if _, faceOn := m.cam.busy(); faceOn || faceStops.Load() != 2 {
+		t.Fatal("the face camera outlived the session")
+	}
+	want := []string{
+		"on=false enabled=true",  // Ready's standing
+		"on=true enabled=true",   // the enclave's DESCRIBE
+		"on=false enabled=false", // the switch
+		"on=false enabled=false", // the face camera going off for it
+		"on=false enabled=true",  // the switch again
+		"on=true enabled=true",   // the next DESCRIBE
+		"on=false enabled=true",  // the session's end
+	}
+	if got := cameraEvents(t, []byte(out.String()), "face"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("face events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestIPCCommandsRunStopsAtEOF(t *testing.T) {
 	var out lockedBuffer
 	ui := newIPCReporter(&out, slog.New(slog.DiscardHandler))
@@ -427,6 +605,10 @@ func TestConsoleReporterLines(t *testing.T) {
 	c.Sending("1280x720 30 fps", 2.5e6, 64e3, true, 1500*time.Millisecond)
 	c.NotSending("")
 	c.NotSending("ffmpeg exited")
+	c.CameraEnabled(false)
+	c.CameraEnabled(true)
+	c.FaceEnabled(false)
+	c.FaceEnabled(true)
 	c.UpdateQuiet(updateChecking, "", "Checking…")
 	c.Stopped()
 	want := `Masseuse.ai for your computer  (masseuse-camlink v0.13.0)
@@ -457,6 +639,10 @@ Sending 1280x720 30 fps: video 2.5 Mb/s, audio 64 kb/s
 Connection congested: dropping video to keep up (backlog 1.5 s).
 Camera on but not sending yet (waiting for the source).
 Camera on but not sending yet: ffmpeg exited.
+Camera switched off in the window: sessions get no picture or sound from this computer until it is switched on again.
+Camera switched on again: it comes on when a session reads it.
+Front-facing camera switched off in the window: its picture is not sent back until it is switched on again.
+Front-facing camera switched on again: it comes on when a session shows it as your face.
 
 Stopped.
 `
@@ -524,6 +710,13 @@ func TestIPCModeOverPipes(t *testing.T) {
 	}
 	if src := read("source"); src["ready"] != false || src["kind"] != "capture" {
 		t.Fatalf("source %v", src)
+	}
+	// The switches' standing follows: both cameras off and allowed.
+	if cam := read("camera"); cam["on"] != false || cam["enabled"] != true {
+		t.Fatalf("camera standing %v", cam)
+	}
+	if face := read("face"); face["on"] != false || face["enabled"] != true {
+		t.Fatalf("face standing %v", face)
 	}
 	// The window asks for the devices: with no ffmpeg the answer says so.
 	fmt.Fprintln(stdin, `{"type":"list_devices"}`)
