@@ -96,9 +96,12 @@ type Dialer struct {
 	RelayBuffer int
 	// Local answers OPENs for targets the connector serves itself instead of
 	// dialing, keyed by the exact target ("127.0.0.1:7443" for the
-	// connector's own camera stream, internal/serve). The target still has
-	// to pass the single-target policy; the function's connection is
-	// relayed in place of a TCP one, and its error refuses the stream.
+	// connector's own streams, internal/serve). Such a target is reserved:
+	// it must be a loopback literal, it is answered in-process and never
+	// dialed, and it stands outside the single-target policy, so the one
+	// network camera a tunnel may reach and the connector's own streams
+	// travel the same tunnel. The function's connection is relayed in
+	// place of a TCP one, and its error refuses the stream.
 	Local map[string]func() (net.Conn, error)
 	// SendBuffer is the TCP send buffer asked for on the tunnel connection
 	// (best effort); 0 means DefaultSendBuffer.
@@ -350,14 +353,21 @@ func (t *Tunnel) Serve(ctx context.Context) error {
 }
 
 func (t *Tunnel) handle(ctx context.Context, p *mux.Pending) {
-	addr, err := t.policy.allow(ctx, p.Target, t.d.Resolver)
+	local, reserved := t.d.Local[p.Target]
+	var addr string
+	var err error
+	if reserved {
+		err = t.policy.allowReserved(p.Target)
+	} else {
+		addr, err = t.policy.allow(ctx, p.Target, t.d.Resolver)
+	}
 	if err != nil {
 		t.log.Warn("refused stream", "target", p.Target, "reason", err.Error())
 		_ = p.Refuse(err.Error())
 		return
 	}
 	var conn net.Conn
-	if local, ok := t.d.Local[p.Target]; ok {
+	if reserved {
 		conn, err = local()
 	} else {
 		timeout := t.d.DialTimeout
@@ -389,11 +399,13 @@ func (t *Tunnel) handle(ctx context.Context, p *mux.Pending) {
 	t.log.Info("stream closed", "stream", st.ID())
 }
 
-// targetPolicy admits exactly one host:port per tunnel, and only when it
-// is on a private network: RFC 1918, loopback or link-local literals, or a
-// name every address of which is such an address. The connector dials the
-// address it checked, not the name, so a later DNS answer cannot redirect
-// it.
+// targetPolicy admits exactly one network host:port per tunnel, and only
+// when it is on a private network: RFC 1918, loopback or link-local
+// literals, or a name every address of which is such an address. The
+// connector dials the address it checked, not the name, so a later DNS
+// answer cannot redirect it. The connector's own reserved targets
+// (Dialer.Local) stand outside the lock: allowReserved admits them when they
+// are loopback literals, and they are never dialed.
 type targetPolicy struct {
 	mu     sync.Mutex
 	locked string
@@ -423,6 +435,24 @@ func (p *targetPolicy) allow(ctx context.Context, target string, resolver Resolv
 	p.locked = target
 	p.mu.Unlock()
 	return addr, nil
+}
+
+// allowReserved admits a target the connector answers in-process
+// (Dialer.Local): it must be a loopback literal with a port, and it does
+// not touch the lock on the network target.
+func (p *targetPolicy) allowReserved(target string) error {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return errors.New("target must be host:port")
+	}
+	if port, err := strconv.Atoi(portStr); err != nil || port < 1 || port > 65535 {
+		return errors.New("target port out of range")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("a reserved target must be a loopback address")
+	}
+	return nil
 }
 
 // ResolvePrivate returns host:port as an address to dial when host is a

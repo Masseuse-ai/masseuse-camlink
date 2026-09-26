@@ -32,6 +32,7 @@ import (
 	"github.com/FemLed/masseuse-camlink/internal/provenance"
 	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
 	"github.com/FemLed/masseuse-camlink/internal/serve"
+	"github.com/FemLed/masseuse-camlink/internal/share"
 	"github.com/FemLed/masseuse-camlink/internal/tunnel"
 )
 
@@ -55,6 +56,12 @@ func main() {
 	flag.StringVar(&sf.ffmpeg, "ffmpeg", "", "the ffmpeg executable (default: found on PATH)")
 	flag.StringVar(&sf.cameraURL, "camera-url", "", "send a camera on your network instead: rtsps://user:password@host:port/path")
 	flag.StringVar(&sf.cameraFingerprint, "camera-fingerprint", "", "that camera's certificate SHA-256, if you have it; otherwise it is trusted on first use")
+	flag.StringVar(&sf.faceCamera, "face-camera", "", "a second camera of this computer's to show as your face instead of your phone's camera (OBS's virtual camera, or any other): number or name; none to stop; remembered")
+	flag.StringVar(&sf.faceVideoSize, "face-video-size", "", "the front-facing camera's capture size WxH (default "+capture.Defaults.VideoSize+")")
+	flag.IntVar(&sf.faceFPS, "face-fps", 0, fmt.Sprintf("the front-facing camera's capture rate (default %d)", capture.Defaults.FPS))
+	flag.StringVar(&sf.faceBitrate, "face-bitrate", "", "the front-facing camera's video bit rate (default "+capture.Defaults.Bitrate+")")
+	flag.StringVar(&sf.sharePhone, "share-phone", "", "on: ask sessions for your phone's picture and serve it to programs on this computer (OBS) at a loopback RTSP address; off: stop; remembered")
+	flag.IntVar(&sf.sharePort, "share-port", 0, fmt.Sprintf("the loopback port your phone's picture is served on (default %d)", share.DefaultPort))
 	flag.Usage = usage
 	flag.Parse()
 	if *version {
@@ -168,7 +175,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		exit(2)
 	}
-	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger, !sf.any())
+	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger, !sf.bodyAny())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, capture.ErrNoDevice) {
@@ -177,12 +184,62 @@ func main() {
 		exit(2)
 	}
 	off.describe()
-	if sf.any() {
-		if err := saveSourceConfig(*stateDir, off.save); err != nil {
+	// The front-facing camera, when one is configured: served as the
+	// person's face in place of the phone's camera, on the enclave's asking.
+	faceOff, err := buildFaceOffer(ctx, cfg, sink.Face(), sink.Face().Stats, logger, !sf.faceAny())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, capture.ErrNoDevice) {
+			fmt.Fprintln(os.Stderr, "Run `masseuse-camlink devices` to see what is connected.")
+		}
+		exit(2)
+	}
+	if faceOff != nil {
+		faceOff.describeFace()
+	}
+	// The phone's picture on this computer, when asked for: a loopback
+	// RTSP address programs here may open (internal/share), fed by the
+	// enclave through the tunnel (internal/serve, the phone path).
+	var shared *share.Server
+	if cfg.SharePhone {
+		if cfg.ShareSecret == "" {
+			secret, err := share.NewSecret()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "phone picture:", err)
+				exit(1)
+			}
+			cfg.ShareSecret = secret
+		}
+		shared, err = share.New(share.Config{
+			Port: cfg.SharePort, Secret: cfg.ShareSecret, Logger: logger,
+			OnChange: func(arriving bool) {
+				if arriving {
+					fmt.Printf("Your phone's picture is arriving. Programs on this computer can open it at %s\n", shared.URL())
+				} else {
+					fmt.Println("Your phone's picture stopped.")
+				}
+			},
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "phone picture:", err)
+			exit(1)
+		}
+		defer shared.Close()
+		sink.SetReceiver(shared)
+		fmt.Printf("Your phone's picture: sessions are asked to send it here, and programs on this computer can open it at\n  %s\n  (OBS: a Media Source with Local File unticked, that address as the Input, Network Buffering 0 MB.)\n", shared.URL())
+	}
+	saveCfg := off.save
+	if faceOff != nil {
+		saveCfg.FaceCamera, saveCfg.FaceVideoSize, saveCfg.FaceFPS, saveCfg.FaceBitrate = faceOff.save.FaceCamera, cfg.FaceVideoSize, cfg.FaceFPS, cfg.FaceBitrate
+	}
+	saveCfg.SharePhone, saveCfg.SharePort, saveCfg.ShareSecret = cfg.SharePhone, cfg.SharePort, cfg.ShareSecret
+	if sf.any() || (cfg.SharePhone && cfg.ShareSecret != "") {
+		if err := saveSourceConfig(*stateDir, saveCfg); err != nil {
 			logger.Warn("could not remember the camera choice", "err", err)
 		}
 	}
-	cam := &camControl{sink: sink, offer: off, log: logger}
+	cam := &camControl{sink: sink, offer: off, face: faceOff, log: logger}
+	sink.Face().SetOnDemand(cam.startFace)
 	// Unit driver helpers in the units directory join the device families
 	// (helpers.go); the header says which, or why none.
 	fmt.Println(registerHelpers(ctx, *stateDir, logger))
@@ -198,10 +255,11 @@ func main() {
 
 	httpClient := &http.Client{}
 	mgr := &manager{
-		id:    id,
-		log:   logger,
-		cam:   cam,
-		estim: newEstimLink(*stateDir, logger, func(format string, args ...any) { fmt.Printf(format, args...) }),
+		id:      id,
+		log:     logger,
+		cam:     cam,
+		sharing: shared != nil,
+		estim:   newEstimLink(*stateDir, logger, func(format string, args ...any) { fmt.Printf(format, args...) }),
 		dialer: &tunnel.Dialer{
 			Identity: id,
 			Attester: &policyAttester{
@@ -267,6 +325,9 @@ on your network, to the enclave of a masseuse.ai session.
   masseuse-camlink -camera 1 -mic 0   choose by number or by (part of) the name; remembered
   masseuse-camlink -camera-url rtsps://user:password@192.168.1.20:322/live
                                       send a camera on your network instead
+  masseuse-camlink -share-phone on -face-camera "OBS Virtual Camera"
+                                      hand your phone's picture to OBS on this computer, and show OBS's
+                                      virtual camera as your face; -face-camera none puts your phone back
 
 The downloads at masseuse.ai/app are this same program under the name
 Masseuse.ai: on a Mac the application bundle (Masseuse.app) runs it in a
@@ -407,6 +468,11 @@ type manager struct {
 	// out is the console; nil means standard output.
 	out io.Writer
 
+	// sharing says the person asked for the phone's picture on this
+	// computer (-share-phone): reported to the service, so the phone has
+	// the enclave send it.
+	sharing bool
+
 	mu       sync.Mutex
 	tunnels  map[string]*active // by session id
 	lastCode string             // the code last shown, so a re-send is not printed twice
@@ -442,12 +508,19 @@ func (m *manager) printf(format string, args ...any) {
 	fmt.Fprintf(w, format, args...)
 }
 
-// CurrentSource tells the service which camera this connector offers.
+// CurrentSource tells the service which camera this connector offers, and
+// what else: whether it asks for the phone's picture, and the front-facing
+// camera it serves, when one is configured.
 func (m *manager) CurrentSource() (rendezvous.Source, bool) {
 	if m.cam == nil || m.cam.offer == nil {
 		return rendezvous.Source{}, false
 	}
-	return m.cam.offer.source(), true
+	src := m.cam.offer.source()
+	src.Share = &rendezvous.ShareOffer{Wanted: m.sharing}
+	if f := m.cam.face; f != nil {
+		src.Face = &rendezvous.FaceOffer{Kind: f.kind, Label: f.label, Ready: f.ready}
+	}
+	return src, true
 }
 
 type active struct {

@@ -209,6 +209,23 @@ func SourceMessage(ts int64, key, kind string, ready bool, label string) []byte 
 	return []byte("camlink-source-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + kind + "|" + r + "|" + label)
 }
 
+// SourceMessageV2 is SourceMessage with what a connector may offer beside
+// its camera (docs/PROTOCOL.md, section 2.3): whether it asks for the
+// phone's picture on its computer (shareWanted), and a front-facing camera
+// of its own (faceKind, faceReady, faceLabel; faceKind "" when none). The
+// two labels come last, the first preceded by its length in bytes, so that
+// any character in either is unambiguous.
+func SourceMessageV2(ts int64, key, kind string, ready, shareWanted bool, faceKind string, faceReady bool, label, faceLabel string) []byte {
+	bit := func(b bool) string {
+		if b {
+			return "1"
+		}
+		return "0"
+	}
+	return []byte("camlink-source-v2|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + kind + "|" + bit(ready) + "|" +
+		bit(shareWanted) + "|" + faceKind + "|" + bit(faceReady) + "|" + strconv.Itoa(len(label)) + "|" + label + "|" + faceLabel)
+}
+
 // EstimMessage is what the connector signs to send device link messages
 // (POST /api/camlink/estim): the session the messages are for ("" for
 // connector-level ones) and the messages as the exact JSON text sent, which

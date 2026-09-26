@@ -250,6 +250,50 @@ Other flags: `-service https://masseuse.ai` (the rendezvous service),
 `-state-dir DIR` (where the identity key, pairings and camera choice live),
 `-log-level debug`, `-version`.
 
+## Use OBS with your phone's camera
+
+Your phone's camera is your face in a session, and by itself it goes from
+the phone to the enclave and back with nothing in between. If you would
+rather work on that picture first - a beauty filter, a virtual background,
+colour grading - you can route it through OBS Studio on this computer and
+send OBS's result back as your face:
+
+```sh
+masseuse-camlink -share-phone on -face-camera "OBS Virtual Camera"
+```
+
+```
+Your phone's picture: sessions are asked to send it here, and programs on this computer can open it at
+  rtsp://127.0.0.1:7446/phone-Wq8…
+  (OBS: a Media Source with Local File unticked, that address as the Input, Network Buffering 0 MB.)
+Front-facing camera: OBS Virtual Camera (1280x720 30 fps, h264_videotoolbox). It is on only while a session shows it as your face; until then your phone's own camera is.
+```
+
+In OBS, add a **Media Source**, untick *Local File*, paste the address as
+the *Input*, set *Network Buffering* to 0 MB, and tick *Restart playback
+when source becomes active* (the picture arrives only while a session is
+running). Add your filters, then **Start Virtual Camera**. The next session
+sends your phone's picture to this computer within a few seconds of
+starting, and shows OBS's virtual camera as your face on the phone and in
+the live stream, if you run one. Both choices are remembered; `-face-camera
+none` puts your phone's own camera back as your face, and `-share-phone
+off` stops the picture coming here. The app's Setup sheet has a "Use my
+phone's camera instead" for the rest of a session.
+
+This loop costs latency: the picture goes to the enclave, to this computer,
+through OBS, and back, so your face on the phone runs a second or so behind
+the room. That is the price of the effects, and only of the effects: with
+nothing chosen here, your phone's camera takes the direct path it always
+did, with none of it. Any other camera of this computer's works as the
+front-facing camera too (`-face-camera 1`, by number or name from `devices`;
+`-face-video-size`, `-face-fps` and `-face-bitrate` shape it), with no need
+for `-share-phone`; it then costs that camera's own latency alone.
+
+What the enclave analyses - the posture and face keypoints the session runs
+on - is always your phone's own picture, before OBS touches it; what comes
+back from this computer is shown and streamed, never analysed. Where the
+picture goes is set out under "Where your video goes" below.
+
 ## When the connection cannot keep up
 
 The program watches how far behind the enclave is. A slow or stalling
@@ -465,6 +509,19 @@ carries the time its source gave it (ffmpeg's clock for the computer's
 camera, the camera's own for one on the network), passed through unchanged;
 the enclave aligns the two streams on that time. Both streams end at the
 same enclave and nowhere else.
+
+Your phone's picture reaches this computer only when you ask for it here
+(`-share-phone on`): the enclave then copies the phone's stream, as it
+arrived and without re-encoding it, through the same verified tunnel to
+this program, which serves it on this computer alone - a loopback address
+behind a secret path that other programs on this computer, such as OBS,
+can open, and nothing off the computer can reach. The picture is never
+written to disk by this program, and the address goes nowhere but your
+screen and `source.json`. What this computer sends back as your face
+(`-face-camera`) travels the tunnel like the camera does, to the same
+enclave, which shows it and streams it on but never analyses it: the
+keypoints, and everything the session derives from them, come from your
+phone's own picture.
 
 You do not have to take that on trust. Every enclave image is built by that
 repository's release workflow on GitHub Actions from a tagged commit, with

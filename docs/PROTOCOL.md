@@ -124,6 +124,39 @@ latest report per connector for as long as it remembers the connector, and
 shows it to a phone bound to that connector as `camlink.source`. A `404`
 means an older service; the connector goes on without the card.
 
+**Version 2.** A connector that offers more than its camera (section 6.1:
+`-share-phone`, `-face-camera`) reports it in the same request with `"v": 2`:
+
+```json
+{
+  "key": "<connectorKey>",
+  "ts": 1757400000,
+  "v": 2,
+  "source": {
+    "kind": "capture", "label": "Insta360 Link + Yeti Stereo Microphone", "ready": true,
+    "share": {"wanted": true},
+    "face": {"kind": "capture", "label": "OBS Virtual Camera", "ready": true}
+  },
+  "sig": "<base64url Ed25519 signature>"
+}
+```
+
+`share.wanted` says the person asked, on the computer, for the phone's
+picture to be sent there; `face`, when present, is the front-facing camera
+the connector serves at `rtsps://127.0.0.1:7443/face` (`kind` is `capture`;
+`label` at most 64 characters; `ready` as above), and is absent when none is
+configured. `sig` is over
+`camlink-source-v2|<ts>|<key>|<kind>|<ready>|<1 if share.wanted else 0>|<face.kind or empty>|<1 if face.ready else 0>|<byte length of label>|<label>|<face.label or empty>`
+(bits as `1`/`0`; the two labels last, the first preceded by its length so
+that a `|` in either cannot move text between them). A service that knows
+v1 alone cannot verify a v2 report and answers `400` or `401`; the
+connector then sends the camera alone as v1, at once and for the rest of
+its run, so an older service still gets the card it knows. The service
+shows `share` and `face` to the phone as part of `camlink.source`; what the
+phone does with them is the trainer's (it has the enclave send the phone's
+picture while `share.wanted`, and show `face` while `face.ready`), and only
+the phone's capability can hand the enclave a link or start the sending.
+
 ### 2.4 `POST /api/camlink/heartbeat`
 
 The event stream tells the service a connector is online, but not always
@@ -295,11 +328,16 @@ name every address of which resolves to such an address (the connector then
 dials the address it checked, not the name). It never becomes a general
 proxy. The gateway pings every 30 s.
 
-One target is reserved: `127.0.0.1:7443` is the connector's own stream
+One target is reserved: `127.0.0.1:7443` is the connector's own streams
 (section 6). An `OPEN` for it is answered from inside the connector process,
 never by a dial, so nothing has to listen on that port and nothing else on
-the computer can reach the stream. It is subject to the same single-target
-lock.
+the computer can reach the streams. The reserved target stands outside the
+single-target lock: it is admitted before, beside or after the one network
+target (a loopback literal with a port, nothing else is reserved-shaped),
+and it never takes the lock itself, so a camera on the network as the body
+view and the connector's own streams travel the same tunnel. The lock still
+admits one network `host:port` per tunnel, and the connector still dials
+nothing but that.
 
 ## 5. Enclave control (loopback only)
 
@@ -319,29 +357,54 @@ the existing authenticated control plane.
 - `POST /target` `{"host","port"}` -> `200`; `409` when no connector is
   attached. The host:port the next relay connection is opened to.
 - `POST /clear` -> `200`: forget expectation and target, drop the connector.
-- `GET /status` -> `{"expecting","connected","sinceMs","connectorKeyPrefix","target"}`
-  (`target` is a boolean; the host never appears in status or logs).
+- `GET /status` -> `{"expecting","connected","sinceMs","connectorKeyPrefix","target","ownStreams"}`
+  (`target` is a boolean; the host never appears in status or logs;
+  `ownStreams` is how many connections to the own listener are being
+  relayed now).
 - `GET /healthz` -> `200 ok`.
 
 The relay listener is `127.0.0.1:7441`. Each accepted connection becomes an
-`OPEN` to the attached connector; with no connector attached, or no target
-set, the connection is closed immediately. The enclave's RTSP server is
-pointed at `rtsps://127.0.0.1:7441/<path>` and verifies the camera's
-certificate fingerprint through the tunnel exactly as it would directly.
+`OPEN` to the attached connector for the current target; with no connector
+attached, or no target set, the connection is closed immediately. The
+enclave's RTSP server is pointed at `rtsps://127.0.0.1:7441/<path>` and
+verifies the camera's certificate fingerprint through the tunnel exactly as
+it would directly.
 
-## 6. The connector's own stream
+A second listener, the **own listener** (`-own 127.0.0.1:7442`), serves the
+connector's own endpoint: each accepted connection becomes an `OPEN` for the
+reserved target `127.0.0.1:7443`, whatever the current target, and needs no
+`POST /target`. The enclave reaches the connector's `camera` and `face`
+streams through it, and publishes the phone's picture into `phone` through
+it (section 6.1), while the relay listener may be pointed at a camera on
+the network. With no connector attached the connection is closed
+immediately. A gateway without the flag has no own listener, and an older
+connector against a gateway with one still serves its camera through it,
+`127.0.0.1:7443` being a target its lock accepts.
+
+## 6. The connector's own streams
 
 The connector is itself an RTSPS server, reachable only through the tunnel:
-the enclave names it with the fixed link `rtsps://127.0.0.1:7443/camera`,
-the gateway opens streams to `127.0.0.1:7443`, and the connector answers them
-in-process (section 4). Its certificate is self-signed ECDSA P-256, generated
-on first run and kept as `camera-cert.pem` (mode 0600) in the state
-directory, so its fingerprint is stable across restarts; the enclave probes
-it through the tunnel and pins it for the session as it does with any
-camera.
+the enclave names it with fixed links, `rtsps://127.0.0.1:7443/camera` and
+`rtsps://127.0.0.1:7443/face`, the gateway opens streams to `127.0.0.1:7443`
+(through its own listener, section 5), and the connector answers them
+in-process (section 4). Its certificate is self-signed ECDSA P-256 with the
+subject alternative name `127.0.0.1`, generated on first run and kept as
+`camera-cert.pem` (mode 0600) in the state directory, so its fingerprint is
+stable across restarts; the enclave probes it through the tunnel and pins it
+for the session as it does with any camera, and, when it publishes into the
+connector (section 6.1), verifies it as a pinned certificate against the
+link's host. A saved certificate without the name is replaced at start.
 
-What the stream carries is one source, chosen on the command line and
-remembered in `source.json`:
+Three paths exist on the server. `camera` is the session's body view, one
+source chosen on the command line and remembered in `source.json`; `face`
+is a second camera of the computer's chosen as the person's front-facing
+picture (6.1), served only when one is configured; and `phone` is not served
+but taken: the enclave publishes the phone's picture into it when the person
+has asked for it (6.1). A `DESCRIBE` for a path whose source is not up yet
+gives the source its chance to start and waits for it; any other path is not
+found, and nothing but `phone` takes a publisher.
+
+What `camera` carries is one source:
 
 - **The computer's camera and microphone** (`capture`). The connector runs
   ffmpeg as a child process: avfoundation on macOS, dshow on Windows, v4l2
@@ -387,6 +450,51 @@ The connector describes the source to the service (section 2.3) so the phone
 can name it; the phone still decides, and only the phone's capability can
 hand the enclave a link.
 
+### 6.1 The phone's picture on the computer, and a front-facing camera back
+
+Both are the person's choice on the computer, made in the connector and
+remembered in `source.json`; with neither chosen, nothing below exists and
+the phone's own camera is the face view by the path it always was, with no
+trip through the computer.
+
+**The phone's picture out** (`-share-phone on`). The connector accepts a
+publisher on `phone`: the enclave's ffmpeg copies the phone's own camera
+stream (`-c copy`, video only, no re-encoding) and publishes it over RTSPS
+through the tunnel to `rtsps://127.0.0.1:7443/phone`, verifying the
+connector's certificate against the pinned fingerprint and the link's host.
+The connector serves what arrives, unchanged and undecoded, on a plain-RTSP
+loopback server, `rtsp://127.0.0.1:7446/phone-<secret>` (`-share-port`
+chooses the port): the one socket the connector opens for other programs.
+The secret is 18 random bytes, base64url, made the first time and kept in
+`source.json`, so a program set up to read the address once (an OBS Media
+Source) keeps working across runs. The server refuses everything but
+reading, answers `404` on any other path, and serves the path only while a
+picture is arriving; each packet carries the phone's own frame time where
+the enclave's report gave one. Without `-share-phone`, an `ANNOUNCE` on
+`phone` is answered `403` and nothing is sent to the computer; the report
+(2.3) tells the service the same as `share.wanted`, so the phone does not
+ask the enclave to send.
+
+**A front-facing camera in** (`-face-camera <device>`). A second capture of
+the computer's - OBS Studio's virtual camera, or any other camera, chosen
+by number or name as `-camera` is - published into `face`: video only (the
+phone's microphone stays the session's), the same ffmpeg, encoders and
+sizes as the camera, its own `-face-video-size`, `-face-fps` and
+`-face-bitrate`. It starts at the enclave's first `DESCRIBE` of `face` and
+stops with the camera when the session ends. The report (2.3) carries it as
+`face`; the phone hands the enclave the fixed link
+`rtsps://127.0.0.1:7443/face` while `face.ready`, and the enclave shows that
+stream as the person's face and streams it on - and never analyses it: the
+keypoints and everything derived from them are the phone's own picture's.
+`-face-camera none` takes the camera away and the phone's own camera is the
+face view again.
+
+Put together, the loop is: phone camera -> enclave -> (tunnel) connector ->
+OBS on the computer -> OBS Virtual Camera -> connector (`face`) -> (tunnel)
+enclave -> the face view on the phone and in the live stream. It adds the
+latency of the round trip and of OBS; the phone's own camera, chosen by
+selecting nothing here, has none of it.
+
 **Time.** The enclave shows this stream and the phone's side by side, and
 lines them up by the absolute time each frame belongs to, which RTSP carries
 in RTCP sender reports (an NTP time for an RTP timestamp). The stream's
@@ -407,13 +515,16 @@ phone reports the same way, so the enclave aligns the two on one clock;
 what it does with the alignment is documented in its repository.
 
 **Trust.** With a camera named directly, the connector relays ciphertext it
-cannot read. With its own stream, the connector holds the picture in the
+cannot read. With its own streams, the connector holds the picture in the
 clear on the person's computer: it is the camera. What holds is what held
-before: the stream leaves the computer only inside TLS that one attested
+before: the streams leave the computer only inside TLS that one attested
 enclave terminates, the connector dials nothing but that enclave, and the
-enclave pins the connector's certificate through the tunnel. The connector
-is open source and its releases reproducible (VERIFY.md), so what it does
-with the picture can be read.
+enclave pins the connector's certificate through the tunnel. The phone's
+picture comes to the computer only when the person asks for it there, over
+that same tunnel from that same enclave, and is served to the computer's
+own programs on loopback alone, behind a secret path. The connector is
+open source and its releases reproducible (VERIFY.md), so what it does with
+the pictures can be read.
 
 ## 7. Stimulation device link
 

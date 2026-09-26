@@ -13,17 +13,32 @@ are acknowledged within three business days.
   started on your phone is bound to it: your computer's own camera and
   microphone, a camera on your network it pulls for you, or, when the
   session names a network camera directly, that camera's bytes relayed
-  untouched.
-- The stream leaves your computer only inside TLS that the enclave
+  untouched. When you choose one (`-face-camera`), it sends a second camera
+  of your computer's to the same enclave as your face; the enclave shows
+  that picture and never analyses it.
+- The streams leave your computer only inside TLS that the enclave
   terminates. When it relays a camera named by the session it cannot read
-  the bytes. When it serves its own camera it holds the picture on your
-  computer, as any camera program would, and sends it to that one enclave;
-  its own stream has no listening port and is reachable only through the
-  tunnel. The masseuse.ai service carries metadata only.
+  the bytes. When it serves its own cameras it holds the pictures on your
+  computer, as any camera program would, and sends them to that one
+  enclave; its own streams have no listening port and are reachable only
+  through the tunnel. The masseuse.ai service carries metadata only.
+- Your phone's picture comes to your computer only when you ask for it
+  there (`-share-phone on`), and only from that same enclave over that
+  same tunnel: the connector accepts a publish into its `phone` path from
+  the tunnel alone, and answers `403` to it otherwise. It serves what
+  arrives on one loopback RTSP socket (`127.0.0.1:7446`), read-only, behind
+  a random path secret kept in `source.json`; that is the only socket it
+  opens for other programs, it is reachable from your computer alone, and
+  the picture is neither decoded, changed nor written to disk on its way
+  through.
 - The camera and microphone are captured only while a session is reading;
-  the capture process is stopped when the session's tunnel ends.
+  the capture process is stopped when the session's tunnel ends. The
+  front-facing camera starts only when the enclave asks for it and stops
+  with the camera.
 - It refuses to dial anything but a single private-network `host:port` per
-  session, so a compromised service cannot turn it into a proxy.
+  session, so a compromised service cannot turn it into a proxy. Its own
+  endpoint (`127.0.0.1:7443`) is answered in-process, never dialled, and
+  stands beside that one target rather than taking its place.
 - It dials an enclave only after verifying that enclave's Confidential Space
   attestation (the image's signing key and release, debug state, hardware
   model) against the policy published at `https://masseuse.ai/api/tee-policy`,

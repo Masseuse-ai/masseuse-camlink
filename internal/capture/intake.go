@@ -25,7 +25,7 @@ import (
 // stream (internal/serve) untouched.
 type intake struct {
 	srv  *gortsplib.Server
-	sink *serve.Server
+	sink Sink
 	path string
 	url  string
 	log  *slog.Logger
@@ -39,7 +39,7 @@ type intake struct {
 	dropped  atomic.Uint64
 }
 
-func newIntake(sink *serve.Server, logger *slog.Logger, onChange func(bool)) (*intake, error) {
+func newIntake(sink Sink, logger *slog.Logger, onChange func(bool)) (*intake, error) {
 	raw := make([]byte, 18)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, fmt.Errorf("capture: %w", err)

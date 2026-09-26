@@ -109,8 +109,24 @@ func parseCertificate(pemBytes []byte) (tls.Certificate, error) {
 	if time.Now().After(leaf.NotAfter.Add(-24 * time.Hour)) {
 		return tls.Certificate{}, errors.New("serve: certificate expired")
 	}
+	// The enclave's ffmpeg verifies this certificate as a pinned CA against
+	// the URL's host, 127.0.0.1, when it publishes the phone's picture: a
+	// certificate without that name is replaced (the enclave pins the
+	// fingerprint per session at its probe, so nothing stored breaks).
+	if !hasLoopbackSAN(leaf) {
+		return tls.Certificate{}, errors.New("serve: certificate lacks the loopback address")
+	}
 	cert.Leaf = leaf
 	return cert, nil
+}
+
+func hasLoopbackSAN(leaf *x509.Certificate) bool {
+	for _, ip := range leaf.IPAddresses {
+		if ip.Equal(net.IPv4(127, 0, 0, 1)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Fingerprint is the SHA-256 of a certificate's DER encoding, lowercase

@@ -19,6 +19,7 @@ func main() {
 	var (
 		ws       = flag.String("ws", "127.0.0.1:8090", "WebSocket listener Caddy proxies /ingest/tunnel to")
 		relay    = flag.String("relay", "127.0.0.1:7441", "relay listener the RTSP server dials as the camera")
+		own      = flag.String("own", "", "listener whose every connection reaches the connector's own endpoint (127.0.0.1:7443) whatever the target; empty = none")
 		control  = flag.String("control", "127.0.0.1:8091", "control API for the pose producer")
 		logLevel = flag.String("log-level", "info", "debug, info, warn or error")
 		version  = flag.Bool("version", false, "print the version and exit")
@@ -38,7 +39,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	srv := gateway.New(gateway.Config{WSAddr: *ws, RelayAddr: *relay, ControlAddr: *control, Logger: logger})
+	srv := gateway.New(gateway.Config{WSAddr: *ws, RelayAddr: *relay, OwnAddr: *own, ControlAddr: *control, Logger: logger})
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("gateway failed", "err", err)
 		os.Exit(1)

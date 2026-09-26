@@ -30,7 +30,7 @@ const (
 // runs out gets its packets timed at their forwarding, as every packet used
 // to be, until it does.
 type TimedWriter struct {
-	pub    *Publication
+	pub    PacketWriter
 	timeOf func(*description.Media, *rtp.Packet) (time.Time, bool)
 	hold   time.Duration
 
@@ -45,9 +45,10 @@ type mediaHold struct {
 	since   time.Time
 }
 
-// NewTimedWriter returns a TimedWriter into pub; timeOf may be nil, in
-// which case every packet is timed at its writing.
-func NewTimedWriter(pub *Publication, timeOf func(*description.Media, *rtp.Packet) (time.Time, bool)) *TimedWriter {
+// NewTimedWriter returns a TimedWriter into pub (a Publication, or a
+// Reception); timeOf may be nil, in which case every packet is timed at
+// its writing.
+func NewTimedWriter(pub PacketWriter, timeOf func(*description.Media, *rtp.Packet) (time.Time, bool)) *TimedWriter {
 	return &TimedWriter{pub: pub, timeOf: timeOf, hold: HoldForTime, medias: map[*description.Media]*mediaHold{}}
 }
 

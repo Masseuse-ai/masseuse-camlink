@@ -92,3 +92,33 @@ func TestTargetPolicyLocksToOneTarget(t *testing.T) {
 		t.Fatal("same host, other port accepted")
 	}
 }
+
+func TestReservedTargetsStandOutsideTheLock(t *testing.T) {
+	var p targetPolicy
+	// The connector's own endpoint is admitted before, beside and after the
+	// one network target, and never takes the lock itself.
+	if err := p.allowReserved("127.0.0.1:7443"); err != nil {
+		t.Fatal(err)
+	}
+	if p.locked != "" {
+		t.Fatal("a reserved target took the lock")
+	}
+	if _, err := p.allow(context.Background(), "192.168.1.108:7441", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.allowReserved("127.0.0.1:7443"); err != nil {
+		t.Fatalf("reserved beside the network target: %v", err)
+	}
+	if _, err := p.allow(context.Background(), "192.168.1.109:7441", nil); err == nil {
+		t.Fatal("a second network target was admitted")
+	}
+	// Only loopback literals with a port are reserved-shaped.
+	for _, bad := range []string{"192.168.1.108:7443", "localhost:7443", "127.0.0.1", "127.0.0.1:0", "127.0.0.1:70000", "[::1]"} {
+		if err := p.allowReserved(bad); err == nil {
+			t.Fatalf("%s admitted as reserved", bad)
+		}
+	}
+	if err := p.allowReserved("[::1]:7443"); err != nil {
+		t.Fatalf("IPv6 loopback: %v", err)
+	}
+}

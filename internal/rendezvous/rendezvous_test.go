@@ -78,9 +78,13 @@ type fakeService struct {
 	events []string // raw SSE blocks to send after the code event
 	drop   bool     // end the stream after the scripted events
 	block  chan struct{}
-	// noSource makes the service an older one without /api/camlink/source.
+	// noSource makes the service an older one without /api/camlink/source;
+	// v1Source one that knows the v1 report alone and refuses v2 as an
+	// unverifiable signature.
 	noSource bool
+	v1Source bool
 	sources  []Source
+	versions []int
 	// heartbeatMs, when set, is announced in the hello response; noHeartbeat
 	// makes the heartbeat route a 404 all the same.
 	heartbeatMs int64
@@ -192,6 +196,7 @@ func (f *fakeService) handler() http.Handler {
 			Key    string `json:"key"`
 			Ts     int64  `json:"ts"`
 			Source Source `json:"source"`
+			V      int    `json:"v"`
 			Sig    string `json:"sig"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -204,12 +209,25 @@ func (f *fakeService) handler() http.Handler {
 			return
 		}
 		sig, _ := base64.RawURLEncoding.DecodeString(body.Sig)
-		if !ed25519.Verify(pub, identity.SourceMessage(body.Ts, body.Key, body.Source.Kind, body.Source.Ready, body.Source.Label), sig) {
+		var msg []byte
+		if body.V == 2 && !f.v1Source {
+			faceKind, faceLabel, faceReady := "", "", false
+			if body.Source.Face != nil {
+				faceKind, faceLabel, faceReady = body.Source.Face.Kind, body.Source.Face.Label, body.Source.Face.Ready
+			}
+			msg = identity.SourceMessageV2(body.Ts, body.Key, body.Source.Kind, body.Source.Ready,
+				body.Source.Share != nil && body.Source.Share.Wanted, faceKind, faceReady, body.Source.Label, faceLabel)
+		} else {
+			// An older service reads the v1 fields alone.
+			msg = identity.SourceMessage(body.Ts, body.Key, body.Source.Kind, body.Source.Ready, body.Source.Label)
+		}
+		if !ed25519.Verify(pub, msg, sig) {
 			http.Error(w, "bad signature", 401)
 			return
 		}
 		f.mu.Lock()
 		f.sources = append(f.sources, body.Source)
+		f.versions = append(f.versions, body.V)
 		f.mu.Unlock()
 		w.WriteHeader(204)
 	})
@@ -622,5 +640,58 @@ func TestEstimEventAndPost(t *testing.T) {
 	f.noEstim = true
 	if err := c.PostEstim(context.Background(), "s1", msgs); err != ErrNoEstim {
 		t.Fatalf("old service: %v", err)
+	}
+}
+
+func TestSourceReportWithOffersIsV2AndFallsBackForAnOlderService(t *testing.T) {
+	f := &fakeService{t: t, tokens: map[string]bool{}}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+	c, _ := newClient(t, srv)
+	plain := Source{Kind: "capture", Label: "This computer's camera", Ready: true}
+	offers := Source{Kind: "capture", Label: "This computer's camera", Ready: true,
+		Share: &ShareOffer{Wanted: true}, Face: &FaceOffer{Kind: "capture", Label: strings.Repeat("O", 70), Ready: true}}
+
+	// The camera alone goes as v1, as it always has.
+	if err := c.ReportSource(context.Background(), plain); err != nil {
+		t.Fatal(err)
+	}
+	// With offers it goes as v2, verified as such, the face label cut too.
+	if err := c.ReportSource(context.Background(), offers); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	versions := append([]int(nil), f.versions...)
+	last := f.sources[len(f.sources)-1]
+	f.mu.Unlock()
+	if len(versions) != 2 || versions[0] != 0 || versions[1] != 2 {
+		t.Fatalf("versions %v", versions)
+	}
+	if last.Share == nil || !last.Share.Wanted || last.Face == nil || len(last.Face.Label) != 64 || !last.Face.Ready {
+		t.Fatalf("v2 body %+v", last)
+	}
+
+	// An older service knows v1 alone: it refuses the v2 signature, the
+	// client falls back to the camera alone, and stays there for the run.
+	f2 := &fakeService{t: t, tokens: map[string]bool{}, v1Source: true}
+	srv2 := httptest.NewServer(f2.handler())
+	defer srv2.Close()
+	c2, _ := newClient(t, srv2)
+	for i := 0; i < 2; i++ {
+		if err := c2.ReportSource(context.Background(), offers); err != nil {
+			t.Fatalf("report %d to an older service: %v", i, err)
+		}
+	}
+	f2.mu.Lock()
+	versions2 := append([]int(nil), f2.versions...)
+	got := append([]Source(nil), f2.sources...)
+	f2.mu.Unlock()
+	if len(versions2) != 2 || versions2[0] != 0 || versions2[1] != 0 {
+		t.Fatalf("older service saw versions %v (a v2 refused is not recorded; v1 twice expected)", versions2)
+	}
+	for _, s := range got {
+		if s.Share != nil || s.Face != nil || s.Kind != "capture" || !s.Ready {
+			t.Fatalf("older service got %+v", s)
+		}
 	}
 }

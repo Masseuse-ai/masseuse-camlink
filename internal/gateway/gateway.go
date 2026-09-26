@@ -37,14 +37,26 @@ import (
 )
 
 // Subprotocol is the WebSocket subprotocol both ends require.
+// OwnTarget is the connector's own endpoint: the OPEN payload every
+// connection to the own listener (Config.OwnAddr) becomes. The connector
+// answers it in-process (docs/PROTOCOL.md, section 6).
+const OwnTarget = "127.0.0.1:7443"
+
 const Subprotocol = "camlink.v1"
 
 // Config sizes a Server.
 type Config struct {
 	// WSAddr is where Caddy proxies /ingest/tunnel to (127.0.0.1:8090).
 	WSAddr string
-	// RelayAddr is what the RTSP server dials as the camera (127.0.0.1:7441).
+	// RelayAddr is what the RTSP server dials as the camera (127.0.0.1:7441):
+	// each connection becomes a stream to the current target (POST /target).
 	RelayAddr string
+	// OwnAddr, when set, is a second listener (127.0.0.1:7442) whose every
+	// connection becomes a stream to the connector's own endpoint
+	// (OwnTarget), whatever the target: the connector's camera and face
+	// streams, and the phone's picture published to it, are reached here
+	// while the relay listener may be pointed at a camera on the network.
+	OwnAddr string
 	// ControlAddr is the producer-facing control API (127.0.0.1:8091).
 	ControlAddr string
 	// PingInterval keeps the WebSocket alive through Caddy; 0 means 30 s.
@@ -85,6 +97,9 @@ type Server struct {
 	attached *attached
 	target   string
 	now      func() time.Time
+	// ownStreams counts the connections to the own listener being relayed
+	// now (Status.OwnStreams).
+	ownStreams int
 }
 
 // New builds a Server; call Run or serve the handlers yourself.
@@ -107,21 +122,33 @@ func New(cfg Config) *Server {
 	return &Server{cfg: cfg, log: cfg.Logger, now: time.Now}
 }
 
-// Run serves the three listeners until ctx ends.
+// Run serves the listeners until ctx ends: the WebSocket, the relay, the
+// control API, and the own listener when configured.
 func (s *Server) Run(ctx context.Context) error {
 	relayLn, err := net.Listen("tcp", s.cfg.RelayAddr)
 	if err != nil {
 		return fmt.Errorf("relay listener: %w", err)
 	}
 	defer relayLn.Close()
+	var ownLn net.Listener
+	if s.cfg.OwnAddr != "" {
+		ownLn, err = net.Listen("tcp", s.cfg.OwnAddr)
+		if err != nil {
+			return fmt.Errorf("own listener: %w", err)
+		}
+		defer ownLn.Close()
+	}
 	wsSrv := &http.Server{Addr: s.cfg.WSAddr, Handler: s.WSHandler(), ReadHeaderTimeout: 10 * time.Second}
 	ctlSrv := &http.Server{Addr: s.cfg.ControlAddr, Handler: s.ControlHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second}
 
-	errc := make(chan error, 3)
+	errc := make(chan error, 4)
 	go func() { errc <- s.ServeRelay(ctx, relayLn) }()
+	if ownLn != nil {
+		go func() { errc <- s.ServeOwn(ctx, ownLn) }()
+	}
 	go func() { errc <- wsSrv.ListenAndServe() }()
 	go func() { errc <- ctlSrv.ListenAndServe() }()
-	s.log.Info("gateway listening", "ws", s.cfg.WSAddr, "relay", s.cfg.RelayAddr, "control", s.cfg.ControlAddr)
+	s.log.Info("gateway listening", "ws", s.cfg.WSAddr, "relay", s.cfg.RelayAddr, "own", s.cfg.OwnAddr, "control", s.cfg.ControlAddr)
 
 	select {
 	case <-ctx.Done():
@@ -297,6 +324,20 @@ func (s *Server) pingLoop(ctx context.Context, c *websocket.Conn, sess *mux.Sess
 // ServeRelay accepts connections from the RTSP server and relays each one to
 // the attached connector as a stream to the current target.
 func (s *Server) ServeRelay(ctx context.Context, ln net.Listener) error {
+	return s.serve(ctx, ln, func() string {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.target
+	}, false)
+}
+
+// ServeOwn accepts connections for the connector's own endpoint and relays
+// each one as a stream to OwnTarget, whatever the current target.
+func (s *Server) ServeOwn(ctx context.Context, ln net.Listener) error {
+	return s.serve(ctx, ln, func() string { return OwnTarget }, true)
+}
+
+func (s *Server) serve(ctx context.Context, ln net.Listener, target func() string, own bool) error {
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
@@ -309,16 +350,16 @@ func (s *Server) ServeRelay(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
-		go s.relay(ctx, c)
+		go s.relay(ctx, c, target(), own)
 	}
 }
 
-func (s *Server) relay(ctx context.Context, c net.Conn) {
+func (s *Server) relay(ctx context.Context, c net.Conn, target string, own bool) {
 	s.mu.Lock()
-	att, target := s.attached, s.target
+	att := s.attached
 	s.mu.Unlock()
 	if att == nil || target == "" {
-		s.log.Debug("relay: refused local connection", "connector", att != nil, "target", target != "")
+		s.log.Debug("relay: refused local connection", "connector", att != nil, "target", target != "", "own", own)
 		_ = c.Close()
 		return
 	}
@@ -326,13 +367,23 @@ func (s *Server) relay(ctx context.Context, c net.Conn) {
 	st, err := att.sess.Open(octx, target)
 	cancel()
 	if err != nil {
-		s.log.Warn("relay: connector did not open the stream", "connector", prefix(att.keyStr), "err", err)
+		s.log.Warn("relay: connector did not open the stream", "connector", prefix(att.keyStr), "own", own, "err", err)
 		_ = c.Close()
 		return
 	}
-	s.log.Debug("relay: stream open", "stream", st.ID())
+	if own {
+		s.mu.Lock()
+		s.ownStreams++
+		s.mu.Unlock()
+	}
+	s.log.Debug("relay: stream open", "stream", st.ID(), "own", own)
 	mux.Relay(st, c, s.cfg.RelayBuffer)
-	s.log.Debug("relay: stream closed", "stream", st.ID())
+	if own {
+		s.mu.Lock()
+		s.ownStreams--
+		s.mu.Unlock()
+	}
+	s.log.Debug("relay: stream closed", "stream", st.ID(), "own", own)
 }
 
 // --- control API -------------------------------------------------------------
@@ -355,6 +406,10 @@ type Status struct {
 	SinceMs            *int64  `json:"sinceMs"`
 	ConnectorKeyPrefix *string `json:"connectorKeyPrefix"`
 	Target             bool    `json:"target"`
+	// OwnStreams is how many connections to the own listener (the
+	// connector's camera and face streams, the phone's picture) are being
+	// relayed now.
+	OwnStreams int `json:"ownStreams"`
 }
 
 // ControlHandler is the loopback control API for the producer.
@@ -475,7 +530,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := Status{Expecting: s.expect != nil, Target: s.target != ""}
+	st := Status{Expecting: s.expect != nil, Target: s.target != "", OwnStreams: s.ownStreams}
 	if s.attached != nil {
 		st.Connected = true
 		ms := s.attached.since.UnixMilli()

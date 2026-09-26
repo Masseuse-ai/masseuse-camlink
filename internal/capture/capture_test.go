@@ -859,7 +859,7 @@ func TestSourceRevertsAFallbackThatDoesNotRun(t *testing.T) {
 	}
 	// Once the hardware encoder works (a second attempt), it publishes.
 	os.Unsetenv("CAPTURE_FAKE_HW_FAILS")
-	srv := src.sink
+	srv := src.sink.(*serve.Server)
 	c, n := play(t, srv)
 	defer c.Close()
 	waitFor(t, "packets", func() bool { return n.n.Load() >= 5 })

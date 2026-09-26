@@ -18,6 +18,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/identity"
@@ -55,7 +56,37 @@ type Source struct {
 	// Ready says whether the connector can serve it now (ffmpeg found, the
 	// devices present, the camera reachable at startup).
 	Ready bool `json:"ready"`
+	// Share, when set, says whether this connector asks for the phone's
+	// picture on its computer (`-share-phone`, internal/share): the phone
+	// then has the enclave send it. Reported in the v2 message.
+	Share *ShareOffer `json:"share,omitempty"`
+	// Face, when set, is the front-facing camera this connector offers
+	// beside its camera (`-face-camera`, served at serve.FaceLink): the
+	// phone then has the enclave show it as the person's face. Reported in
+	// the v2 message.
+	Face *FaceOffer `json:"face,omitempty"`
 }
+
+// ShareOffer is whether the connector asks for the phone's picture.
+type ShareOffer struct {
+	Wanted bool `json:"wanted"`
+}
+
+// FaceOffer is the front-facing camera a connector offers.
+type FaceOffer struct {
+	// Kind is "capture": a camera of the computer's, a virtual one included.
+	Kind string `json:"kind"`
+	// Label names it for the person, at most 64 characters.
+	Label string `json:"label"`
+	// Ready says whether the connector can serve it now.
+	Ready bool `json:"ready"`
+}
+
+// v2 says whether the source carries what only the v2 message signs.
+func (s Source) v2() bool { return s.Share != nil || s.Face != nil }
+
+// v1 is the source as the v1 message describes it.
+func (s Source) v1() Source { return Source{Kind: s.Kind, Label: s.Label, Ready: s.Ready} }
 
 // SourceReporter is implemented by a Handler that offers a source; the
 // client reports it after every hello (the service forgets a connector's
@@ -97,6 +128,11 @@ type Client struct {
 	// IdleTimeout ends a stream that sends nothing (not even keepalives) for
 	// this long; 0 means 60 s.
 	IdleTimeout time.Duration
+
+	// sourceV1Only is set once the service has refused a v2 source report:
+	// the camera alone is reported from then on (ReportSource).
+	sourceMu     sync.Mutex
+	sourceV1Only bool
 }
 
 type helloResponse struct {
@@ -248,23 +284,62 @@ func (c *Client) heartbeats(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// ReportSource tells the service which camera the connector offers. It is
-// signed like hello, so only the connector can describe itself.
+// ReportSource tells the service which camera the connector offers, and
+// what else it offers (Source.Share, Source.Face). It is signed like hello,
+// so only the connector can describe itself. A source with more than the
+// camera goes as the v2 message; a service that does not know it (400 or
+// 401 on a v2 report) is told the camera alone as v1, this time and for
+// the rest of the run, and a line says so once.
 func (c *Client) ReportSource(ctx context.Context, src Source) error {
 	if len(src.Label) > 64 {
 		src.Label = src.Label[:64]
 	}
+	if src.Face != nil && len(src.Face.Label) > 64 {
+		face := *src.Face
+		face.Label = face.Label[:64]
+		src.Face = &face
+	}
+	c.sourceMu.Lock()
+	v1Only := c.sourceV1Only
+	c.sourceMu.Unlock()
+	if src.v2() && !v1Only {
+		status, err := c.postSource(ctx, src, 2)
+		if err == nil {
+			return nil
+		}
+		if status != http.StatusBadRequest && status != http.StatusUnauthorized {
+			return err
+		}
+		c.sourceMu.Lock()
+		c.sourceV1Only = true
+		c.sourceMu.Unlock()
+		c.log().Warn("rendezvous: the service takes the older source report; the front-facing camera and the phone's picture are not announced to it", "status", status)
+	}
+	_, err := c.postSource(ctx, src.v1(), 1)
+	return err
+}
+
+// postSource sends one source report; the status is the service's answer
+// when the error is its refusal, 0 otherwise.
+func (c *Client) postSource(ctx context.Context, src Source, version int) (int, error) {
 	ts := time.Now().Unix()
 	key := c.Identity.PublicKeyString()
-	body, _ := json.Marshal(map[string]any{
-		"key":    key,
-		"ts":     ts,
-		"source": src,
-		"sig":    b64(c.Identity.Sign(identity.SourceMessage(ts, key, src.Kind, src.Ready, src.Label))),
-	})
+	fields := map[string]any{"key": key, "ts": ts, "source": src}
+	if version == 2 {
+		faceKind, faceLabel, faceReady := "", "", false
+		if src.Face != nil {
+			faceKind, faceLabel, faceReady = src.Face.Kind, src.Face.Label, src.Face.Ready
+		}
+		fields["v"] = 2
+		fields["sig"] = b64(c.Identity.Sign(identity.SourceMessageV2(ts, key, src.Kind, src.Ready,
+			src.Share != nil && src.Share.Wanted, faceKind, faceReady, src.Label, faceLabel)))
+	} else {
+		fields["sig"] = b64(c.Identity.Sign(identity.SourceMessage(ts, key, src.Kind, src.Ready, src.Label)))
+	}
+	body, _ := json.Marshal(fields)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Service, "/")+"/api/camlink/source", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "masseuse-camlink/"+c.Version)
@@ -272,17 +347,17 @@ func (c *Client) ReportSource(ctx context.Context, src Source) error {
 	defer cancel()
 	resp, err := c.http().Do(req.WithContext(hctx))
 	if err != nil {
-		return fmt.Errorf("source: %w", err)
+		return 0, fmt.Errorf("source: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
-		return ErrNoSourceReports
+		return resp.StatusCode, ErrNoSourceReports
 	case resp.StatusCode/100 != 2:
-		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
+		return resp.StatusCode, &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
 	}
-	return nil
+	return 0, nil
 }
 
 // PostEstim sends device link messages for a session (docs/PROTOCOL.md,

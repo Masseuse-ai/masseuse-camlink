@@ -25,7 +25,9 @@ import (
 // start without flags uses it again.
 const sourceFile = "source.json"
 
-// sourceConfig is the saved choice.
+// sourceConfig is the saved choice: the camera (the session's body view),
+// and, when the person set them up, the front-facing camera and whether the
+// phone's picture is wanted on this computer.
 type sourceConfig struct {
 	Kind string `json:"kind"` // "capture" or "camera"
 	// capture
@@ -39,6 +41,21 @@ type sourceConfig struct {
 	// camera
 	URL         string `json:"url,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// The front-facing camera (-face-camera): a second capture of the
+	// computer's, a virtual camera such as OBS's or any other, served as
+	// the person's face (internal/serve, FacePath). Empty: none, and the
+	// phone's own camera stays the face view.
+	FaceCamera    string `json:"faceCamera,omitempty"`
+	FaceVideoSize string `json:"faceVideoSize,omitempty"`
+	FaceFPS       int    `json:"faceFps,omitempty"`
+	FaceBitrate   string `json:"faceBitrate,omitempty"`
+	// The phone's picture on this computer (-share-phone, internal/share):
+	// whether it is wanted, the loopback port it is served on, and the
+	// secret in its path, kept so a program set up to read it once keeps
+	// working.
+	SharePhone  bool   `json:"sharePhone,omitempty"`
+	SharePort   int    `json:"sharePort,omitempty"`
+	ShareSecret string `json:"shareSecret,omitempty"`
 }
 
 // sourceFlags are the command-line choices.
@@ -46,38 +63,109 @@ type sourceFlags struct {
 	camera, mic, videoSize, bitrate, encoder, ffmpeg string
 	fps                                              int
 	cameraURL, cameraFingerprint                     string
+	// The front-facing camera: "none" clears a remembered one.
+	faceCamera, faceVideoSize, faceBitrate string
+	faceFPS                                int
+	// sharePhone is "on", "off" or "" (as remembered); sharePort 0 is as
+	// remembered, or the default.
+	sharePhone string
+	sharePort  int
 }
 
-func (f sourceFlags) any() bool {
+// bodyAny says whether any flag for the camera (the body view) is given.
+func (f sourceFlags) bodyAny() bool {
 	return f.camera != "" || f.mic != "" || f.videoSize != "" || f.bitrate != "" || f.encoder != "" ||
 		f.ffmpeg != "" || f.fps != 0 || f.cameraURL != "" || f.cameraFingerprint != ""
 }
 
-// resolveSourceConfig turns flags into the configuration to use: flags when
-// any is given (and saved), else the saved one, else the computer's first
-// camera and microphone.
+// faceAny says whether any flag for the front-facing camera is given.
+func (f sourceFlags) faceAny() bool {
+	return f.faceCamera != "" || f.faceVideoSize != "" || f.faceBitrate != "" || f.faceFPS != 0
+}
+
+// shareAny says whether the phone's picture was spoken of.
+func (f sourceFlags) shareAny() bool { return f.sharePhone != "" || f.sharePort != 0 }
+
+func (f sourceFlags) any() bool { return f.bodyAny() || f.faceAny() || f.shareAny() }
+
+// resolveSourceConfig turns flags into the configuration to use. Each part
+// is the flags' when any of its flags is given (and is then saved), else
+// the saved one: the camera (else the computer's first camera and
+// microphone), the front-facing camera (else none), the phone's picture
+// (else not wanted). So `-face-camera "OBS Virtual Camera"` adds a
+// front-facing camera to the remembered camera, and `-face-camera none`
+// takes it away again.
 func resolveSourceConfig(stateDir string, f sourceFlags) (sourceConfig, error) {
-	if f.any() {
+	var saved sourceConfig
+	if b, err := os.ReadFile(filepath.Join(stateDir, sourceFile)); err == nil {
+		var cfg sourceConfig
+		if json.Unmarshal(b, &cfg) == nil && (cfg.Kind == "capture" || cfg.Kind == "camera") {
+			saved = cfg
+		}
+	}
+	if saved.Kind == "" {
+		saved.Kind = "capture"
+	}
+	cfg := saved
+	if f.bodyAny() {
 		if f.cameraURL != "" {
 			if f.camera != "" || f.mic != "" || f.videoSize != "" || f.bitrate != "" || f.encoder != "" || f.ffmpeg != "" || f.fps != 0 {
 				return sourceConfig{}, errors.New("-camera-url names a camera on your network; the -camera, -mic and encoding flags are for the computer's own camera and cannot be combined with it")
 			}
-			return sourceConfig{Kind: "camera", URL: f.cameraURL, Fingerprint: f.cameraFingerprint}, nil
+			cfg = sourceConfig{Kind: "camera", URL: f.cameraURL, Fingerprint: f.cameraFingerprint}
+		} else {
+			if f.cameraFingerprint != "" {
+				return sourceConfig{}, errors.New("-camera-fingerprint goes with -camera-url")
+			}
+			cfg = sourceConfig{Kind: "capture", Camera: f.camera, Mic: f.mic, VideoSize: f.videoSize, FPS: f.fps,
+				Bitrate: f.bitrate, Encoder: f.encoder, FFmpeg: f.ffmpeg}
 		}
-		if f.cameraFingerprint != "" {
-			return sourceConfig{}, errors.New("-camera-fingerprint goes with -camera-url")
-		}
-		return sourceConfig{Kind: "capture", Camera: f.camera, Mic: f.mic, VideoSize: f.videoSize, FPS: f.fps,
-			Bitrate: f.bitrate, Encoder: f.encoder, FFmpeg: f.ffmpeg}, nil
+		// The other parts are as remembered.
+		cfg.FaceCamera, cfg.FaceVideoSize, cfg.FaceFPS, cfg.FaceBitrate = saved.FaceCamera, saved.FaceVideoSize, saved.FaceFPS, saved.FaceBitrate
+		cfg.SharePhone, cfg.SharePort, cfg.ShareSecret = saved.SharePhone, saved.SharePort, saved.ShareSecret
 	}
-	b, err := os.ReadFile(filepath.Join(stateDir, sourceFile))
-	if err == nil {
-		var cfg sourceConfig
-		if json.Unmarshal(b, &cfg) == nil && (cfg.Kind == "capture" || cfg.Kind == "camera") {
-			return cfg, nil
+	if f.faceAny() {
+		if strings.EqualFold(strings.TrimSpace(f.faceCamera), "none") {
+			if f.faceVideoSize != "" || f.faceBitrate != "" || f.faceFPS != 0 {
+				return sourceConfig{}, errors.New("-face-camera none takes the front-facing camera away; its encoding flags go with a camera")
+			}
+			cfg.FaceCamera, cfg.FaceVideoSize, cfg.FaceFPS, cfg.FaceBitrate = "", "", 0, ""
+		} else {
+			if f.faceCamera == "" && saved.FaceCamera == "" {
+				return sourceConfig{}, errors.New("the -face-video-size, -face-fps and -face-bitrate flags go with -face-camera")
+			}
+			if f.faceCamera != "" {
+				cfg.FaceCamera = f.faceCamera
+			}
+			if f.faceVideoSize != "" {
+				cfg.FaceVideoSize = f.faceVideoSize
+			}
+			if f.faceFPS != 0 {
+				cfg.FaceFPS = f.faceFPS
+			}
+			if f.faceBitrate != "" {
+				cfg.FaceBitrate = f.faceBitrate
+			}
 		}
 	}
-	return sourceConfig{Kind: "capture"}, nil
+	if f.shareAny() {
+		switch strings.ToLower(strings.TrimSpace(f.sharePhone)) {
+		case "on", "yes", "true":
+			cfg.SharePhone = true
+		case "off", "no", "false":
+			cfg.SharePhone = false
+		case "":
+		default:
+			return sourceConfig{}, errors.New("-share-phone takes on or off")
+		}
+		if f.sharePort != 0 {
+			if f.sharePort < 1 || f.sharePort > 65535 {
+				return sourceConfig{}, errors.New("-share-port must be a port number")
+			}
+			cfg.SharePort = f.sharePort
+		}
+	}
+	return cfg, nil
 }
 
 func saveSourceConfig(stateDir string, cfg sourceConfig) error {
@@ -196,6 +284,46 @@ func (o *offer) describe() {
 	fmt.Printf("Camera: %s (%s). It is on only while a session reads it.\n", o.label, o.shape)
 }
 
+// buildFaceOffer prepares the front-facing camera (cfg.FaceCamera): a
+// second capture of the computer's, video only (the phone's microphone
+// stays the session's), published into the face stream; nil when none is
+// configured. Like buildOffer, a missing ffmpeg or camera is an offer that
+// is not ready, so the connector still runs and the phone's own camera
+// stays the face view.
+func buildFaceOffer(ctx context.Context, cfg sourceConfig, sink capture.Sink, stats func() serve.Stats, logger *slog.Logger, saved bool) (*offer, error) {
+	if cfg.FaceCamera == "" {
+		return nil, nil
+	}
+	opts := capture.Options{Camera: cfg.FaceCamera, Mic: "none", VideoSize: cfg.FaceVideoSize, FPS: cfg.FaceFPS,
+		Bitrate: cfg.FaceBitrate, Encoder: cfg.Encoder, FFmpeg: cfg.FFmpeg, Fallback: false}
+	src, err := capture.New(ctx, sink, opts, logger)
+	if err != nil {
+		if capture.IsNoFFmpeg(err) || (errors.Is(err, capture.ErrNoDevice) && saved) {
+			return &offer{kind: "capture", label: cfg.FaceCamera, note: err.Error(), save: cfg}, nil
+		}
+		return nil, fmt.Errorf("front-facing camera: %w", err)
+	}
+	o := &offer{kind: "capture", label: src.Camera().Name, ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing, trouble: src.Trouble}
+	so := src.Options()
+	o.shape = fmt.Sprintf("%s %d fps, %s", so.VideoSize, so.FPS, src.Encoder())
+	o.adapt = &capture.Adapter{
+		Ceiling: so.Bitrate, FPS: so.FPS, Stats: stats, Target: src, Logger: logger,
+		Notify: func(line string) { fmt.Println("Front-facing camera: " + line) },
+	}
+	o.save = cfg
+	o.save.FaceCamera = src.Camera().Name
+	return o, nil
+}
+
+// describeFace prints the front-facing camera at startup.
+func (o *offer) describeFace() {
+	if !o.ready {
+		fmt.Printf("Front-facing camera: %s is not available: %s. Your phone's own camera stays your face.\n", o.label, o.note)
+		return
+	}
+	fmt.Printf("Front-facing camera: %s (%s). It is on only while a session shows it as your face; until then your phone's own camera is.\n", o.label, o.shape)
+}
+
 // listDevices is the `devices` subcommand.
 func listDevices(ctx context.Context, ffmpegPath string) int {
 	ffmpeg, err := capture.FindFFmpeg(ffmpegPath)
@@ -249,16 +377,22 @@ const cameraGrace = 15 * time.Second
 type camControl struct {
 	sink  *serve.Server
 	offer *offer
-	log   *slog.Logger
+	// face is the front-facing camera, when one is configured: turned on
+	// at the enclave's first DESCRIBE of its stream (startFace, through
+	// serve.Stream.SetOnDemand) and off with the camera.
+	face *offer
+	log  *slog.Logger
 	// out is the console; nil means standard output.
 	out io.Writer
 	// grace is how long off(true) leaves the camera on; 0 means cameraGrace.
 	grace time.Duration
 
-	mu      sync.Mutex
-	on      bool
-	cancel  context.CancelFunc
-	backlog func() time.Duration // the active tunnel's, nil between tunnels
+	mu         sync.Mutex
+	on         bool
+	cancel     context.CancelFunc
+	faceOn     bool
+	faceCancel context.CancelFunc
+	backlog    func() time.Duration // the active tunnel's, nil between tunnels
 	// pending turns the camera off when the grace runs out; nil while none
 	// is running. pendingGen tells a timer that fired whether it is still
 	// the one that counts.
@@ -326,12 +460,34 @@ func (c *camControl) dialLocal() (net.Conn, error) {
 	return c.sink.Dial()
 }
 
+// startFace turns the front-facing camera on: the enclave asked for its
+// stream (a DESCRIBE with no source publishing yet). It goes off with the
+// camera (stopLocked). Nothing happens without one configured and ready.
+func (c *camControl) startFace() {
+	if c.face == nil || !c.face.ready {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.faceOn {
+		return
+	}
+	c.faceOn = true
+	ctx, cancel := context.WithCancel(context.Background())
+	c.faceCancel = cancel
+	c.face.start()
+	c.printf("Front-facing camera on: %s.\n", c.face.label)
+	if c.face.adapt != nil {
+		go c.face.adapt.Run(ctx)
+	}
+}
+
 // off turns the camera off if it is on: at once, or, with later, once the
 // grace has passed with no stream opened (dialLocal) in the meantime. A
 // grace already running is left to run.
 func (c *camControl) off(later bool) {
 	c.mu.Lock()
-	if !c.on {
+	if !c.on && !c.faceOn {
 		c.mu.Unlock()
 		return
 	}
@@ -369,16 +525,25 @@ func (c *camControl) graceOver(gen uint64) {
 	c.stopLocked()
 }
 
-// stopLocked turns the camera off; the caller holds c.mu, which is released
-// before the source is stopped (ffmpeg takes a moment to exit).
+// stopLocked turns the camera off, and the front-facing camera with it;
+// the caller holds c.mu, which is released before the sources are stopped
+// (ffmpeg takes a moment to exit).
 func (c *camControl) stopLocked() {
-	c.on = false
-	cancel := c.cancel
-	c.cancel = nil
+	on, cancel := c.on, c.cancel
+	c.on, c.cancel = false, nil
+	faceOn, faceCancel := c.faceOn, c.faceCancel
+	c.faceOn, c.faceCancel = false, nil
 	c.mu.Unlock()
-	cancel()
-	c.offer.stop()
-	c.printf("Camera off.\n")
+	if on {
+		cancel()
+		c.offer.stop()
+		c.printf("Camera off.\n")
+	}
+	if faceOn {
+		faceCancel()
+		c.face.stop()
+		c.printf("Front-facing camera off.\n")
+	}
 }
 
 // report prints the send rate every 10 s while the camera is on, and, in

@@ -24,11 +24,18 @@ import (
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/serve"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
 )
+
+// A Sink is the stream a capture publishes into: the connector's camera
+// stream (*serve.Server, the body view) or its face stream (*serve.Stream).
+type Sink interface {
+	Publish(desc *description.Session) (*serve.Publication, error)
+}
 
 // Source is the configured capture, idle until Start.
 type Source struct {
-	sink   *serve.Server
+	sink   Sink
 	opts   Options
 	log    *slog.Logger
 	goos   string
@@ -73,7 +80,7 @@ type Source struct {
 // New resolves ffmpeg and the devices now, so a wrong selector or a
 // missing ffmpeg is reported at startup rather than at the first session,
 // and returns the source idle.
-func New(ctx context.Context, sink *serve.Server, opts Options, logger *slog.Logger) (*Source, error) {
+func New(ctx context.Context, sink Sink, opts Options, logger *slog.Logger) (*Source, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -98,7 +105,7 @@ func New(ctx context.Context, sink *serve.Server, opts Options, logger *slog.Log
 	return s, nil
 }
 
-func newSource(sink *serve.Server, opts Options, logger *slog.Logger, goos, ffmpeg string, cam Device, mic *Device) *Source {
+func newSource(sink Sink, opts Options, logger *slog.Logger, goos, ffmpeg string, cam Device, mic *Device) *Source {
 	opts = opts.WithDefaults()
 	enc := opts.Encoder
 	if enc == EncoderAuto {
