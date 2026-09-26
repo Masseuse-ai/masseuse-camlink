@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -111,6 +112,42 @@ func (s *estimService) waitFor(t *testing.T, typ string) (string, map[string]any
 	}
 	t.Fatalf("service never received %q", typ)
 	return "", nil
+}
+
+// The service's answers as the session reads them: a 400 (a message it
+// cannot read), 413 or 422 is a refusal of the messages themselves
+// (estim.ErrRefused, dropped by the session); 401, 408, 429 and 5xx are
+// about the moment and are retried as they were.
+func TestEstimLinkSendMapsRefusals(t *testing.T) {
+	svc := &estimService{}
+	srv := httptest.NewServer(svc.handler())
+	defer srv.Close()
+	id, err := identity.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	link := newEstimLink(t.TempDir(), log, func(string, ...any) {})
+	link.client = &rendezvous.Client{Service: srv.URL, Identity: id, Version: "test", HTTP: srv.Client(), Logger: log}
+	msgs := []json.RawMessage{json.RawMessage(`{"type":"device"}`)}
+	for _, tc := range []struct {
+		status  int
+		refused bool
+	}{{400, true}, {413, true}, {422, true}, {401, false}, {408, false}, {429, false}, {500, false}, {503, false}} {
+		svc.mu.Lock()
+		svc.status = tc.status
+		svc.mu.Unlock()
+		err := link.Send(context.Background(), "", msgs)
+		if err == nil {
+			t.Fatalf("%d: no error", tc.status)
+		}
+		if got := errors.Is(err, estim.ErrRefused); got != tc.refused {
+			t.Errorf("%d: refused=%v, want %v (%v)", tc.status, got, tc.refused, err)
+		}
+		if errors.Is(err, estim.ErrUnsupported) || errors.Is(err, estim.ErrSessionGone) {
+			t.Errorf("%d: %v", tc.status, err)
+		}
+	}
 }
 
 // TestEstimLinkBluetoothUnit runs the link against a fake Mastago unit

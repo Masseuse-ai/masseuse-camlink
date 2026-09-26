@@ -587,7 +587,16 @@ identifier, a serial port path): the string a `device_select` names.
 `units` is the list of units in reach, the selected one included, each
 `{id, kind, label, held}`; a connector that has not listed yet sends none.
 A service that knows none of the three drops them and reads the message as
-before.
+before. A `device` report describes a unit the connector has opened at
+least once (connected now or not); until one has been (every unit in reach
+held by another program, a first scan that missed it), a listing is not
+reported on its own and rides with the report of the first unit that
+connects. A report with no `kind` is what the service refuses as
+malformed, and it refuses the whole post, every time: the connector never
+sends one, and a batch the service refuses for what it is (400, 413, 422)
+is dropped with a warning rather than retried, so what is queued behind it
+gets through; the state it carried is reported again at the next change
+or hello. 401 (signature, clock), 408, 429 and 5xx are retried as they were.
 
 `capabilities` is `{levelMax, channels, modes, tempo}` and, when they
 apply, `powerModes` (the ranges a session may arm the device in; absent

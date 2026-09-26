@@ -669,6 +669,81 @@ func TestSessionDeviceReportNamesTheUnitAndTheList(t *testing.T) {
 	}
 }
 
+// The units are listed before any unit has been opened (the one in reach
+// is held by another program, or the first scan missed it): there is no
+// descriptor to report, and a `device` report without a kind is what the
+// service refuses as malformed, for good, with everything queued behind
+// it. Nothing is sent; the list rides with the report of the first unit
+// that connects.
+func TestSessionSendsNoDeviceReportBeforeAnyUnitIsKnown(t *testing.T) {
+	ctx := context.Background()
+	held := errors.New("mastago: the unit is open in another program")
+	rt := &estim.Runtime{
+		Connect: func(context.Context) (estim.Driver, error) { return nil, held },
+		List: func(context.Context) ([]estim.Unit, error) {
+			return []estim.Unit{{ID: "id-a", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true}}, nil
+		},
+	}
+	t.Cleanup(func() { _ = rt.Close(ctx) })
+	up := &fakeUplink{}
+	s := &estim.Session{Runtime: rt, Uplink: up}
+	rt.OnDevice, rt.OnUnits = s.DeviceChanged, s.UnitsChanged
+	if err := rt.Open(ctx); !errors.Is(err, held) {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := rt.ListUnits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := up.drain(ctx, s); len(got) != 0 {
+		t.Fatalf("a report with no device to describe was sent: %+v", got)
+	}
+	// The unit connects: one report, with the list.
+	u := fakeunit.New("id-a", "MASTOGO G-12AB")
+	rt.Connect = unitRuntime(t, u).Connect
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	dev := find(up.drain(ctx, s), "device")
+	units, _ := dev["units"].([]any)
+	if dev == nil || dev["kind"] != "mastago" || dev["id"] != "id-a" || len(units) != 1 {
+		t.Fatalf("device = %v", dev)
+	}
+}
+
+// A batch the service refuses (400: a message it cannot read) is dropped
+// with a warning rather than retried: the same bytes would be refused
+// again, and everything queued after them would wait forever. The other
+// answers keep their meaning: a session gone detaches, a service without
+// the link ends sending, anything else is retried.
+func TestSessionDropsABatchTheServiceRefuses(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, up := newSession(t)
+	up.drain(ctx, s)
+	up.mu.Lock()
+	up.fail = fmt.Errorf("%w: service answered 400: {\"error\":\"device report malformed\"}", estim.ErrRefused)
+	up.mu.Unlock()
+	s.DeviceChanged(ctx, s.Runtime.Descriptor())
+	s.Flush(ctx)
+	up.mu.Lock()
+	up.fail = nil
+	up.mu.Unlock()
+	if got := up.drain(ctx, s); len(got) != 0 {
+		t.Fatalf("the refused batch was retried: %+v", got)
+	}
+	// A failure of any other kind keeps the messages for the next flush.
+	up.mu.Lock()
+	up.fail = errors.New("dial tcp: connection refused")
+	up.mu.Unlock()
+	s.DeviceChanged(ctx, s.Runtime.Descriptor())
+	s.Flush(ctx)
+	up.mu.Lock()
+	up.fail = nil
+	up.mu.Unlock()
+	if got := types(up.drain(ctx, s)); len(got) == 0 || got[0] != "device" {
+		t.Fatalf("the batch was not retried after a network failure: %v", got)
+	}
+}
+
 func TestSessionDeviceSelect(t *testing.T) {
 	ctx := context.Background()
 	rt, a, b, _, _, _ := twoUnitRuntime(t)

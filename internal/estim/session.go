@@ -39,6 +39,12 @@ type Uplink interface {
 // device link at all; the Session then stops sending.
 var ErrUnsupported = errors.New("estim: the service takes no device link")
 
+// ErrRefused is what an Uplink returns when the service refused the
+// messages for what they are (a 4xx that is not about the moment: not a
+// signature or clock check, not a rate limit): the same bytes would be
+// refused again, so Flush drops them rather than hold up what follows.
+var ErrRefused = errors.New("estim: the service refused the messages")
+
 // ErrSessionGone is what an Uplink returns when the service no longer has
 // the session bound to this connector; the Session releases and detaches.
 var ErrSessionGone = errors.New("estim: the session is no longer bound to this connector")
@@ -193,6 +199,13 @@ func (s *Session) Flush(ctx context.Context) {
 				s.detach(ctx, "session_unbound", false)
 			}
 			continue
+		case errors.Is(err, ErrRefused):
+			// Sending them again would change nothing, and everything
+			// behind them would wait forever; the state they carried is
+			// reported again at the next change or hello.
+			s.log().Warn("estim: the service refused messages; dropping them", "err", err, "session", sid, "messages", messageTypes(batch))
+			pending = pending[n:]
+			continue
 		case ctx.Err() != nil:
 			return
 		}
@@ -208,10 +221,25 @@ func (s *Session) Flush(ctx context.Context) {
 
 // -- lifecycle -------------------------------------------------------------------
 
+// messageTypes names the messages of a batch, for a log line.
+func messageTypes(batch []json.RawMessage) []string {
+	out := make([]string, 0, len(batch))
+	for _, m := range batch {
+		var t struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(m, &t)
+		out = append(out, t.Type)
+	}
+	return out
+}
+
 // DeviceChanged reports the device to the service and, when it has just
 // connected while a session is attached, arms it for that session.
 func (s *Session) DeviceChanged(ctx context.Context, d Descriptor) {
-	s.queue("", false, s.deviceMessage(d))
+	if msg := s.deviceMessage(d); msg != nil {
+		s.queue("", false, msg)
+	}
 	s.mu.Lock()
 	sid, attached := s.sessionID, s.attached
 	s.mu.Unlock()
@@ -225,15 +253,25 @@ func (s *Session) DeviceChanged(ctx context.Context, d Descriptor) {
 
 // UnitsChanged reports the units in reach to the service: the same
 // `device` message, the served unit's descriptor as it stands with the
-// new list. The Runtime's OnUnits.
+// new list. The Runtime's OnUnits. Before any unit has been opened there
+// is no descriptor to report and nothing is sent; the list rides with the
+// report of the first unit that connects.
 func (s *Session) UnitsChanged(_ context.Context, _ []Unit) {
-	s.queue("", false, s.deviceMessage(s.Runtime.Descriptor()))
+	if msg := s.deviceMessage(s.Runtime.Descriptor()); msg != nil {
+		s.queue("", false, msg)
+	}
 }
 
 // deviceMessage is the connector-level `device` report (PROTOCOL.md 7.3):
 // the selected unit, with `id` once one has been found and `units`, the
 // units in reach, once listed. A service that knows neither drops them.
+// Nil when no unit has been opened yet (the descriptor has no kind): the
+// service reads a report without one as malformed and refuses the whole
+// post, and would go on refusing it.
 func (s *Session) deviceMessage(d Descriptor) map[string]any {
+	if d.Kind == "" {
+		return nil
+	}
 	msg := map[string]any{"type": "device", "kind": d.Kind, "label": d.Label, "connected": d.Connected, "capabilities": d.Capabilities}
 	if d.ID != "" {
 		msg["id"] = d.ID

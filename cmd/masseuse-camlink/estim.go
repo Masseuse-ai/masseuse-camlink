@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -266,6 +267,15 @@ func (l *estimLink) Send(ctx context.Context, sessionID string, messages []json.
 		return estim.ErrUnsupported
 	case errors.Is(err, rendezvous.ErrEstimSessionGone):
 		return fmt.Errorf("%w: %v", estim.ErrSessionGone, err)
+	}
+	// A refusal of the messages themselves (400 malformed, 413 too large,
+	// 422): the same bytes would be refused again. A signature or clock
+	// check (401), a timeout (408) and a rate limit (429) are about the
+	// moment and are retried, as is anything 5xx or network.
+	var status *rendezvous.StatusError
+	if errors.As(err, &status) && status.Status/100 == 4 &&
+		status.Status != http.StatusUnauthorized && status.Status != http.StatusRequestTimeout && status.Status != http.StatusTooManyRequests {
+		return fmt.Errorf("%w: %v", estim.ErrRefused, err)
 	}
 	return err
 }
