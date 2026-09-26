@@ -35,10 +35,6 @@ type Uplink interface {
 	Send(ctx context.Context, sessionID string, messages []json.RawMessage) error
 }
 
-// ErrUnsupported is what an Uplink returns when the service takes no
-// device link at all; the Session then stops sending.
-var ErrUnsupported = errors.New("estim: the service takes no device link")
-
 // ErrRefused is what an Uplink returns when the service refused the
 // messages for what they are (a 4xx that is not about the moment: not a
 // signature or clock check, not a rate limit): the same bytes would be
@@ -81,7 +77,6 @@ type Session struct {
 	arming       bool
 	lastDeferral string
 	outbox       []queued
-	unsupported  bool
 	wg           sync.WaitGroup
 }
 
@@ -116,9 +111,6 @@ func (s *Session) queue(sessionID string, telemetry bool, msg any) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unsupported {
-		return
-	}
 	s.outbox = append(s.outbox, queued{sessionID, raw, telemetry})
 	s.trimLocked()
 }
@@ -199,13 +191,6 @@ func (s *Session) Flush(ctx context.Context) {
 		case err == nil:
 			pending = pending[n:]
 			continue
-		case errors.Is(err, ErrUnsupported):
-			s.log().Info("estim: the service takes no device link; the device stays released")
-			s.mu.Lock()
-			s.unsupported = true
-			s.outbox = nil
-			s.mu.Unlock()
-			return
 		case errors.Is(err, ErrSessionGone) && sid != "":
 			s.log().Info("estim: the service no longer has the session; releasing", "session", sid)
 			pending = pending[n:]

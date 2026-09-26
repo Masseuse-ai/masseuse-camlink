@@ -133,7 +133,7 @@ func TestEstimLinkSendMapsRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		status  int
 		refused bool
-	}{{400, true}, {413, true}, {422, true}, {401, false}, {408, false}, {429, false}, {500, false}, {503, false}} {
+	}{{400, true}, {404, true}, {413, true}, {422, true}, {401, false}, {408, false}, {429, false}, {500, false}, {503, false}} {
 		svc.mu.Lock()
 		svc.status = tc.status
 		svc.mu.Unlock()
@@ -144,7 +144,7 @@ func TestEstimLinkSendMapsRefusals(t *testing.T) {
 		if got := errors.Is(err, estim.ErrRefused); got != tc.refused {
 			t.Errorf("%d: refused=%v, want %v (%v)", tc.status, got, tc.refused, err)
 		}
-		if errors.Is(err, estim.ErrUnsupported) || errors.Is(err, estim.ErrSessionGone) {
+		if errors.Is(err, estim.ErrSessionGone) {
 			t.Errorf("%d: %v", tc.status, err)
 		}
 	}

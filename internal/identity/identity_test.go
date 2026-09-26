@@ -145,17 +145,14 @@ func TestMessages(t *testing.T) {
 	if _, err := ParsePublicKey("dG9vc2hvcnQ"); err == nil {
 		t.Fatal("accepted a short key")
 	}
-	// The v2 source message: the offers beside the camera, the first
+	// The source message: the camera and the offers beside it, the first
 	// label preceded by its length so that a `|` in either label cannot
 	// move it into the other.
-	got = string(SourceMessageV2(1757400000, "KEY", "capture", true, true, "capture", false, "Insta360|Link", "OBS Virtual Camera"))
+	got = string(SourceMessage(1757400000, "KEY", "capture", true, true, "capture", false, "Insta360|Link", "OBS Virtual Camera"))
 	if got != "camlink-source-v2|1757400000|KEY|capture|1|1|capture|0|13|Insta360|Link|OBS Virtual Camera" {
-		t.Fatalf("source v2: %q", got)
+		t.Fatalf("source: %q", got)
 	}
-	if got := string(SourceMessageV2(1, "KEY", "camera", false, false, "", false, "", "")); got != "camlink-source-v2|1|KEY|camera|0|0||0|0||" {
-		t.Fatalf("source v2 without offers: %q", got)
-	}
-	if got := string(SourceMessage(1757400000, "KEY", "capture", true, "Cam")); got != "camlink-source-v1|1757400000|KEY|capture|1|Cam" {
-		t.Fatalf("source v1: %q", got)
+	if got := string(SourceMessage(1, "KEY", "camera", false, false, "", false, "", "")); got != "camlink-source-v2|1|KEY|camera|0|0||0|0||" {
+		t.Fatalf("source without offers: %q", got)
 	}
 }

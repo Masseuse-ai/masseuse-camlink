@@ -18,7 +18,6 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/identity"
@@ -56,15 +55,15 @@ type Source struct {
 	// Ready says whether the connector can serve it now (ffmpeg found, the
 	// devices present, the camera reachable at startup).
 	Ready bool `json:"ready"`
-	// Share, when set, says whether this connector asks for the phone's
-	// picture on its computer (`-share-phone`, internal/share): the phone
-	// then has the enclave send it. Reported in the v2 message.
-	Share *ShareOffer `json:"share,omitempty"`
-	// Face, when set, is the front-facing camera this connector offers
-	// beside its camera (`-face-camera`, served at serve.FaceLink): the
-	// phone then has the enclave show it as the person's face. Reported in
-	// the v2 message.
-	Face *FaceOffer `json:"face,omitempty"`
+	// Share says whether this connector asks for the phone's picture on
+	// its computer (`-share-phone`, internal/share): the phone then has the
+	// enclave send it.
+	Share ShareOffer `json:"share"`
+	// Face is the front-facing camera this connector offers beside its
+	// camera (`-face-camera`, served at serve.FaceLink): the phone then has
+	// the enclave show it as the person's face. Nil, sent as null, when
+	// none is chosen.
+	Face *FaceOffer `json:"face"`
 }
 
 // ShareOffer is whether the connector asks for the phone's picture.
@@ -82,22 +81,12 @@ type FaceOffer struct {
 	Ready bool `json:"ready"`
 }
 
-// v2 says whether the source carries what only the v2 message signs.
-func (s Source) v2() bool { return s.Share != nil || s.Face != nil }
-
-// v1 is the source as the v1 message describes it.
-func (s Source) v1() Source { return Source{Kind: s.Kind, Label: s.Label, Ready: s.Ready} }
-
 // SourceReporter is implemented by a Handler that offers a source; the
 // client reports it after every hello (the service forgets a connector's
 // source when it forgets the connector).
 type SourceReporter interface {
 	CurrentSource() (Source, bool)
 }
-
-// ErrNoSourceReports is returned by ReportSource when the service has no
-// such route: an older service, which shows no source card.
-var ErrNoSourceReports = errors.New("rendezvous: the service does not take source reports")
 
 // EstimReceiver is implemented by a Handler that serves a stimulation
 // device (docs/PROTOCOL.md, section 7); the client hands it every `estim`
@@ -107,10 +96,6 @@ type EstimReceiver interface {
 	// ("" for a connector-level message).
 	OnEstim(sessionID string, message json.RawMessage)
 }
-
-// ErrNoEstim is returned by PostEstim when the service has no such route:
-// an older service, which links no devices.
-var ErrNoEstim = errors.New("rendezvous: the service does not take device link messages")
 
 // ErrEstimSessionGone is returned by PostEstim when the service no longer
 // has the session bound to this connector.
@@ -128,11 +113,6 @@ type Client struct {
 	// IdleTimeout ends a stream that sends nothing (not even keepalives) for
 	// this long; 0 means 60 s.
 	IdleTimeout time.Duration
-
-	// sourceV1Only is set once the service has refused a v2 source report:
-	// the camera alone is reported from then on (ReportSource).
-	sourceMu     sync.Mutex
-	sourceV1Only bool
 }
 
 type helloResponse struct {
@@ -140,13 +120,10 @@ type helloResponse struct {
 	Code            string `json:"code"`
 	CodeExpiresAtMs int64  `json:"codeExpiresAtMs"`
 	// HeartbeatEveryMs is how often to POST /api/camlink/heartbeat while
-	// the stream is attached; 0 means the service takes none.
+	// the stream is attached; the service always names a pace, and a hello
+	// without one is malformed.
 	HeartbeatEveryMs int64 `json:"heartbeatEveryMs"`
 }
-
-// ErrNoHeartbeats is returned by Heartbeat when the service has no such
-// route: an older service, which judges the connector by its stream alone.
-var ErrNoHeartbeats = errors.New("rendezvous: the service does not take heartbeats")
 
 // StatusError is a non-2xx answer from the service.
 type StatusError struct {
@@ -216,7 +193,7 @@ func (c *Client) once(ctx context.Context, h Handler) error {
 	}
 	if sr, ok := h.(SourceReporter); ok {
 		if src, ok := sr.CurrentSource(); ok {
-			if err := c.ReportSource(ctx, src); err != nil && !errors.Is(err, ErrNoSourceReports) {
+			if err := c.ReportSource(ctx, src); err != nil {
 				c.log().Warn("rendezvous: source report failed", "err", err)
 			}
 		}
@@ -248,19 +225,15 @@ func (c *Client) Heartbeat(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return ErrNoHeartbeats
-	case resp.StatusCode/100 != 2:
+	if resp.StatusCode/100 != 2 {
 		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
 	}
 	return nil
 }
 
-// heartbeats sends one every interval until ctx ends, or until the service
-// says it takes none. Failures are logged and retried at the next tick: the
-// service's remedy for a connector that cannot reach it is the same as for
-// one that is gone.
+// heartbeats sends one every interval until ctx ends. Failures are logged
+// and retried at the next tick: the service's remedy for a connector that
+// cannot reach it is the same as for one that is gone.
 func (c *Client) heartbeats(ctx context.Context, interval time.Duration) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
@@ -273,9 +246,6 @@ func (c *Client) heartbeats(ctx context.Context, interval time.Duration) {
 		err := c.Heartbeat(ctx)
 		switch {
 		case err == nil:
-		case errors.Is(err, ErrNoHeartbeats):
-			c.log().Debug("rendezvous: the service takes no heartbeats")
-			return
 		case ctx.Err() != nil:
 			return
 		default:
@@ -285,11 +255,8 @@ func (c *Client) heartbeats(ctx context.Context, interval time.Duration) {
 }
 
 // ReportSource tells the service which camera the connector offers, and
-// what else it offers (Source.Share, Source.Face). It is signed like hello,
-// so only the connector can describe itself. A source with more than the
-// camera goes as the v2 message; a service that does not know it (400 or
-// 401 on a v2 report) is told the camera alone as v1, this time and for
-// the rest of the run, and a line says so once.
+// what else it offers (Source.Share, Source.Face; docs/PROTOCOL.md, section
+// 2.3). It is signed like hello, so only the connector can describe itself.
 func (c *Client) ReportSource(ctx context.Context, src Source) error {
 	if len(src.Label) > 64 {
 		src.Label = src.Label[:64]
@@ -299,47 +266,23 @@ func (c *Client) ReportSource(ctx context.Context, src Source) error {
 		face.Label = face.Label[:64]
 		src.Face = &face
 	}
-	c.sourceMu.Lock()
-	v1Only := c.sourceV1Only
-	c.sourceMu.Unlock()
-	if src.v2() && !v1Only {
-		status, err := c.postSource(ctx, src, 2)
-		if err == nil {
-			return nil
-		}
-		if status != http.StatusBadRequest && status != http.StatusUnauthorized {
-			return err
-		}
-		c.sourceMu.Lock()
-		c.sourceV1Only = true
-		c.sourceMu.Unlock()
-		c.log().Warn("rendezvous: the service takes the older source report; the front-facing camera and the phone's picture are not announced to it", "status", status)
-	}
-	_, err := c.postSource(ctx, src.v1(), 1)
-	return err
-}
-
-// postSource sends one source report; the status is the service's answer
-// when the error is its refusal, 0 otherwise.
-func (c *Client) postSource(ctx context.Context, src Source, version int) (int, error) {
 	ts := time.Now().Unix()
 	key := c.Identity.PublicKeyString()
-	fields := map[string]any{"key": key, "ts": ts, "source": src}
-	if version == 2 {
-		faceKind, faceLabel, faceReady := "", "", false
-		if src.Face != nil {
-			faceKind, faceLabel, faceReady = src.Face.Kind, src.Face.Label, src.Face.Ready
-		}
-		fields["v"] = 2
-		fields["sig"] = b64(c.Identity.Sign(identity.SourceMessageV2(ts, key, src.Kind, src.Ready,
-			src.Share != nil && src.Share.Wanted, faceKind, faceReady, src.Label, faceLabel)))
-	} else {
-		fields["sig"] = b64(c.Identity.Sign(identity.SourceMessage(ts, key, src.Kind, src.Ready, src.Label)))
+	faceKind, faceLabel, faceReady := "", "", false
+	if src.Face != nil {
+		faceKind, faceLabel, faceReady = src.Face.Kind, src.Face.Label, src.Face.Ready
 	}
-	body, _ := json.Marshal(fields)
+	body, _ := json.Marshal(map[string]any{
+		"key":    key,
+		"ts":     ts,
+		"v":      2,
+		"source": src,
+		"sig": b64(c.Identity.Sign(identity.SourceMessage(ts, key, src.Kind, src.Ready,
+			src.Share.Wanted, faceKind, faceReady, src.Label, faceLabel))),
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Service, "/")+"/api/camlink/source", bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "masseuse-camlink/"+c.Version)
@@ -347,17 +290,14 @@ func (c *Client) postSource(ctx context.Context, src Source, version int) (int, 
 	defer cancel()
 	resp, err := c.http().Do(req.WithContext(hctx))
 	if err != nil {
-		return 0, fmt.Errorf("source: %w", err)
+		return fmt.Errorf("source: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return resp.StatusCode, ErrNoSourceReports
-	case resp.StatusCode/100 != 2:
-		return resp.StatusCode, &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
+	if resp.StatusCode/100 != 2 {
+		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
 	}
-	return 0, nil
+	return nil
 }
 
 // PostEstim sends device link messages for a session (docs/PROTOCOL.md,
@@ -398,8 +338,6 @@ func (c *Client) PostEstim(ctx context.Context, sessionID string, messages []jso
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return ErrNoEstim
 	case resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusGone:
 		return fmt.Errorf("%w: %s", ErrEstimSessionGone, strings.TrimSpace(truncate(string(raw), 200)))
 	case resp.StatusCode/100 != 2:
@@ -444,11 +382,14 @@ func (c *Client) Hello(ctx context.Context) (*helloResponse, error) {
 	if out.StreamToken == "" {
 		return nil, errors.New("hello: no streamToken")
 	}
+	if out.HeartbeatEveryMs <= 0 {
+		return nil, errors.New("hello: no heartbeatEveryMs")
+	}
 	return &out, nil
 }
 
 // Stream attaches to the event stream and dispatches until it ends,
-// heartbeating every heartbeatEvery while attached (0: not at all).
+// heartbeating every heartbeatEvery while attached.
 func (c *Client) Stream(ctx context.Context, streamToken string, heartbeatEvery time.Duration, h Handler) error {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -470,10 +411,8 @@ func (c *Client) Stream(ctx context.Context, streamToken string, heartbeatEvery 
 	}
 	h.OnOnline(true)
 	defer h.OnOnline(false)
-	if heartbeatEvery > 0 {
-		// Stops with the stream: sctx is cancelled on the way out.
-		go c.heartbeats(sctx, heartbeatEvery)
-	}
+	// Stops with the stream: sctx is cancelled on the way out.
+	go c.heartbeats(sctx, heartbeatEvery)
 
 	idle := c.IdleTimeout
 	if idle == 0 {

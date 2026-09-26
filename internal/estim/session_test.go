@@ -582,21 +582,6 @@ func TestSessionFlushFailures(t *testing.T) {
 	up.fail = nil
 	up.mu.Unlock()
 	up.drain(ctx, s)
-
-	// A service with no device link: sending stops for good.
-	s.Handle(ctx, "sess-2", control(`{"type":"companion_attached","sessionId":"sess-2"}`))
-	s.Wait()
-	up.mu.Lock()
-	up.fail = estim.ErrUnsupported
-	up.mu.Unlock()
-	s.Flush(ctx)
-	up.mu.Lock()
-	up.fail = nil
-	up.mu.Unlock()
-	s.HeartbeatForTest(ctx)
-	if got := up.drain(ctx, s); len(got) != 0 {
-		t.Fatalf("messages after ErrUnsupported: %v", types(got))
-	}
 }
 
 func TestSessionOutboxBounded(t *testing.T) {

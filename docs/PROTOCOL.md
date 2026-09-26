@@ -68,8 +68,9 @@ Response `200`:
 ```
 
 `heartbeatEveryMs` is how often the connector is to send a heartbeat
-(section 2.4) while its event stream is attached; absent means the service
-takes no heartbeats.
+(section 2.4) while its event stream is attached. It is required and
+positive: a hello without it is malformed, and the connector treats it as
+a failed hello (retried with backoff, like one the network dropped).
 
 The pairing code is 8 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`
 (no 0/O/1/I/L), shown as two groups of four. It rotates every 10 minutes and
@@ -101,31 +102,9 @@ tunnel; so does one for a session whose tunnel the connector gave up on
 ### 2.3 `POST /api/camlink/source`
 
 After every successful hello, and whenever it changes, the connector reports
-the camera it offers through its own stream (section 6):
-
-```json
-{
-  "key": "<connectorKey>",
-  "ts": 1757400000,
-  "source": {"kind": "capture", "label": "Insta360 Link + Yeti Stereo Microphone", "ready": true},
-  "sig": "<base64url Ed25519 signature>"
-}
-```
-
-`kind` is `capture` (the computer's own camera and microphone) or `camera` (a
-camera on the connector's network the connector pulls and re-serves).
-`label` is what the phone shows, at most 64 characters. `ready` says whether
-the connector can serve it now (ffmpeg present and the devices found, or the
-network camera answering at startup). `sig` is over the UTF-8 string
-`camlink-source-v1|<ts>|<key>|<kind>|<1 if ready else 0>|<label>`; the label
-comes last so that any character in it is unambiguous. The service applies
-the hello rules (`|now - ts| <= 60 s`, signature, rate limit), keeps the
-latest report per connector for as long as it remembers the connector, and
-shows it to a phone bound to that connector as `camlink.source`. A `404`
-means an older service; the connector goes on without the card.
-
-**Version 2.** A connector that offers more than its camera (section 6.1:
-`-share-phone`, `-face-camera`) reports it in the same request with `"v": 2`:
+what it offers: the camera it serves through its own stream (section 6),
+whether it asks for the phone's picture on its computer, and the
+front-facing camera it serves beside its camera (section 6.1):
 
 ```json
 {
@@ -141,21 +120,29 @@ means an older service; the connector goes on without the card.
 }
 ```
 
-`share.wanted` says the person asked, on the computer, for the phone's
-picture to be sent there; `face`, when present, is the front-facing camera
-the connector serves at `rtsps://127.0.0.1:7443/face` (`kind` is `capture`;
-`label` at most 64 characters; `ready` as above), and is absent when none is
-configured. `sig` is over
+`kind` is `capture` (the computer's own camera and microphone) or `camera` (a
+camera on the connector's network the connector pulls and re-serves).
+`label` is what the phone shows, at most 64 characters. `ready` says whether
+the connector can serve it now (ffmpeg present and the devices found, or the
+network camera answering at startup). `share.wanted` says the person asked,
+on the computer, for the phone's picture to be sent there (`-share-phone`);
+`face` is the front-facing camera the connector serves at
+`rtsps://127.0.0.1:7443/face` (`kind` is `capture`; `label` at most 64
+characters; `ready` as above), or `null` when none is configured. `v` is the
+format's version, `2`; `share` and `face` are always present. `sig` is over
+the UTF-8 string
 `camlink-source-v2|<ts>|<key>|<kind>|<ready>|<1 if share.wanted else 0>|<face.kind or empty>|<1 if face.ready else 0>|<byte length of label>|<label>|<face.label or empty>`
 (bits as `1`/`0`; the two labels last, the first preceded by its length so
-that a `|` in either cannot move text between them). A service that knows
-v1 alone cannot verify a v2 report and answers `400` or `401`; the
-connector then sends the camera alone as v1, at once and for the rest of
-its run, so an older service still gets the card it knows. The service
-shows `share` and `face` to the phone as part of `camlink.source`; what the
-phone does with them is the trainer's (it has the enclave send the phone's
-picture while `share.wanted`, and show `face` while `face.ready`), and only
-the phone's capability can hand the enclave a link or start the sending.
+that a `|` in either cannot move text between them). The service applies
+the hello rules (`|now - ts| <= 60 s`, signature, rate limit), refuses any
+other `v` or a body without the offers (`400`), keeps the latest report per
+connector for as long as it remembers the connector, and shows it to a
+phone bound to that connector as `camlink.source`. What the phone does with
+the offers is the trainer's (it has the enclave send the phone's picture
+while `share.wanted`, and show `face` while `face.ready`), and only the
+phone's capability can hand the enclave a link or start the sending. A
+report the service refuses is logged by the connector and sent again after
+its next hello, like any other failed request.
 
 ### 2.4 `POST /api/camlink/heartbeat`
 
@@ -179,8 +166,10 @@ minute per IP). Once a connector has sent one heartbeat, the service marks
 it offline when 90 s pass without another, ending its stream and telling
 bound phones (`camlink.online` false) exactly as if the stream had closed.
 A connector that has never sent a heartbeat (an older connector) is judged
-by its stream alone, as before. A `404` means an older service; the
-connector stops sending them for that stream.
+by its stream alone, as before. A heartbeat the service refuses, whatever
+the status, is logged by the connector and the next one goes at the next
+tick: the service's remedy for a connector it cannot hear is the same as
+for one that is gone.
 
 ### 2.5 `POST /api/camlink/estim`
 
@@ -208,9 +197,10 @@ hello rules (`|now - ts| <= 60 s`, signature) and allows 120 requests per
 minute per connector; the body is at most 64 KiB and the array holds at
 most 64 messages. Messages for a session are accepted
 only while that session is bound to the connector: `409` says it is not, and
-the connector releases the device and detaches. `404` means an older
-service that links no devices; the connector keeps the device released and
-sends nothing more.
+the connector releases the device and detaches. Any other refusal of the
+messages themselves (`400`, `404`, `413`, `422`) drops them, since the same
+bytes would be refused again; a check of the moment (`401`, `408`, `429`),
+a `5xx` or a network failure keeps them for the next flush.
 
 ## 3. Phone <-> rendezvous
 

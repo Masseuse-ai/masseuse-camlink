@@ -197,25 +197,15 @@ func HelloMessage(ts int64, key string, paired []string) []byte {
 	return []byte("camlink-hello-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + strings.Join(paired, ","))
 }
 
-// SourceMessage is what the connector signs to tell the service which
-// camera it offers through its own stream (POST /api/camlink/source): kind
-// is "capture" or "camera", label the name shown to the person. The label
-// comes last so that any character in it is unambiguous.
-func SourceMessage(ts int64, key, kind string, ready bool, label string) []byte {
-	r := "0"
-	if ready {
-		r = "1"
-	}
-	return []byte("camlink-source-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + kind + "|" + r + "|" + label)
-}
-
-// SourceMessageV2 is SourceMessage with what a connector may offer beside
-// its camera (docs/PROTOCOL.md, section 2.3): whether it asks for the
-// phone's picture on its computer (shareWanted), and a front-facing camera
-// of its own (faceKind, faceReady, faceLabel; faceKind "" when none). The
-// two labels come last, the first preceded by its length in bytes, so that
-// any character in either is unambiguous.
-func SourceMessageV2(ts int64, key, kind string, ready, shareWanted bool, faceKind string, faceReady bool, label, faceLabel string) []byte {
+// SourceMessage is what the connector signs to tell the service what it
+// offers (POST /api/camlink/source, docs/PROTOCOL.md section 2.3): the
+// camera it serves through its own stream (kind is "capture" or "camera",
+// label the name shown to the person, ready whether it can serve it now),
+// whether it asks for the phone's picture on its computer (shareWanted),
+// and a front-facing camera of its own (faceKind, faceReady, faceLabel;
+// faceKind "" when none). The two labels come last, the first preceded by
+// its length in bytes, so that any character in either is unambiguous.
+func SourceMessage(ts int64, key, kind string, ready, shareWanted bool, faceKind string, faceReady bool, label, faceLabel string) []byte {
 	bit := func(b bool) string {
 		if b {
 			return "1"

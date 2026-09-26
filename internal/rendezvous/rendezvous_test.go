@@ -78,21 +78,21 @@ type fakeService struct {
 	events []string // raw SSE blocks to send after the code event
 	drop   bool     // end the stream after the scripted events
 	block  chan struct{}
-	// noSource makes the service an older one without /api/camlink/source;
-	// v1Source one that knows the v1 report alone and refuses v2 as an
-	// unverifiable signature.
+	// noSource makes /api/camlink/source answer 404, an error like any
+	// other to the client.
 	noSource bool
-	v1Source bool
 	sources  []Source
-	versions []int
-	// heartbeatMs, when set, is announced in the hello response; noHeartbeat
-	// makes the heartbeat route a 404 all the same.
+	// heartbeatMs is the pace the hello announces (an hour when unset, so
+	// a test that is not about heartbeats never sees one); noPace leaves
+	// it out of the hello, which the client refuses; noHeartbeat makes the
+	// heartbeat route answer 404.
 	heartbeatMs int64
+	noPace      bool
 	noHeartbeat bool
 	heartbeats  int
 	badBeats    int
-	// noEstim makes the service an older one without /api/camlink/estim;
-	// estimGone makes it answer 409 (the session is not bound here).
+	// noEstim makes /api/camlink/estim answer 404; estimGone makes it
+	// answer 409 (the session is not bound here).
 	noEstim   bool
 	estimGone bool
 	estim     []estimPost
@@ -151,8 +151,12 @@ func (f *fakeService) handler() http.Handler {
 		f.tokens[tok] = true
 		f.mu.Unlock()
 		out := map[string]any{"streamToken": tok, "code": "7QK4-N2PX", "codeExpiresAtMs": time.Now().Add(10 * time.Minute).UnixMilli()}
-		if f.heartbeatMs > 0 {
-			out["heartbeatEveryMs"] = f.heartbeatMs
+		if !f.noPace {
+			pace := f.heartbeatMs
+			if pace <= 0 {
+				pace = 3_600_000
+			}
+			out["heartbeatEveryMs"] = pace
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	})
@@ -193,14 +197,30 @@ func (f *fakeService) handler() http.Handler {
 			return
 		}
 		var body struct {
-			Key    string `json:"key"`
-			Ts     int64  `json:"ts"`
-			Source Source `json:"source"`
-			V      int    `json:"v"`
-			Sig    string `json:"sig"`
+			Key    string          `json:"key"`
+			Ts     int64           `json:"ts"`
+			Source Source          `json:"source"`
+			V      int             `json:"v"`
+			Face   json.RawMessage `json:"-"`
+			Sig    string          `json:"sig"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
 			http.Error(w, err.Error(), 400)
+			return
+		}
+		// The body always carries the version and both offers (face as
+		// null when none), as the service requires.
+		var shape struct {
+			Source map[string]json.RawMessage `json:"source"`
+		}
+		_ = json.Unmarshal(raw, &shape)
+		if _, ok := shape.Source["share"]; body.V != 2 || !ok {
+			http.Error(w, "v must be 2 and share present", 400)
+			return
+		}
+		if _, ok := shape.Source["face"]; !ok {
+			http.Error(w, "face must be present (null when none)", 400)
 			return
 		}
 		pub, err := identity.ParsePublicKey(body.Key)
@@ -209,25 +229,18 @@ func (f *fakeService) handler() http.Handler {
 			return
 		}
 		sig, _ := base64.RawURLEncoding.DecodeString(body.Sig)
-		var msg []byte
-		if body.V == 2 && !f.v1Source {
-			faceKind, faceLabel, faceReady := "", "", false
-			if body.Source.Face != nil {
-				faceKind, faceLabel, faceReady = body.Source.Face.Kind, body.Source.Face.Label, body.Source.Face.Ready
-			}
-			msg = identity.SourceMessageV2(body.Ts, body.Key, body.Source.Kind, body.Source.Ready,
-				body.Source.Share != nil && body.Source.Share.Wanted, faceKind, faceReady, body.Source.Label, faceLabel)
-		} else {
-			// An older service reads the v1 fields alone.
-			msg = identity.SourceMessage(body.Ts, body.Key, body.Source.Kind, body.Source.Ready, body.Source.Label)
+		faceKind, faceLabel, faceReady := "", "", false
+		if body.Source.Face != nil {
+			faceKind, faceLabel, faceReady = body.Source.Face.Kind, body.Source.Face.Label, body.Source.Face.Ready
 		}
+		msg := identity.SourceMessage(body.Ts, body.Key, body.Source.Kind, body.Source.Ready,
+			body.Source.Share.Wanted, faceKind, faceReady, body.Source.Label, faceLabel)
 		if !ed25519.Verify(pub, msg, sig) {
 			http.Error(w, "bad signature", 401)
 			return
 		}
 		f.mu.Lock()
 		f.sources = append(f.sources, body.Source)
-		f.versions = append(f.versions, body.V)
 		f.mu.Unlock()
 		w.WriteHeader(204)
 	})
@@ -399,8 +412,8 @@ func TestSourceReportAfterHello(t *testing.T) {
 	// A report signed by someone else is refused.
 	other, _ := identity.Load(t.TempDir())
 	body, _ := json.Marshal(map[string]any{
-		"key": id.PublicKeyString(), "ts": time.Now().Unix(), "source": rec.src,
-		"sig": base64.RawURLEncoding.EncodeToString(other.Sign(identity.SourceMessage(time.Now().Unix(), id.PublicKeyString(), "capture", true, rec.src.Label))),
+		"key": id.PublicKeyString(), "ts": time.Now().Unix(), "v": 2, "source": rec.src,
+		"sig": base64.RawURLEncoding.EncodeToString(other.Sign(identity.SourceMessage(time.Now().Unix(), id.PublicKeyString(), "capture", true, false, "", false, rec.src.Label, ""))),
 	})
 	resp, err := srv.Client().Post(srv.URL+"/api/camlink/source", "application/json", strings.NewReader(string(body)))
 	if err != nil {
@@ -411,10 +424,39 @@ func TestSourceReportAfterHello(t *testing.T) {
 		t.Fatalf("imposter report: %d", resp.StatusCode)
 	}
 
-	// An older service without the route is not an error worth retrying.
+	// A route that is not there is an error like any other: reported,
+	// nothing swallowed.
 	f.noSource = true
-	if err := c.ReportSource(context.Background(), rec.src); err != ErrNoSourceReports {
-		t.Fatalf("old service: %v", err)
+	var se *StatusError
+	if err := c.ReportSource(context.Background(), rec.src); !errors.As(err, &se) || se.Status != 404 {
+		t.Fatalf("404 on the source report: %v", err)
+	}
+}
+
+func TestSourceReportCarriesTheOffers(t *testing.T) {
+	f := &fakeService{t: t, tokens: map[string]bool{}}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+	c, _ := newClient(t, srv)
+	// The camera alone: the offers travel all the same, share not wanted
+	// and face null.
+	if err := c.ReportSource(context.Background(), Source{Kind: "capture", Label: "This computer's camera", Ready: true}); err != nil {
+		t.Fatal(err)
+	}
+	// With the offers, the face label cut to 64 characters like the camera's.
+	offers := Source{Kind: "capture", Label: "This computer's camera", Ready: true,
+		Share: ShareOffer{Wanted: true}, Face: &FaceOffer{Kind: "capture", Label: strings.Repeat("O", 70), Ready: true}}
+	if err := c.ReportSource(context.Background(), offers); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	got := append([]Source(nil), f.sources...)
+	f.mu.Unlock()
+	if len(got) != 2 || got[0].Share.Wanted || got[0].Face != nil {
+		t.Fatalf("camera alone: %+v", got)
+	}
+	if !got[1].Share.Wanted || got[1].Face == nil || len(got[1].Face.Label) != 64 || !got[1].Face.Ready {
+		t.Fatalf("with offers: %+v", got[1])
 	}
 }
 
@@ -477,7 +519,9 @@ func TestHeartbeatsWhileAttached(t *testing.T) {
 	}
 }
 
-func TestHeartbeatsStopWhenTheServiceTakesNone(t *testing.T) {
+func TestHeartbeatsGoOnThroughA404AndAHelloNeedsThePace(t *testing.T) {
+	// A heartbeat route that answers 404 is an error like any other: the
+	// beat is warned and the next one still goes.
 	f := &fakeService{t: t, tokens: map[string]bool{}, block: make(chan struct{}), heartbeatMs: 20, noHeartbeat: true}
 	srv := httptest.NewServer(f.handler())
 	defer srv.Close()
@@ -488,20 +532,17 @@ func TestHeartbeatsStopWhenTheServiceTakesNone(t *testing.T) {
 	go func() { _ = c.Run(ctx, rec) }()
 	rec.wait(t, "online:true")
 	time.Sleep(300 * time.Millisecond)
-	if n, _ := f.beats(); n != 1 {
-		t.Fatalf("%d heartbeat attempts against a 404, want exactly one", n)
+	if n, _ := f.beats(); n < 3 {
+		t.Fatalf("%d heartbeat attempts against a 404, want them to go on", n)
 	}
-	// Without heartbeatEveryMs in the hello there are none at all.
-	f2 := &fakeService{t: t, tokens: map[string]bool{}, block: make(chan struct{})}
+	// A hello that names no heartbeat pace is malformed: refused, never
+	// streamed from.
+	f2 := &fakeService{t: t, tokens: map[string]bool{}, block: make(chan struct{}), noPace: true}
 	srv2 := httptest.NewServer(f2.handler())
 	defer srv2.Close()
 	c2, _ := newClient(t, srv2)
-	rec2 := newRecorder()
-	go func() { _ = c2.Run(ctx, rec2) }()
-	rec2.wait(t, "online:true")
-	time.Sleep(200 * time.Millisecond)
-	if n, _ := f2.beats(); n != 0 {
-		t.Fatalf("%d heartbeats to a service that asked for none", n)
+	if _, err := c2.Hello(context.Background()); err == nil || !strings.Contains(err.Error(), "heartbeatEveryMs") {
+		t.Fatalf("hello without a pace: %v", err)
 	}
 	cancel() // before the servers close, so their streams end
 }
@@ -638,60 +679,8 @@ func TestEstimEventAndPost(t *testing.T) {
 		t.Fatalf("unbound session: %v", err)
 	}
 	f.noEstim = true
-	if err := c.PostEstim(context.Background(), "s1", msgs); err != ErrNoEstim {
-		t.Fatalf("old service: %v", err)
-	}
-}
-
-func TestSourceReportWithOffersIsV2AndFallsBackForAnOlderService(t *testing.T) {
-	f := &fakeService{t: t, tokens: map[string]bool{}}
-	srv := httptest.NewServer(f.handler())
-	defer srv.Close()
-	c, _ := newClient(t, srv)
-	plain := Source{Kind: "capture", Label: "This computer's camera", Ready: true}
-	offers := Source{Kind: "capture", Label: "This computer's camera", Ready: true,
-		Share: &ShareOffer{Wanted: true}, Face: &FaceOffer{Kind: "capture", Label: strings.Repeat("O", 70), Ready: true}}
-
-	// The camera alone goes as v1, as it always has.
-	if err := c.ReportSource(context.Background(), plain); err != nil {
-		t.Fatal(err)
-	}
-	// With offers it goes as v2, verified as such, the face label cut too.
-	if err := c.ReportSource(context.Background(), offers); err != nil {
-		t.Fatal(err)
-	}
-	f.mu.Lock()
-	versions := append([]int(nil), f.versions...)
-	last := f.sources[len(f.sources)-1]
-	f.mu.Unlock()
-	if len(versions) != 2 || versions[0] != 0 || versions[1] != 2 {
-		t.Fatalf("versions %v", versions)
-	}
-	if last.Share == nil || !last.Share.Wanted || last.Face == nil || len(last.Face.Label) != 64 || !last.Face.Ready {
-		t.Fatalf("v2 body %+v", last)
-	}
-
-	// An older service knows v1 alone: it refuses the v2 signature, the
-	// client falls back to the camera alone, and stays there for the run.
-	f2 := &fakeService{t: t, tokens: map[string]bool{}, v1Source: true}
-	srv2 := httptest.NewServer(f2.handler())
-	defer srv2.Close()
-	c2, _ := newClient(t, srv2)
-	for i := 0; i < 2; i++ {
-		if err := c2.ReportSource(context.Background(), offers); err != nil {
-			t.Fatalf("report %d to an older service: %v", i, err)
-		}
-	}
-	f2.mu.Lock()
-	versions2 := append([]int(nil), f2.versions...)
-	got := append([]Source(nil), f2.sources...)
-	f2.mu.Unlock()
-	if len(versions2) != 2 || versions2[0] != 0 || versions2[1] != 0 {
-		t.Fatalf("older service saw versions %v (a v2 refused is not recorded; v1 twice expected)", versions2)
-	}
-	for _, s := range got {
-		if s.Share != nil || s.Face != nil || s.Kind != "capture" || !s.Ready {
-			t.Fatalf("older service got %+v", s)
-		}
+	var se *StatusError
+	if err := c.PostEstim(context.Background(), "s1", msgs); !errors.As(err, &se) || se.Status != 404 {
+		t.Fatalf("404 on the device link: %v", err)
 	}
 }

@@ -283,8 +283,6 @@ func (l *estimLink) Send(ctx context.Context, sessionID string, messages []json.
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, rendezvous.ErrNoEstim):
-		return estim.ErrUnsupported
 	case errors.Is(err, rendezvous.ErrEstimSessionGone):
 		return fmt.Errorf("%w: %v", estim.ErrSessionGone, err)
 	}

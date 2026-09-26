@@ -516,7 +516,7 @@ func (m *manager) CurrentSource() (rendezvous.Source, bool) {
 		return rendezvous.Source{}, false
 	}
 	src := m.cam.offer.source()
-	src.Share = &rendezvous.ShareOffer{Wanted: m.sharing}
+	src.Share = rendezvous.ShareOffer{Wanted: m.sharing}
 	if f := m.cam.face; f != nil {
 		src.Face = &rendezvous.FaceOffer{Kind: f.kind, Label: f.label, Ready: f.ready}
 	}
