@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -42,7 +43,15 @@ func TestMain(m *testing.M) {
 }
 
 func fakeFFmpeg(args []string) int {
-	url, encoder, bitrate := args[len(args)-1], "", ""
+	if slices.Contains(args, "-encoders") {
+		// `ffmpeg -encoders`: a build with libx264 unless told otherwise.
+		fmt.Println("Encoders:\n V..... = Video\n A..... = Audio\n ------\n V....D h264_videotoolbox    VideoToolbox H.264 Encoder (codec h264)")
+		if os.Getenv("CAPTURE_FAKE_NO_X264") != "1" {
+			fmt.Println(" V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)")
+		}
+		return 0
+	}
+	url, encoder, bitrate, input := args[len(args)-1], "", "", ""
 	for i, a := range args {
 		if a == "-c:v" && i+1 < len(args) {
 			encoder = args[i+1]
@@ -50,10 +59,24 @@ func fakeFFmpeg(args []string) int {
 		if a == "-b:v" && i+1 < len(args) {
 			bitrate = args[i+1]
 		}
+		if a == "-i" && i+1 < len(args) {
+			input = args[i+1]
+		}
 	}
 	if os.Getenv("CAPTURE_FAKE_HW_FAILS") == "1" && encoder != EncoderX264 {
 		fmt.Fprintln(os.Stderr, "[vost#0:0 @ 0x1] Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height")
 		return 1
+	}
+	if encoder == EncoderX264 && (os.Getenv("CAPTURE_FAKE_NO_X264") == "1" || os.Getenv("CAPTURE_FAKE_X264_UNKNOWN") == "1") {
+		// What the connector's own ffmpeg says to -preset: it is built
+		// without libx264, so nothing knows the option.
+		fmt.Fprintln(os.Stderr, "Unrecognized option 'preset'.\nError splitting the argument list: Option not found")
+		return 8
+	}
+	if bad := os.Getenv("CAPTURE_FAKE_BAD_INPUT"); bad != "" && input == bad {
+		// avfoundation given an index the renumbered list no longer has.
+		fmt.Fprintf(os.Stderr, "[AVFoundation indev @ 0x1] Invalid audio device index\n[in#0 @ 0x2] Error opening input: Input/output error\nError opening input file %s.\nError opening input files: Input/output error\n", input)
+		return 251
 	}
 	desc := &description.Session{Medias: []*description.Media{
 		{Type: description.MediaTypeVideo, Formats: []format.Format{&format.H264{PayloadTyp: 96, PacketizationMode: 1}}},
@@ -152,15 +175,74 @@ Source #2
 
 func TestParseAVFoundation(t *testing.T) {
 	got := parseAVFoundation(avfListing)
+	// Every name stands alone in its kind, so each device is addressed by
+	// name: the index moves when a Continuity Camera phone comes or goes.
 	want := []Device{
-		{Kind: Video, ID: "0", Name: "Insta360 Link"},
-		{Kind: Video, ID: "1", Name: "FaceTime HD Camera"},
-		{Kind: Audio, ID: "0", Name: "Yeti Stereo Microphone"},
-		{Kind: Audio, ID: "1", Name: "Insta360 Link"},
-		{Kind: Audio, ID: "2", Name: "MacBook Pro Microphone"},
+		{Kind: Video, ID: "0", Name: "Insta360 Link", Input: "Insta360 Link"},
+		{Kind: Video, ID: "1", Name: "FaceTime HD Camera", Input: "FaceTime HD Camera"},
+		{Kind: Audio, ID: "0", Name: "Yeti Stereo Microphone", Input: "Yeti Stereo Microphone"},
+		{Kind: Audio, ID: "1", Name: "Insta360 Link", Input: "Insta360 Link"},
+		{Kind: Audio, ID: "2", Name: "MacBook Pro Microphone", Input: "MacBook Pro Microphone"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
+	}
+
+	// A name with a colon (avfoundation's separator), one that begins
+	// another device's name (avfoundation matches the prefix) and twins
+	// keep the index; the longer name is still alone.
+	odd := parseAVFoundation(`[AVFoundation indev @ 0x7f8] AVFoundation video devices:
+[AVFoundation indev @ 0x7f8] [0] Logitech BRIO
+[AVFoundation indev @ 0x7f8] [1] Logitech BRIO
+[AVFoundation indev @ 0x7f8] [2] Cam Link: 4K
+[AVFoundation indev @ 0x7f8] AVFoundation audio devices:
+[AVFoundation indev @ 0x7f8] [0] Yeti
+[AVFoundation indev @ 0x7f8] [1] Yeti Stereo Microphone
+`)
+	wantOdd := []Device{
+		{Kind: Video, ID: "0", Name: "Logitech BRIO"},
+		{Kind: Video, ID: "1", Name: "Logitech BRIO"},
+		{Kind: Video, ID: "2", Name: "Cam Link: 4K"},
+		{Kind: Audio, ID: "0", Name: "Yeti"},
+		{Kind: Audio, ID: "1", Name: "Yeti Stereo Microphone", Input: "Yeti Stereo Microphone"},
+	}
+	if !reflect.DeepEqual(odd, wantOdd) {
+		t.Fatalf("got %+v", odd)
+	}
+	if d := (Device{ID: "2", Name: "Cam Link: 4K"}); d.input() != "2" {
+		t.Fatalf("input %q", d.input())
+	}
+}
+
+func TestClassifyExit(t *testing.T) {
+	for _, tc := range []struct {
+		msg  string
+		want exitKind
+	}{
+		// What the connector's ffmpeg wrote when the microphone's index
+		// had moved, then when it was pointed at libx264 it does not have.
+		{"ffmpeg: exit status 251: [AVFoundation indev @ 0x1] Invalid audio device index | [in#0 @ 0x2] Error opening input: Input/output error | Error opening input file 0:1. | Error opening input files: Input/output error", exitInput},
+		{"ffmpeg: exit status 8: Unrecognized option 'preset'. | Error splitting the argument list: Option not found", exitOption},
+		{"ffmpeg: exit status 1: Unknown encoder 'libx264'", exitOption},
+		{"ffmpeg: exit status 1: [vost#0:0 @ 0x1] Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height", exitEncoder},
+		{"ffmpeg: exit status 1: [h264_videotoolbox @ 0x1] Error: cannot create compression session: -12908", exitEncoder},
+		{"ffmpeg: exit status 1: [dshow @ 0x1] Could not find video device with name [Insta360 Link] among source devices of type video. | Error opening input file video=Insta360 Link.", exitInput},
+		{"ffmpeg: exit status 1: [video4linux2,v4l2 @ 0x1] Cannot open video device /dev/video0: No such file or directory | Error opening input file /dev/video0.", exitInput},
+		// An avfoundation warning in the tail does not make an encoder
+		// failure an input one.
+		{"ffmpeg: exit status 1: [AVFoundation indev @ 0x1] Selected framerate (29.970030) is not supported by the device. | [vost#0:0 @ 0x2] Error while opening encoder - maybe incorrect parameters", exitEncoder},
+		{"ffmpeg: signal: killed: ", exitUnknown},
+	} {
+		if got := classifyExit(errors.New(tc.msg)); got != tc.want {
+			t.Errorf("%q: %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+	if classifyExit(nil) != exitUnknown {
+		t.Error("nil")
+	}
+	list := "Encoders:\n V..... = Video\n ------\n V....D h264_videotoolbox    VideoToolbox H.264 Encoder (codec h264)\n V....D libx264              libx264 H.264 / AVC (codec h264)\n"
+	if !listsEncoder(list, "libx264") || !listsEncoder(list, "h264_videotoolbox") || listsEncoder(list, "libx265") || listsEncoder(list, "Video") {
+		t.Error("listsEncoder")
 	}
 }
 
@@ -360,6 +442,18 @@ func TestArgs(t *testing.T) {
 	}
 	if !strings.HasSuffix(mac, url) {
 		t.Errorf("url must be last: %s", mac)
+	}
+	// A device the listing gave a name to (Device.Input) is opened by that
+	// name; one it did not, by index.
+	named := Args("darwin", Options{}, Device{Kind: Video, ID: "0", Name: "Insta360 Link", Input: "Insta360 Link"},
+		&Device{Kind: Audio, ID: "2", Name: "MacBook Pro Microphone", Input: "MacBook Pro Microphone"}, EncoderVideoToolbox, url)
+	if i := slices.Index(named, "-i"); i < 0 || named[i+1] != "Insta360 Link:MacBook Pro Microphone" {
+		t.Errorf("darwin input by name: %q", named)
+	}
+	mixed := Args("darwin", Options{}, Device{Kind: Video, ID: "0", Name: "Insta360 Link", Input: "Insta360 Link"},
+		&Device{Kind: Audio, ID: "2", Name: "Cam Link: 4K"}, EncoderVideoToolbox, url)
+	if i := slices.Index(mixed, "-i"); i < 0 || mixed[i+1] != "Insta360 Link:2" {
+		t.Errorf("darwin input by name and index: %q", mixed)
 	}
 
 	win := join(Args("windows", Options{FPS: 25, VideoSize: "1920x1080", Bitrate: "4M"},
@@ -723,6 +817,104 @@ func TestSourceFallsBackToSoftwareEncoder(t *testing.T) {
 	waitFor(t, "packets", func() bool { return n.n.Load() >= 5 })
 	if src.Encoder() != EncoderX264 {
 		t.Fatalf("encoder %s after hardware failure", src.Encoder())
+	}
+}
+
+// The hardware encoder fails and this ffmpeg has no libx264 (the shipped
+// one is built without GPL parts): the encoder is not swapped for one that
+// is not there, the person is told, and the hardware encoder is retried.
+func TestSourceDoesNotFallBackToAnEncoderTheBuildLacks(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_HW_FAILS", "1")
+	t.Setenv("CAPTURE_FAKE_NO_X264", "1")
+	_, src := testSource(t, Options{})
+	src.earlyExit = 100 * time.Millisecond
+	src.Start()
+	waitFor(t, "trouble", func() bool { return src.Trouble() != "" })
+	if src.Encoder() != EncoderVideoToolbox {
+		t.Fatalf("encoder %s", src.Encoder())
+	}
+	if src.Trouble() != "the video encoder failed to start" {
+		t.Fatalf("trouble %q", src.Trouble())
+	}
+	if src.Publishing() {
+		t.Fatal("publishing")
+	}
+}
+
+// `ffmpeg -encoders` lists libx264 but the encoder does not run (the
+// options are not known): the fallback is undone at once, the hardware
+// encoder is tried again, and libx264 is not tried a second time.
+func TestSourceRevertsAFallbackThatDoesNotRun(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_HW_FAILS", "1")
+	t.Setenv("CAPTURE_FAKE_X264_UNKNOWN", "1")
+	_, src := testSource(t, Options{})
+	src.earlyExit = 100 * time.Millisecond
+	src.Start()
+	waitFor(t, "trouble", func() bool { return src.Trouble() != "" })
+	src.mu.Lock()
+	enc, no := src.encoder, src.noX264
+	src.mu.Unlock()
+	if enc != EncoderVideoToolbox || !no {
+		t.Fatalf("encoder %s, noX264 %v", enc, no)
+	}
+	// Once the hardware encoder works (a second attempt), it publishes.
+	os.Unsetenv("CAPTURE_FAKE_HW_FAILS")
+	srv := src.sink
+	c, n := play(t, srv)
+	defer c.Close()
+	waitFor(t, "packets", func() bool { return n.n.Load() >= 5 })
+	if src.Encoder() != EncoderVideoToolbox || src.Trouble() != "" {
+		t.Fatalf("encoder %s, trouble %q", src.Encoder(), src.Trouble())
+	}
+}
+
+// The microphone's index moved between start and session (a Continuity
+// Camera phone went out of reach): ffmpeg cannot open input 0:1. That is
+// not an encoder failure; the devices are listed and chosen again, and
+// the next ffmpeg opens what is there, on the same encoder.
+func TestSourceChoosesTheDevicesAgainWhenTheInputCannotBeOpened(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_BAD_INPUT", "0:1")
+	srv, src := testSource(t, Options{})
+	src.earlyExit = 100 * time.Millisecond
+	var listed atomic.Int32
+	src.list = func(context.Context, string) ([]Device, error) {
+		listed.Add(1)
+		return []Device{
+			{Kind: Video, ID: "0", Name: "Insta360 Link"},
+			{Kind: Audio, ID: "0", Name: "Yeti Stereo Microphone"},
+		}, nil
+	}
+	src.Start()
+	c, n := play(t, srv)
+	defer c.Close()
+	waitFor(t, "packets", func() bool { return n.n.Load() >= 5 })
+	if src.Encoder() != EncoderVideoToolbox {
+		t.Fatalf("encoder %s: an input failure is not the encoder's", src.Encoder())
+	}
+	if listed.Load() == 0 {
+		t.Fatal("devices were not listed again")
+	}
+	if mic := src.Mic(); mic == nil || mic.ID != "0" {
+		t.Fatalf("mic %+v", mic)
+	}
+	if src.Trouble() != "" {
+		t.Fatalf("trouble %q while publishing", src.Trouble())
+	}
+}
+
+// When the device cannot be chosen again (it is gone), the choice stands
+// and the retry goes on; the person is told what is missing.
+func TestSourceKeepsTheDevicesWhenNoneCanBeChosen(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_BAD_INPUT", "0:1")
+	_, src := testSource(t, Options{})
+	src.earlyExit = 100 * time.Millisecond
+	src.list = func(context.Context, string) ([]Device, error) {
+		return []Device{{Kind: Video, ID: "0", Name: "Insta360 Link"}}, nil
+	}
+	src.Start()
+	waitFor(t, "trouble", func() bool { return strings.HasPrefix(src.Trouble(), "the camera or microphone is not connected") })
+	if mic := src.Mic(); mic == nil || mic.ID != "1" {
+		t.Fatalf("mic %+v", mic)
 	}
 }
 

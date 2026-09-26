@@ -139,9 +139,15 @@ choice is remembered by name, so later starts need no flags and survive
 the devices being renumbered. If a remembered device is not plugged in at
 start, the first of its kind stands in and a line says so (`Insta360 Link
 is not connected; using FaceTime HD Camera.`); the remembered choice stays
-for the day it is back. `-video-size`, `-fps`, `-bitrate` and `-encoder`
-change the picture (defaults 1280x720, 30, 2500k and the hardware encoder,
-with libx264 as fallback). `-bitrate` is the ceiling: while the connection
+for the day it is back. On macOS the devices are opened by name too, so a
+phone coming into or out of reach through Continuity Camera between start
+and session, which renumbers the list, does not point the capture at the
+wrong device or at none; when a device still cannot be opened the list is
+read again and the choice made afresh before the retry. `-video-size`,
+`-fps`, `-bitrate` and `-encoder` change the picture (defaults 1280x720,
+30, 2500k and the hardware encoder, with libx264 as fallback where the
+ffmpeg has it; the one shipped in the app does not). `-bitrate` is the
+ceiling: while the connection
 cannot keep up the program steps the video down to 64, 40 or 24 % of it
 and back up once it has been clear for a while (see below). Leave the
 program running in the background, or set it up as a service; nothing else

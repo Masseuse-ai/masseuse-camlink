@@ -33,15 +33,28 @@ type Source struct {
 	log    *slog.Logger
 	goos   string
 	ffmpeg string
-	cam    Device
-	mic    *Device
-	subs   []Substitution
+	// list enumerates the devices and encoders reads `ffmpeg -encoders`;
+	// Devices and the ffmpeg itself, or what a test puts in their place.
+	list     func(ctx context.Context, ffmpeg string) ([]Device, error)
+	encoders func(ctx context.Context, ffmpeg string) (string, error)
 
-	mu         sync.Mutex
+	mu sync.Mutex
+	// cam, mic and subs are the devices in use; chosen at New and again
+	// (rechoose) when an ffmpeg cannot open them.
+	cam        Device
+	mic        *Device
+	subs       []Substitution
 	cancel     context.CancelFunc
 	done       chan struct{}
 	encoder    string
 	publishing bool
+	// encoderList is `ffmpeg -encoders` once read (hasEncoder), and
+	// noX264 that libx264 is not to be tried again: the build does not
+	// have it, whatever the list said.
+	encoderList *string
+	noX264      bool
+	// trouble is why the camera is on but not sending, for the console.
+	trouble string
 	// bitrate is the video bit rate in force: opts.Bitrate unless Reshape
 	// lowered it.
 	bitrate string
@@ -93,30 +106,60 @@ func newSource(sink *serve.Server, opts Options, logger *slog.Logger, goos, ffmp
 	}
 	return &Source{
 		sink: sink, opts: opts, log: logger, goos: goos, ffmpeg: ffmpeg, cam: cam, mic: mic,
+		list: Devices, encoders: listEncoders,
 		encoder: enc, bitrate: opts.Bitrate, stopGrace: 3 * time.Second, earlyExit: 5 * time.Second,
 	}
 }
 
 // Label names the devices, the way the phone shows them.
 func (s *Source) Label() string {
-	if s.mic == nil {
-		return s.cam.Name + " (video only)"
+	s.mu.Lock()
+	cam, mic := s.cam, s.mic
+	s.mu.Unlock()
+	if mic == nil {
+		return cam.Name + " (video only)"
 	}
-	if s.mic.Name == s.cam.Name {
-		return s.cam.Name
+	if mic.Name == cam.Name {
+		return cam.Name
 	}
-	return s.cam.Name + " + " + s.mic.Name
+	return cam.Name + " + " + mic.Name
 }
 
 // Camera is the selected camera.
-func (s *Source) Camera() Device { return s.cam }
+func (s *Source) Camera() Device {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cam
+}
 
 // Substitutions are the devices asked for that were not connected and what
 // stands in for them (Options.Fallback); nil when every device was found.
-func (s *Source) Substitutions() []Substitution { return s.subs }
+func (s *Source) Substitutions() []Substitution {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.subs
+}
 
 // Mic is the selected microphone, nil for video only.
-func (s *Source) Mic() *Device { return s.mic }
+func (s *Source) Mic() *Device {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mic
+}
+
+// Trouble is why the camera is on but nothing is being sent, in a sentence
+// for the person, or "" while it is sending or has not failed yet.
+func (s *Source) Trouble() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.trouble
+}
+
+func (s *Source) setTrouble(t string) {
+	s.mu.Lock()
+	s.trouble = t
+	s.mu.Unlock()
+}
 
 // Options are the configured shaping options; Options.Bitrate is the
 // ceiling, Bitrate the rate in force.
@@ -211,9 +254,13 @@ func (s *Source) Stop() {
 func (s *Source) setPublishing(v bool) {
 	s.mu.Lock()
 	s.publishing = v
+	if v {
+		s.trouble = ""
+	}
+	cam, enc := s.cam, s.encoder
 	s.mu.Unlock()
 	if v {
-		s.log.Info("capture: camera on", "camera", s.cam.Name, "encoder", s.Encoder())
+		s.log.Info("capture: camera on", "camera", cam.Name, "encoder", enc)
 	}
 }
 
@@ -258,31 +305,219 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 			// Asked for: start the next one now, at the new rate.
 			continue
 		}
-		early := time.Since(started) < s.earlyExit
-		s.mu.Lock()
-		enc := s.encoder
-		fallback := early && s.opts.Encoder == EncoderAuto && enc != EncoderX264
-		if fallback {
-			s.encoder = EncoderX264
-		}
-		s.mu.Unlock()
-		if fallback {
-			s.log.Warn("capture: hardware encoder failed to start; using libx264", "encoder", enc, "err", err)
+		if time.Since(started) >= s.earlyExit {
+			// It ran and broke: start over soon.
+			backoff = time.Second
+			s.log.Warn("capture: ffmpeg exited; restarting", "err", err, "in", backoff)
+			if !s.pause(ctx, backoff) {
+				return
+			}
 			continue
 		}
-		if early {
-			backoff = min(backoff*2, 15*time.Second)
-		} else {
-			backoff = time.Second
+		// It did not get going. What ffmpeg wrote says why, and the
+		// remedy differs: a camera or microphone it could not open is
+		// chosen again (the list may have been renumbered, or the device
+		// gone), an encoder that would not start gives way to libx264
+		// when this ffmpeg has it, and an option it does not know means
+		// the encoder in use is not in this build at all.
+		switch kind := classifyExit(err); kind {
+		case exitInput:
+			s.setTrouble("the camera or microphone could not be opened; choosing the devices again")
+			s.log.Warn("capture: ffmpeg could not open the camera or microphone; choosing the devices again", "err", err)
+			s.rechoose(ctx)
+		case exitOption:
+			if s.revertEncoder(err) {
+				continue
+			}
+			s.setTrouble("ffmpeg does not know an option it was given")
+		default:
+			if s.fallBack(ctx, err) {
+				continue
+			}
+			if kind == exitEncoder {
+				s.setTrouble("the video encoder failed to start")
+			} else {
+				s.setTrouble("ffmpeg stopped as soon as it started")
+			}
 		}
 		s.log.Warn("capture: ffmpeg exited; restarting", "err", err, "in", backoff)
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			s.log.Info("capture: camera off")
+		if !s.pause(ctx, backoff) {
 			return
 		}
+		backoff = min(backoff*2, 15*time.Second)
 	}
+}
+
+// pause waits for d or until ctx ends, reporting whether to go on.
+func (s *Source) pause(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		s.log.Info("capture: camera off")
+		return false
+	}
+}
+
+// rechoose lists the devices again and picks by the configured selectors,
+// for an ffmpeg that could not open its input. On macOS the list is
+// renumbered when a device comes or goes (a phone through Continuity
+// Camera, most often); a device addressed by name (Device.Input) rides
+// that out, one addressed by index does not, and a device may simply be
+// gone, in which case the default or the fallback stands in as at New.
+// When no choice can be made the devices stay as they are, for the retry.
+func (s *Source) rechoose(ctx context.Context) {
+	devs, err := s.list(ctx, s.ffmpeg)
+	if err != nil {
+		s.log.Warn("capture: cannot list the devices", "err", err)
+		return
+	}
+	cam, mic, subs, err := Resolve(devs, s.opts)
+	if err != nil {
+		s.log.Warn("capture: the devices are not all connected", "err", err)
+		s.setTrouble("the camera or microphone is not connected: " + err.Error())
+		return
+	}
+	s.mu.Lock()
+	changed := !sameDevice(cam, s.cam) || (mic == nil) != (s.mic == nil) || (mic != nil && !sameDevice(*mic, *s.mic))
+	s.cam, s.mic, s.subs = cam, mic, subs
+	s.mu.Unlock()
+	if changed {
+		micName := "none"
+		if mic != nil {
+			micName = mic.Name
+		}
+		s.log.Info("capture: devices chosen again", "camera", cam.Name, "cameraInput", cam.input(), "mic", micName)
+	}
+}
+
+func sameDevice(a, b Device) bool { return a.Kind == b.Kind && a.ID == b.ID && a.Name == b.Name }
+
+// fallBack moves an automatically chosen hardware encoder that would not
+// start to libx264, when this ffmpeg has it: the one shipped with the
+// connector is built without GPL parts and so without libx264, and a
+// fallback to an encoder that is not there fails at once on its own
+// options, forever. It reports whether the encoder was changed.
+func (s *Source) fallBack(ctx context.Context, cause error) bool {
+	s.mu.Lock()
+	enc, auto, no := s.encoder, s.opts.Encoder == EncoderAuto, s.noX264
+	s.mu.Unlock()
+	if !auto || enc == EncoderX264 || no {
+		return false
+	}
+	if !s.hasEncoder(ctx, EncoderX264) {
+		s.log.Warn("capture: the encoder failed to start, and this ffmpeg has no libx264 to fall back to; retrying it", "encoder", enc, "err", cause)
+		return false
+	}
+	s.mu.Lock()
+	s.encoder = EncoderX264
+	s.mu.Unlock()
+	s.log.Warn("capture: hardware encoder failed to start; using libx264", "encoder", enc, "err", cause)
+	return true
+}
+
+// revertEncoder undoes a fallback to libx264 that ffmpeg did not know the
+// options of (it does not have the encoder), going back to the hardware
+// encoder and not trying libx264 again. It reports whether it did.
+func (s *Source) revertEncoder(cause error) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hw := HardwareEncoder(s.goos)
+	if s.opts.Encoder != EncoderAuto || s.encoder != EncoderX264 || hw == EncoderX264 {
+		return false
+	}
+	s.encoder, s.noX264 = hw, true
+	s.log.Warn("capture: this ffmpeg does not have libx264 after all; back to the hardware encoder", "encoder", hw, "err", cause)
+	return true
+}
+
+// hasEncoder reports whether this ffmpeg build has the named encoder,
+// reading `ffmpeg -encoders` the first time it is asked. An ffmpeg that
+// cannot be asked is taken not to have it, and asked again next time.
+func (s *Source) hasEncoder(ctx context.Context, name string) bool {
+	s.mu.Lock()
+	list := s.encoderList
+	s.mu.Unlock()
+	if list == nil {
+		out, err := s.encoders(ctx, s.ffmpeg)
+		if err != nil {
+			s.log.Warn("capture: cannot list ffmpeg's encoders", "err", err)
+			return false
+		}
+		list = &out
+		s.mu.Lock()
+		s.encoderList = list
+		s.mu.Unlock()
+	}
+	return listsEncoder(*list, name)
+}
+
+// listEncoders runs `ffmpeg -encoders`.
+func listEncoders(ctx context.Context, ffmpeg string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders").Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// listsEncoder reads `ffmpeg -encoders` for name: after the legend, one
+// line per encoder, its six capability flags then its name
+// (" V....D libx264              libx264 H.264 / AVC ...").
+func listsEncoder(out, name string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && len(f[0]) == 6 && f[1] == name {
+			return true
+		}
+	}
+	return false
+}
+
+// exitKind is what an ffmpeg that exited at once said was wrong.
+type exitKind int
+
+const (
+	exitUnknown exitKind = iota
+	// exitInput: the camera or microphone could not be opened.
+	exitInput
+	// exitEncoder: the encoder could not be opened.
+	exitEncoder
+	// exitOption: an option ffmpeg does not know, which for the options
+	// the connector passes means the encoder they belong to is not in
+	// this build.
+	exitOption
+)
+
+// classifyExit reads the lines an ffmpeg that exited at once wrote (the
+// error from runFFmpeg carries the last of them).
+func classifyExit(err error) exitKind {
+	if err == nil {
+		return exitUnknown
+	}
+	msg := strings.ToLower(err.Error())
+	has := func(parts ...string) bool {
+		for _, p := range parts {
+			if strings.Contains(msg, p) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("unrecognized option", "unknown encoder", "option not found", "codec not found"):
+		return exitOption
+	case has("error while opening encoder", "error opening encoder", "cannot create compression session"):
+		return exitEncoder
+	case has("error opening input", "device index", "no such device", "could not find video device",
+		"could not find audio device", "device not found", "cannot open video device", "cannot open audio device"):
+		return exitInput
+	case has("encoder", "videotoolbox", "mediafoundation", "h264_mf"):
+		return exitEncoder
+	}
+	return exitUnknown
 }
 
 // runFFmpeg runs one ffmpeg until it exits or ctx ends; the error carries
@@ -291,8 +526,9 @@ func (s *Source) runFFmpeg(ctx context.Context, url string) error {
 	s.mu.Lock()
 	opts, enc := s.opts, s.encoder
 	opts.Bitrate = s.bitrate
+	cam, mic := s.cam, s.mic
 	s.mu.Unlock()
-	args := Args(s.goos, opts, s.cam, s.mic, enc, url)
+	args := Args(s.goos, opts, cam, mic, enc, url)
 	cmd := exec.Command(s.ffmpeg, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

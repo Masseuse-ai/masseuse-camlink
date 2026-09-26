@@ -105,9 +105,11 @@ func Args(goos string, o Options, cam Device, mic *Device, encoder, url string) 
 	args := []string{"-hide_banner", "-loglevel", "warning", "-nostats"}
 	switch goos {
 	case "darwin":
-		input := cam.ID
+		// By name where the name stands alone (Device.Input), so the input
+		// survives the list being renumbered between start and session.
+		input := cam.input()
 		if mic != nil {
-			input += ":" + mic.ID
+			input += ":" + mic.input()
 		}
 		args = append(args, "-f", "avfoundation", "-framerate", fps, "-video_size", o.VideoSize,
 			"-thread_queue_size", "512", "-i", input)

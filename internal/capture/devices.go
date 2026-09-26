@@ -28,11 +28,30 @@ const (
 // Device is a camera or microphone ffmpeg can open.
 type Device struct {
 	Kind Kind
-	// ID is what ffmpeg's input needs: the avfoundation index, the dshow
-	// name, the v4l2 node or the PulseAudio source name.
+	// ID is what the listing calls the device: the avfoundation index, the
+	// dshow name, the v4l2 node or the PulseAudio source name.
 	ID string
 	// Name is what the person sees.
 	Name string
+	// Input, when set, is what ffmpeg's -i takes for the device instead of
+	// ID. On macOS it is the device's name: avfoundation opens a device by
+	// name as well as by index, and the index is not stable (an iPhone
+	// coming into or out of reach through Continuity Camera is listed
+	// first and renumbers every device after it, so an index chosen at
+	// start may name nothing, or something else, by the time a session
+	// turns the camera on). Empty when the name would not address this
+	// device alone, a colon in it (avfoundation's separator) or another
+	// device of the kind whose name begins with it (avfoundation matches
+	// the prefix), and then the index is used.
+	Input string
+}
+
+// input is what ffmpeg's -i takes for the device.
+func (d Device) input() string {
+	if d.Input != "" {
+		return d.Input
+	}
+	return d.ID
 }
 
 // ErrNoFFmpeg is returned when ffmpeg cannot be found.
@@ -181,6 +200,29 @@ func parseAVFoundation(out string) []Device {
 				continue
 			}
 			devs = append(devs, Device{Kind: kind, ID: m[1], Name: name})
+		}
+	}
+	return avfInputs(devs)
+}
+
+// avfInputs gives each device its name as the ffmpeg input (Device.Input)
+// when the name addresses it alone: no colon in it, and no other device of
+// the kind whose name begins with it, since avfoundation takes the first
+// device whose name starts with what it is given.
+func avfInputs(devs []Device) []Device {
+	for i, d := range devs {
+		if strings.Contains(d.Name, ":") || d.Name == "" {
+			continue
+		}
+		alone := true
+		for j, o := range devs {
+			if j != i && o.Kind == d.Kind && strings.HasPrefix(o.Name, d.Name) {
+				alone = false
+				break
+			}
+		}
+		if alone {
+			devs[i].Input = d.Name
 		}
 	}
 	return devs

@@ -103,6 +103,9 @@ type offer struct {
 	start      func()
 	stop       func()
 	publishing func() bool
+	// trouble, when the source can say, is why it is on but not sending
+	// (capture.Source.Trouble); "" when it is sending or has not failed.
+	trouble func() string
 	// adapt, when the source can change its bit rate (the computer's own
 	// camera), runs the controller that lowers it while the connection
 	// cannot keep up and raises it back (internal/capture, Adapter); it
@@ -166,7 +169,7 @@ func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *se
 		for _, sub := range src.Substitutions() {
 			fmt.Printf("%s is not connected; using %s.\n", sub.Wanted, sub.Using.Name)
 		}
-		o := &offer{kind: "capture", label: src.Label(), ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing}
+		o := &offer{kind: "capture", label: src.Label(), ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing, trouble: src.Trouble}
 		so := src.Options()
 		o.shape = fmt.Sprintf("%s %d fps, %s", so.VideoSize, so.FPS, src.Encoder())
 		o.adapt = &capture.Adapter{
@@ -403,7 +406,11 @@ func (c *camControl) report(ctx context.Context) {
 				c.printf("Connection congested: dropping video to keep up (backlog %.1f s).\n", c.currentBacklog().Seconds())
 			}
 		} else if !st.Publishing {
-			c.printf("Camera on but not sending yet (waiting for the source).\n")
+			if c.offer.trouble != nil && c.offer.trouble() != "" {
+				c.printf("Camera on but not sending yet: %s.\n", c.offer.trouble())
+			} else {
+				c.printf("Camera on but not sending yet (waiting for the source).\n")
+			}
 		}
 		last, lastAt = st, now
 	}

@@ -363,7 +363,17 @@ remembered in `source.json`:
   By default the capture uses the first camera and the first microphone
   listed, passing over an iPhone or iPad joined through Continuity Camera
   when the computer has a device of its own: those open over the air, in
-  several seconds and not always.
+  several seconds and not always. On macOS avfoundation is given the
+  device's name rather than its index whenever the name addresses it alone
+  (no colon in it, no other device of the kind whose name it begins), since
+  the index is not stable: a Continuity Camera phone is listed first and
+  renumbers everything after it when it comes or goes. An ffmpeg that exits
+  as soon as it starts is read for why: a camera or microphone it could not
+  open has the devices listed and chosen again by the configured selectors
+  before the retry (1, 2, 4, 8, then 15 s apart); an encoder that would not
+  start gives way to libx264 only when `ffmpeg -encoders` lists it (the
+  ffmpeg in the app is built without GPL parts and has none), and a
+  fallback that then fails on its own options is undone and not repeated.
 - **A camera on the network** (`camera`). The connector is an RTSPS client of
   the camera (`-camera-url rtsps://user:password@host:port/path`; the host
   must be a private-network address or a name resolving only to such
