@@ -278,7 +278,7 @@ jobs:
           command -v nasm >/dev/null || brew install nasm
           command -v pkg-config >/dev/null || brew install pkgconf
           echo "image=${ImageOS:-macos}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: ffmpeg-cache
         with:
           path: dist/ffmpeg
@@ -295,6 +295,14 @@ jobs:
         run: |
           lipo -archs dist/ffmpeg/ffmpeg | grep -q x86_64 || { echo "ffmpeg is not universal" >&2; exit 1; }
           CAPTURE_REAL_FFMPEG="${PWD}/dist/ffmpeg/ffmpeg" go test -count=1 -run 'TestRealFFmpegPublishes' -v ./internal/capture/
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # Saved as soon as it has passed, not at the end of the job: a failure
+        # further on (signing, notarization) then does not cost the build
+        # again on the next tag.
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        with:
+          path: dist/ffmpeg
+          key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
       - name: Assemble the bundle
         run: sh packaging/macos/build-app.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink -f dist/ffmpeg -o dist
       - name: Sign, notarize and staple the bundle

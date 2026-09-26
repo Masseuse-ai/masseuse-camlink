@@ -53,14 +53,33 @@ security create-keychain -p "$kcpass" "$keychain"
 security set-keychain-settings -lut 7200 "$keychain"
 security unlock-keychain -p "$kcpass" "$keychain"
 printf '%s' "$MACOS_SIGN_P12" | base64 -d > "$work/sign.p12"
-security import "$work/sign.p12" -k "$keychain" -P "$MACOS_SIGN_PASSWORD" -f pkcs12 \
+# The identity was written by quill (`p12 attach-chain`) in the modern
+# PKCS#12 form, PBES2 with AES-256, which `security import` does not read
+# ("Unable to decode the provided data"). Re-encode it in the form it does
+# read, through the system OpenSSL, naming the ciphers so the result does not
+# depend on that OpenSSL's defaults; the chain travels along. The PEM step
+# holds the key in the clear for a moment, inside the 0700 work directory,
+# and is removed at once; OpenSSL's messages are shown only on failure.
+/usr/bin/openssl pkcs12 -in "$work/sign.p12" -passin env:MACOS_SIGN_PASSWORD -nodes \
+  -out "$work/sign.pem" 2>"$work/openssl.err" \
+  || { echo "MACOS_SIGN_P12 does not decode as a PKCS#12 file with MACOS_SIGN_PASSWORD:" >&2; cat "$work/openssl.err" >&2; exit 1; }
+/usr/bin/openssl pkcs12 -export -in "$work/sign.pem" -passout env:MACOS_SIGN_PASSWORD \
+  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
+  -out "$work/sign-import.p12" 2>"$work/openssl.err" \
+  || { echo "re-encoding the signing identity failed:" >&2; cat "$work/openssl.err" >&2; exit 1; }
+rm -f "$work/sign.pem" "$work/sign.p12"
+security import "$work/sign-import.p12" -k "$keychain" -P "$MACOS_SIGN_PASSWORD" -f pkcs12 \
   -T /usr/bin/codesign -T /usr/bin/security >/dev/null
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpass" "$keychain" >/dev/null
 # shellcheck disable=SC2046
 security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '" ')
-rm -f "$work/sign.p12"
+rm -f "$work/sign-import.p12"
 if ! security find-identity -v -p codesigning "$keychain" | grep -q "$APPLE_CERT_SHA1"; then
-  echo "the certificate $APPLE_CERT_SHA1 (VERIFY.md) is not in MACOS_SIGN_P12" >&2
+  echo "the certificate $APPLE_CERT_SHA1 (VERIFY.md) is not a valid code-signing identity in MACOS_SIGN_P12" >&2
+  # counts only: the identities' names are not for the log
+  echo "valid: $(security find-identity -v -p codesigning "$keychain" | grep -c '^ *[0-9]*)')," \
+    "in the file: $(security find-identity -p codesigning "$keychain" | grep -c '^ *[0-9]*)')," \
+    "certificates imported: $(security find-certificate -a "$keychain" | grep -c '^keychain:')" >&2
   exit 1
 fi
 echo "signing identity $APPLE_CERT_SHA1 ready"
