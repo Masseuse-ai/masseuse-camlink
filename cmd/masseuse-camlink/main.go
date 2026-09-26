@@ -155,6 +155,9 @@ func main() {
 		}
 	}
 	cam := &camControl{sink: sink, offer: off, log: logger}
+	// Unit driver helpers in the units directory join the device families
+	// (helpers.go); the header says which, or why none.
+	fmt.Println(registerHelpers(ctx, *stateDir, logger))
 	if n := len(id.PairedHashes()); n > 0 {
 		fmt.Printf("Paired with %d phone(s). Sessions that use this camera connect automatically.\n", n)
 	}

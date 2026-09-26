@@ -30,7 +30,7 @@ disk image are in addition signed with an Apple Developer ID and notarized
 and how to compare them with a rebuild regardless).
 
 `sh scripts/verify-release.sh vX.Y.Z` runs the release checks below (1 to 3,
-the macOS app and the Windows package included); `sh scripts/verify-enclave.sh`
+the macOS app, the Windows package and the unit driver helpers included); `sh scripts/verify-enclave.sh`
 runs the enclave check (4). (Both are plain POSIX sh; the repository stores
 them without the executable bit.)
 
@@ -312,6 +312,73 @@ Masseuse.ai.exe` prints those strings as Explorer reads them (ProductName
 `Masseuse.ai`, CompanyName `FemLed, Inc.`, FileDescription `Masseuse.ai for
 your computer`); the resource carries no version number, the version being
 what `Masseuse.ai.exe --version` and the build information say.
+
+### Unit driver helpers
+
+From v0.10.0 the downloads carry unit driver helpers ([docs/UNITS.md](docs/UNITS.md)):
+programs named `camlink-unit-<name>` in `Masseuse.app/Contents/Helpers/units/`,
+`units\` in the Windows zip and `units/` in the archives, which the
+connector runs as child processes to serve stimulation units whose drivers
+are not in this repository. They are the one part of a download that is
+neither built from this repository nor rebuilt byte for byte here; what
+can be checked is that every helper in a release is exactly one named in
+a manifest signed by masseuse.ai's helpers key, for the helpers version
+the tag pins.
+
+The key's public half is `packaging/units/cosign.pub` at the tag, and
+`packaging/units/VERSION` is the helpers version. The manifest and the
+helpers themselves are at `https://masseuse.ai/app/units/<version>/`:
+
+```sh
+V=$(curl -fsSL https://raw.githubusercontent.com/FemLed/masseuse-camlink/vX.Y.Z/packaging/units/VERSION)
+curl -fsSLO https://raw.githubusercontent.com/FemLed/masseuse-camlink/vX.Y.Z/packaging/units/cosign.pub
+curl -fsSLO "https://masseuse.ai/app/units/$V/manifest.json"
+curl -fsSLO "https://masseuse.ai/app/units/$V/manifest.json.sigstore.json"
+cosign verify-blob --key cosign.pub --bundle manifest.json.sigstore.json manifest.json
+jq -r '.files[] | "\(.os)/\(.arch)  \(.sha256)  \(.name)"' manifest.json
+```
+
+The manifest names each helper once per operating system and
+architecture, with the hash of the file as published. In the Mac bundle
+the helpers are universal binaries signed with the same Developer ID as
+the app, so they are compared the way the app's executable is, with
+`machostrip`, which removes the signature and hashes each architecture on
+its own; the other side is the thin `darwin/arm64` and `darwin/amd64`
+files, fetched and checked against the manifest by `packaging/units/fetch.sh`
+and stripped the same way (Go's linker gives a darwin/arm64 binary an
+ad-hoc signature, so the thin arm64 file's raw hash is not its stripped
+one):
+
+```sh
+for arch in arm64 amd64; do
+  sh packaging/units/fetch.sh "$V" darwin "$arch" "units-$arch"   # from the tag's checkout
+  go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 units-$arch/camlink-unit-*
+done
+hdiutil attach -readonly -nobrowse Masseuse.ai-X.Y.Z.dmg
+for f in /Volumes/Masseuse.ai/Masseuse.app/Contents/Helpers/units/camlink-unit-*; do
+  go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 "$f"
+done
+# each "(arm64)" and "(amd64)" line of a bundled helper is the stripped
+# hash of the thin file of the same name for that architecture
+hdiutil detach /Volumes/Masseuse.ai
+```
+
+The Windows zip's and the archives' helpers carry no signature and hash as
+they are: `unzip -p Masseuse.ai-X.Y.Z-windows.zip 'units/*.exe' | sha256sum`
+against the `windows/amd64` entry, `tar -xOf masseuse-camlink_X.Y.Z_linux_amd64.tar.gz
+units/camlink-unit-<name> | sha256sum` against `linux/amd64`. The release
+workflow runs the manifest check itself (`packaging/units/fetch.sh`)
+before it bundles anything, so a release whose helpers were not the
+manifest's would not have them, and `checksums.txt`, `checksums-darwin.txt`
+and `checksums-windows.txt` cover the archives, the image and the zip the
+helpers sit in, provenance and all.
+
+`scripts/verify-release.sh` runs the manifest check and the archive and
+zip comparisons as step 10 when the tag carries `packaging/units/VERSION`.
+
+A connector without helpers is this repository alone: remove
+`Contents/Helpers/units` (or run with `-estim-helpers none`) and it serves
+the Mastago, and only the Mastago, from the drivers in the tree.
 
 ## 4. The enclave your camera streams to
 

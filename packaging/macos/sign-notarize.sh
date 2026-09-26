@@ -14,10 +14,13 @@
 #   MACOS_NOTARY_KEY        the App Store Connect API key, .p8, base64
 #   MACOS_NOTARY_KEY_ID     its key id
 #   MACOS_NOTARY_ISSUER_ID  its issuer id
-# For the bundle, ffmpeg is signed first (hardened runtime, with
-# ffmpeg.entitlements for the camera and microphone), then the bundle
-# (hardened runtime); the bundle is zipped for the notary service and
-# stapled. The disk image is signed, notarized and stapled as it is.
+# For the bundle, the helpers are signed first: ffmpeg (hardened runtime,
+# with ffmpeg.entitlements for the camera and microphone) and each unit
+# driver helper in Contents/Helpers/units (hardened runtime, identifier
+# ai.masseuse.camlink.unit.<name>, no entitlements: a helper gets no camera
+# or microphone; docs/UNITS.md), then the bundle (hardened runtime); the
+# bundle is zipped for the notary service and stapled. The disk image is
+# signed, notarized and stapled as it is.
 set -eu
 
 # The leaf certificate's SHA-1 fingerprint (VERIFY.md, "The macOS binaries";
@@ -112,6 +115,12 @@ case "$kind" in
     echo "==> signing $target"
     $sign --options runtime --identifier ai.masseuse.camlink.ffmpeg \
       --entitlements "$here/ffmpeg.entitlements" "$target/Contents/Helpers/ffmpeg"
+    for unit in "$target"/Contents/Helpers/units/camlink-unit-*; do
+      [ -f "$unit" ] || continue
+      uname=$(basename "$unit"); uname=${uname#camlink-unit-}
+      $sign --options runtime --identifier "ai.masseuse.camlink.unit.$uname" "$unit"
+      describe "$unit"
+    done
     $sign --options runtime "$target"
     codesign --verify --deep --strict --verbose=2 "$target"
     describe "$target"

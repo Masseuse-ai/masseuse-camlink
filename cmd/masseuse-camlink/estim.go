@@ -316,6 +316,7 @@ func (l *estimLink) sessionCleared(sessionID string) {
 // probeEstim is the `estim probe` command: say what each device family can
 // see, find the device, print what it reports, and leave it released.
 func probeEstim(ctx context.Context, stateDir string, log *slog.Logger) int {
+	fmt.Println(registerHelpers(ctx, stateDir, log))
 	finders := deviceFinders(finderConfig{stateDir: stateDir, log: log})
 	defer func() { _ = finders.Close() }()
 	if len(finders) == 0 {

@@ -430,7 +430,12 @@ intensity 0..25, 32 programs fixed in its firmware, a countdown, electrode
 contact detection, one power range. The design is device-neutral: a driver
 speaks one device's protocol and a finder looks for one device family; the
 program tries its registered families in order (`cmd/masseuse-camlink/
-drivers.go`), and a private build may register more.
+drivers.go`). Further families come from unit driver helpers: separate
+programs in the units directory that the connector runs and speaks to over
+their standard input and output ([UNITS.md](UNITS.md)); each one found at
+startup is registered after the Mastago, and everything in this section
+holds for a device behind a helper as it does for the Mastago, since the
+helper is behind the same `Driver` interface, bounds and all.
 
 ### 7.1 Finding the device
 
@@ -616,19 +621,19 @@ Mastago: `{levelMax: 25, channels: ["a"], modes: [0..31], tempo: false,
 levelMaxDefault: 15, timer: true, loadDetect: true}`.
 
 `kind` names the device family and is what the service keys its behaviour
-on. The names are fixed in `internal/estim/estim.go` (`Kinds`) whether or
-not this program carries a driver for the family:
+on. The driver in this program reports one name; a unit driver helper
+(`docs/UNITS.md`: a driver published by masseuse.ai as a separate program
+the connector runs, not part of this repository) reports its own family's
+name, which the connector passes through as it is:
 
-| `kind` | device | driver in this program |
+| `kind` | device | driver |
 |---|---|---|
-| `mastago` | Mastago TENS unit, Bluetooth Low Energy | yes |
-| `estim-2b` | E-Stim Systems 2B, serial link | not yet |
-| `dglabs-coyote` | DG-Lab Coyote, Bluetooth Low Energy | not yet |
-| `tens` | any other transcutaneous electrical nerve stimulation unit | not yet |
+| `mastago` | Mastago TENS unit, Bluetooth Low Energy | in this program |
+| `tens` | any other transcutaneous electrical nerve stimulation unit | none yet |
+| any other | the helper's family | a unit driver helper |
 
-A private build may carry drivers for further kinds; the service validates
-kinds against its own table and treats a descriptor with a `kind` it does
-not know as malformed.
+The service validates kinds against its own table and treats a descriptor
+with a `kind` it does not know as malformed.
 
 `capabilities.levelMax` is the top of the device's own scale (25 for the
 Mastago): the most a session's `levelMax` may be. What a command may set

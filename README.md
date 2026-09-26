@@ -306,12 +306,37 @@ connector cannot tell the unit's replies to one from the other's. Close the
 other program before a session; a write of its that spoils the connector's
 read-back fails the command and puts the unit to zero.
 
+**Stimulation units beyond the Mastago: driver helpers.** The Mastago
+driver is in this repository. Drivers for further units are published by
+masseuse.ai as *unit driver helpers*: separate programs named
+`camlink-unit-<name>` that the download carries beside `ffmpeg`
+(`Contents/Helpers/units/` in the macOS application, `units\` in the
+Windows zip, `units/` next to the program in the other archives) and that
+this program runs as child processes. They are not part of this repository
+and not open source; they are ordinary signed binaries anyone may inspect,
+listed with their checksums in a signed manifest the release verifies
+before bundling them ([VERIFY.md](VERIFY.md)). A helper is handed its
+standard input and output and a state directory of its own, and finds its
+unit itself (a serial port, a Bluetooth peripheral); it never sees the
+camera or the microphone, and it speaks to the service only through this
+program, which holds every helper's unit to the same limits as the
+Mastago. The first line about them in the window says which were found:
+
+```
+Unit drivers: Mastago (built in) + 1 helper(s): example.
+```
+
+`-estim-helpers <dir>` looks in another directory; `-estim-helpers none`
+runs without any. Remove `Helpers/units` from the application and you have
+a connector that serves the Mastago alone, built entirely from this
+repository. The protocol between the two, and how to write a helper, is
+[docs/UNITS.md](docs/UNITS.md).
+
 What travels between the connector and the service for this is described in
 [docs/PROTOCOL.md](docs/PROTOCOL.md), section 7. It does not go through the
 camera tunnel and the enclave never sees it. The connector names the device
-family it serves with a fixed `kind` (`mastago`; `estim-2b`,
-`dglabs-coyote` and `tens` are reserved for the E-Stim Systems 2B, the
-DG-Lab Coyote and other TENS units, without a driver yet), and the service
+family it serves with a `kind` (`mastago` for the driver in this
+repository; a unit driver helper names its own family), and the service
 shapes the session on that name: a session with no device is guided
 differently from one with a device connected.
 

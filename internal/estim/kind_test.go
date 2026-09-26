@@ -8,7 +8,7 @@ import (
 )
 
 func TestKindsAreKnownAndStable(t *testing.T) {
-	want := []estim.Kind{"mastago", "estim-2b", "dglabs-coyote", "tens"}
+	want := []estim.Kind{"mastago", "tens"}
 	if len(estim.Kinds) != len(want) {
 		t.Fatalf("Kinds = %v, want %v", estim.Kinds, want)
 	}
@@ -20,7 +20,7 @@ func TestKindsAreKnownAndStable(t *testing.T) {
 			t.Fatalf("%q should be known", k)
 		}
 	}
-	for _, k := range []estim.Kind{"", "MASTAGO", "Mastago", "coyote"} {
+	for _, k := range []estim.Kind{"", "MASTAGO", "Mastago", "other"} {
 		if k.Known() {
 			t.Fatalf("%q should not be known", k)
 		}

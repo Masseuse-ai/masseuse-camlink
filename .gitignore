@@ -6,3 +6,4 @@
 *.out
 testdata/fuzz/
 .DS_Store
+/units-bin/

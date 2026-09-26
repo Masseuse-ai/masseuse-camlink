@@ -38,7 +38,10 @@ running on that state directory, opening the app again only brings Terminal
 forward. The bundle is `LSUIElement`, so nothing bounces in the Dock.
 `ffmpeg` ships inside (`Contents/Helpers/ffmpeg`, built by
 `packaging/ffmpeg/build.sh`), and the connector looks there before it looks
-at `PATH`, so there is no Homebrew step.
+at `PATH`, so there is no Homebrew step. The unit driver helpers ship
+beside it (`Contents/Helpers/units/`, fetched and verified by
+`packaging/units/fetch.sh`; `docs/UNITS.md`), and the connector looks
+there for them; a bundle without that directory serves the Mastago alone.
 
 ```
 Masseuse.app/Contents/
@@ -46,6 +49,7 @@ Masseuse.app/Contents/
   PkgInfo
   MacOS/Masseuse                 the connector, universal, Developer ID + hardened runtime
   Helpers/ffmpeg                 universal, Developer ID + hardened runtime + ffmpeg.entitlements
+  Helpers/units/camlink-unit-*   unit driver helpers (docs/UNITS.md), universal, Developer ID + hardened runtime; from packaging/units/fetch.sh, absent in a build without them
   Resources/masseuse-camlink.icns  the icon for macOS 13 to 15 (CFBundleIconFile)
   Resources/Assets.car           the icon for macOS 26, compiled from masseuse-camlink.icon (CFBundleIconName)
   Resources/LICENSE, NOTICE      the connector's (Apache-2.0)
@@ -59,8 +63,8 @@ Masseuse.app/Contents/
 | --- | --- |
 | `Info.plist` | the bundle's property list, `@VERSION@` filled in by `build-app.sh`; `CFBundleName`, `CFBundleDisplayName` and `CFBundleExecutable` all `Masseuse`, the bundle's name (above); `LSMinimumSystemVersion` 13.0 (Go's floor for macOS binaries), `LSUIElement`, the camera, microphone and Bluetooth usage strings |
 | `ffmpeg.entitlements` | camera and microphone, which a hardened-runtime process may open only with these |
-| `build-app.sh` | assembles the bundle from a connector binary, `packaging/ffmpeg/build.sh`'s output and the files here, and compiles the macOS 26 icon with `actool` (Xcode 26 or later, on macOS 26; `DEVELOPER_DIR` picks an Xcode when the selected one is older); `sh` otherwise, runs unsigned in `ci.yml` on every pull request |
-| `sign-notarize.sh` | temporary keychain from the release secrets, `codesign` (ffmpeg first, then the bundle, `--options runtime --timestamp`), `notarytool submit --wait`, `stapler staple`; the same for the disk image. The identity is picked by the certificate's SHA-1 from VERIFY.md, never by its subject, and the subject is never printed |
+| `build-app.sh` | assembles the bundle from a connector binary, `packaging/ffmpeg/build.sh`'s output, the unit driver helpers (`-u`, `packaging/units/fetch.sh`'s darwin/all output, each checked universal) and the files here, and compiles the macOS 26 icon with `actool` (Xcode 26 or later, on macOS 26; `DEVELOPER_DIR` picks an Xcode when the selected one is older); `sh` otherwise, runs unsigned in `ci.yml` on every pull request |
+| `sign-notarize.sh` | temporary keychain from the release secrets, `codesign` (ffmpeg and each `Helpers/units/camlink-unit-*` first, the latter as `ai.masseuse.camlink.unit.<name>` without entitlements, then the bundle, `--options runtime --timestamp`), `notarytool submit --wait`, `stapler staple`; the same for the disk image. The identity is picked by the certificate's SHA-1 from VERIFY.md, never by its subject, and the subject is never printed |
 | `assess.sh` | the gates: `codesign --verify --deep --strict`, `spctl --assess --type execute` (bundle) and `--type open --context context:primary-signature` (image) answering `accepted` with `source=Notarized Developer ID`, `stapler validate`; the release fails if any is false |
 | `build-dmg.sh` | the app and an `Applications` shortcut on an HFS+ image named `Masseuse.ai` with the volume icon set, compressed read-only (`hdiutil`); file name `Masseuse.ai-<version>.dmg` |
 | `masseuse-camlink.icns` | the icon (below) as a bitmap, for macOS 13 to 15; the file keeps its name, `CFBundleIconFile` points at it |

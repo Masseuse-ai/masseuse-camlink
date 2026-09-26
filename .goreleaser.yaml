@@ -84,6 +84,16 @@ archives:
       - NOTICE
       - README.md
       - VERIFY.md
+      # The unit driver helpers for the archive's platform (docs/UNITS.md),
+      # fetched and verified by packaging/units/fetch.sh into
+      # units-bin/<os>_<arch>/ by the workflow before goreleaser runs
+      # (the darwin archives carry the thin binaries for their
+      # architecture; the application bundle takes the universal one). A
+      # platform without helpers gives an archive without a units/
+      # directory, and the connector then serves the Mastago alone.
+      - src: "units-bin/{{ .Os }}_{{ .Arch }}/camlink-unit-*"
+        dst: units
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt

@@ -6,32 +6,37 @@
 # sh: runs on the Linux CI runner (a stand-in ffmpeg on pull requests) and
 # under Git's bash on the Windows release runner. Nothing is signed here.
 #
-# usage: sh packaging/windows/build-zip.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR -o OUTDIR
+# usage: sh packaging/windows/build-zip.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR
 #   VERSION     the release version without the v
 #   CONNECTOR   the masseuse-camlink.exe to pack (goreleaser's windows_amd64
 #               binary); it becomes Masseuse.ai.exe, the same bytes
 #   FFMPEG_DIR  packaging/ffmpeg/build.sh -t windows's output directory:
 #               ffmpeg.exe and licenses/ (their absence is an error: the
 #               package promises a camera without an install step)
+#   UNITS_DIR   packaging/units/fetch.sh's output for windows/amd64: the unit
+#               driver helpers (camlink-unit-*.exe, docs/UNITS.md), packed
+#               under units\; without -u the package has none and serves
+#               the Mastago alone
 #   OUTDIR      OUTDIR/Masseuse.ai-VERSION-windows.zip is (re)created
 # needs: zip (Info-ZIP), or 7z where there is none (the Windows runner)
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-version="" connector="" ffmpegdir="" outdir=""
+version="" connector="" ffmpegdir="" unitsdir="" outdir=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -v) version="$2"; shift 2 ;;
     -b) connector="$2"; shift 2 ;;
     -f) ffmpegdir="$2"; shift 2 ;;
+    -u) unitsdir="$2"; shift 2 ;;
     -o) outdir="$2"; shift 2 ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [ -n "$version" ] && [ -n "$connector" ] && [ -n "$ffmpegdir" ] && [ -n "$outdir" ] ||
-  { echo "usage: $0 -v VERSION -b CONNECTOR -f FFMPEG_DIR -o OUTDIR" >&2; exit 2; }
+  { echo "usage: $0 -v VERSION -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR" >&2; exit 2; }
 case "$version" in
   [0-9]*.[0-9]*.[0-9]*) ;;
   *) echo "version $version is not X.Y.Z" >&2; exit 2 ;;
@@ -39,6 +44,9 @@ esac
 [ -f "$connector" ] || { echo "no connector at $connector" >&2; exit 2; }
 [ -f "$ffmpegdir/ffmpeg.exe" ] || { echo "no ffmpeg.exe at $ffmpegdir/ffmpeg.exe (packaging/ffmpeg/build.sh -t windows)" >&2; exit 2; }
 [ -d "$ffmpegdir/licenses" ] || { echo "no $ffmpegdir/licenses (packaging/ffmpeg/build.sh)" >&2; exit 2; }
+if [ -n "$unitsdir" ]; then
+  ls "$unitsdir"/camlink-unit-*.exe >/dev/null 2>&1 || { echo "no camlink-unit-*.exe in $unitsdir (packaging/units/fetch.sh)" >&2; exit 2; }
+fi
 if command -v zip >/dev/null 2>&1; then
   ziptool=zip
 elif command -v 7z >/dev/null 2>&1; then
@@ -57,6 +65,12 @@ mkdir -p "$staging/licenses"
 
 cp "$connector" "$staging/$name.exe"
 cp "$ffmpegdir/ffmpeg.exe" "$staging/ffmpeg.exe"
+# The unit driver helpers, where the connector looks for them next to the
+# program (cmd/masseuse-camlink/helpers.go): units\camlink-unit-*.exe.
+if [ -n "$unitsdir" ]; then
+  mkdir -p "$staging/units"
+  cp "$unitsdir"/camlink-unit-*.exe "$staging/units/"
+fi
 cp "$here/README.txt" "$staging/README.txt"
 cp "$repo/LICENSE" "$repo/NOTICE" "$staging/"
 cp "$here/../ffmpeg/THIRD_PARTY.md" "$staging/THIRD_PARTY.md"

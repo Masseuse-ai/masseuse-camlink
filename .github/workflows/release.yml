@@ -71,6 +71,18 @@ jobs:
           done
           sha256sum gateway-bin/*
           go version -m gateway-bin/masseuse-camlink-gateway_${version}_linux_amd64
+      - name: The unit driver helpers for every archive, verified
+        # packaging/units/fetch.sh: the helpers version packaging/units/VERSION
+        # pins, from masseuse.ai/app/units, the manifest's signature checked
+        # against packaging/units/cosign.pub and each file against the
+        # manifest (docs/UNITS.md). goreleaser packs units-bin/<os>_<arch>/
+        # into the archive for that platform (.goreleaser.yaml).
+        run: |
+          units=$(tr -d '[:space:]' < packaging/units/VERSION)
+          for target in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm; do
+            sh packaging/units/fetch.sh "$units" "${target%/*}" "${target#*/}" "units-bin/${target%/*}_${target#*/}"
+          done
+          find units-bin -type f | sort
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -307,8 +319,16 @@ jobs:
         with:
           path: dist/ffmpeg
           key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
+      - name: The unit driver helpers, universal, verified
+        # The same fetch as the goreleaser job's, for darwin/all: the
+        # universal helpers the bundle takes (Contents/Helpers/units/,
+        # docs/UNITS.md), each checked against the signed manifest.
+        run: |
+          units=$(tr -d '[:space:]' < packaging/units/VERSION)
+          sh packaging/units/fetch.sh "$units" darwin all dist/units
+          for f in dist/units/camlink-unit-*; do echo "$(basename "$f"): $(lipo -archs "$f")"; done
       - name: Assemble the bundle
-        run: sh packaging/macos/build-app.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink -f dist/ffmpeg -o dist
+        run: sh packaging/macos/build-app.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink -f dist/ffmpeg -u dist/units -o dist
       - name: Sign, notarize and staple the bundle
         env:
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
@@ -322,6 +342,36 @@ jobs:
         run: sh packaging/macos/sign-notarize.sh app dist/Masseuse.app
       - name: Gatekeeper accepts the bundle
         run: sh packaging/macos/assess.sh app dist/Masseuse.app
+      - name: The bundle's helpers are the manifest's, and the connector finds them
+        # The thin darwin helpers, fetched and checked against the manifest
+        # like the universal ones; then, signatures stripped on both sides
+        # (the bundle's carry the Developer ID, the thin arm64 Go's ad-hoc
+        # one), each slice of a bundled helper is byte for byte the thin
+        # binary for its architecture. And the bundle's connector, run from
+        # its own place, names the helpers on its first line
+        # (Contents/Helpers/units is where it looks).
+        run: |
+          units=$(tr -d '[:space:]' < packaging/units/VERSION)
+          for arch in arm64 amd64; do
+            sh packaging/units/fetch.sh "$units" darwin "$arch" "dist/units-${arch}"
+          done
+          n=0
+          for f in dist/Masseuse.app/Contents/Helpers/units/camlink-unit-*; do
+            name=$(basename "$f")
+            go run ./cmd/machostrip -sha256 "$f" | tee "helper-${name}.txt"
+            for arch in arm64 amd64; do
+              thin=$(go run ./cmd/machostrip -sha256 "dist/units-${arch}/${name}" | cut -d' ' -f1)
+              grep -qF "${thin}  ${f} (${arch})" "helper-${name}.txt" ||
+                { echo "${name} (${arch}) in the bundle is not the manifest's darwin/${arch} binary" >&2; exit 1; }
+              echo "${name} (${arch}) is the manifest's darwin/${arch} binary (${thin})"
+            done
+            n=$((n + 1))
+          done
+          test "$n" -gt 0 || { echo "the bundle carries no helpers" >&2; exit 1; }
+          echo "${n} helper(s) in the bundle, each the manifest's"
+          dist/Masseuse.app/Contents/MacOS/Masseuse -state-dir "${RUNNER_TEMP}/probe-state" -estim-ble off estim probe > probe.txt 2>&1 || true
+          grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt ||
+            { cat probe.txt; echo "the bundle's connector does not find its helpers" >&2; exit 1; }
       - name: The bundle's executable is the archives' binaries
         # Signature stripped, each slice of the universal binary is byte for
         # byte the archive's binary for that architecture, which the
@@ -508,8 +558,24 @@ jobs:
           grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
           grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
           grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
+      - name: The unit driver helpers for Windows, verified
+        run: |
+          units=$(tr -d '[:space:]' < packaging/units/VERSION)
+          sh packaging/units/fetch.sh "$units" windows amd64 dist/units
       - name: Assemble the zip
-        run: sh packaging/windows/build-zip.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -o dist
+        run: sh packaging/windows/build-zip.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -u dist/units -o dist
+      - name: The zip's connector finds its helpers
+        # units\ next to the program is where the connector looks
+        # (cmd/masseuse-camlink/helpers.go); the extracted package names the
+        # helper on its first line.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir extracted && (cd extracted && 7z x -y "../dist/Masseuse.ai-${version}-windows.zip" > /dev/null)
+          ls extracted/units
+          n=$(ls extracted/units/camlink-unit-*.exe | wc -l | tr -d ' ')
+          extracted/Masseuse.ai.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/probe-state")" -estim-ble off estim probe > probe.txt 2>&1 || true
+          grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt ||
+            { cat probe.txt; echo "the package's connector does not find its helpers" >&2; exit 1; }
       - name: checksums-windows.txt, signed keyless
         # The zip, hashed and signed like checksums.txt; the ffmpeg source
         # tarballs are the ones checksums-darwin.txt lists (the same bytes).

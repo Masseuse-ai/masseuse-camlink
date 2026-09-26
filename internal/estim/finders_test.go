@@ -134,7 +134,7 @@ func TestFindersListAndSelectAcrossFamilies(t *testing.T) {
 	}}
 	plain := &stubFinder{name: "plain"}
 	serial := &listingFinder{stubFinder: stubFinder{name: "serial"}, listErr: errors.New("no serial ports"),
-		units: []estim.Unit{{ID: "/dev/cu.usbserial-1", Kind: estim.KindEstim2B, Label: "E-Stim Systems 2B"}}}
+		units: []estim.Unit{{ID: "/dev/cu.usbserial-1", Kind: "serialkind", Label: "A serial unit"}}}
 	fs := estim.Finders{ble, plain, serial}
 	units, err := fs.List(ctx)
 	if err == nil || err.Error() != "no serial ports" {

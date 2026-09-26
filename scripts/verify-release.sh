@@ -17,7 +17,13 @@
 #      Gatekeeper's own verdict on the app and the image,
 #   9. when the release carries the Windows package (checksums-windows.txt):
 #      its checksum file's signature, the zip's hash and provenance, and
-#      that the executable in the zip is the windows/amd64 archive's.
+#      that the executable in the zip is the windows/amd64 archive's,
+#  10. when the release bundles unit driver helpers (packaging/units/VERSION
+#      at the tag; v0.10.0 and later): the helpers manifest's signature by
+#      the key whose public half the tag carries, and that every helper in
+#      the linux/amd64 archive and the Windows zip is the manifest's byte for
+#      byte (the app's are compared by the release itself, signature
+#      stripped; VERIFY.md "Unit driver helpers" says how by hand).
 #
 # usage: scripts/verify-release.sh vX.Y.Z [download dir]
 # needs: curl, sha256sum (or shasum), cosign (3 or later for the image),
@@ -309,6 +315,52 @@ if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/ch
 else
   rm -f checksums-windows.txt
   echo "==> 9. the Windows package: none in this release (no checksums-windows.txt)"
+fi
+
+# Unit driver helpers (VERIFY.md 3, "Unit driver helpers"): programs the
+# downloads carry that are not built from this repository; each is named,
+# with its hash, in a manifest signed by masseuse.ai's helpers key, whose
+# public half the tag carries. Releases before v0.10.0 have none.
+raw="https://raw.githubusercontent.com/$REPO/$tag/packaging/units"
+if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
+  units=$(tr -d '[:space:]' < units-VERSION)
+  echo "==> 10. unit driver helpers $units: manifest signature, and the files in the archives"
+  fetch_units() { curl -fsSL -o "$2" "$1" || { echo "    could not fetch $1" >&2; exit 1; }; }
+  fetch_units "$raw/cosign.pub" units-cosign.pub
+  fetch_units "https://masseuse.ai/app/units/$units/manifest.json" units-manifest.json
+  fetch_units "https://masseuse.ai/app/units/$units/manifest.json.sigstore.json" units-manifest.json.sigstore.json
+  cosign verify-blob --key units-cosign.pub --bundle units-manifest.json.sigstore.json units-manifest.json >/dev/null
+  echo "    ok  manifest.json signed by the helpers' key at $tag"
+  if command -v jq >/dev/null 2>&1; then
+    # linux/amd64 archive: units/<name> hashes to the manifest's linux/amd64 entry.
+    archive="masseuse-camlink_${version}_linux_amd64.tar.gz"
+    if [ -s "$archive" ]; then
+      tar -tzf "$archive" | grep '^units/' | while read -r f; do
+        name=${f#units/}
+        want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "linux" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
+        got=$(tar -xzOf "$archive" "$f" | $SHA | cut -d' ' -f1)
+        [ -n "$want" ] && [ "$got" = "$want" ] \
+          || { echo "    MISMATCH: $f in $archive is not the manifest's ($got, manifest $want)" >&2; exit 1; }
+        echo "    ok  $f in $archive is the manifest's: $got"
+      done
+    fi
+    # The Windows zip: units/<name>.exe against the windows/amd64 entries.
+    zipfile="Masseuse.ai-${version}-windows.zip"
+    if [ -s "$zipfile" ] && command -v unzip >/dev/null 2>&1; then
+      unzip -Z1 "$zipfile" | grep '^units/' | while read -r f; do
+        name=${f#units/}
+        want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "windows" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
+        got=$(unzip -p "$zipfile" "$f" | $SHA | cut -d' ' -f1)
+        [ -n "$want" ] && [ "$got" = "$want" ] \
+          || { echo "    MISMATCH: $f in $zipfile is not the manifest's ($got, manifest $want)" >&2; exit 1; }
+        echo "    ok  $f in $zipfile is the manifest's: $got"
+      done
+    fi
+  else
+    echo "    skipped the file comparison (no jq)"
+  fi
+else
+  echo "==> 10. unit driver helpers: none in this release (no packaging/units/VERSION at $tag)"
 fi
 
 echo "all checks passed for $tag"

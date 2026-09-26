@@ -21,10 +21,11 @@ import (
 
 // Kind names a device family. It is the `kind` of the Descriptor the
 // connector reports (docs/PROTOCOL.md, section 7.3) and the value the
-// service keys its behaviour on, so the names are fixed here whether or not
-// this program carries a driver for them yet. A private build may carry
-// drivers for further kinds; the service validates kinds against its own
-// table, so Known is a test helper rather than a wire gate.
+// service keys its behaviour on. This program's own driver reports
+// KindMastago; a unit driver helper (package helper, docs/UNITS.md)
+// reports its family's own string, which the service validates against
+// its table. Kinds and Known cover the names this tree knows, a test
+// helper rather than a wire gate.
 type Kind string
 
 const (
@@ -32,18 +33,13 @@ const (
 	// stimulation unit over Bluetooth Low Energy: the connector's
 	// reference device, the one the documentation is written around.
 	KindMastago Kind = "mastago"
-	// KindEstim2B is the E-Stim Systems 2B over its serial link.
-	KindEstim2B Kind = "estim-2b"
-	// KindCoyote is the DG-Lab Coyote, a Bluetooth Low Energy device.
-	KindCoyote Kind = "dglabs-coyote"
 	// KindTENS is any other transcutaneous electrical nerve stimulation unit
 	// the connector cannot name more precisely.
 	KindTENS Kind = "tens"
 )
 
-// Kinds lists every device family the Descriptor may name, in the order
-// above.
-var Kinds = []Kind{KindMastago, KindEstim2B, KindCoyote, KindTENS}
+// Kinds lists the device families this tree names, in the order above.
+var Kinds = []Kind{KindMastago, KindTENS}
 
 // Known reports whether k is one of Kinds.
 func (k Kind) Known() bool {

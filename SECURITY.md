@@ -52,6 +52,19 @@ are acknowledged within three business days.
   power button stop it at any time. The Bluetooth finder connects only to a
   peripheral that offers the device's own service or advertises its name,
   and takes it as found only once it answers a program query.
+- Drivers for stimulation units other than the Mastago are unit driver
+  helpers (`docs/UNITS.md`): separate programs published by masseuse.ai,
+  bundled beside `ffmpeg`, that the connector runs as child processes and
+  speaks to over their standard input and output. A helper receives its
+  standard input and output and a state directory of its own, and nothing
+  else: no camera or microphone handle, no network address, no pairing
+  key. It reaches the service only through the connector, which holds a
+  helper's unit to the same bounds as the Mastago, and it can be removed
+  (`Helpers/units`, or `-estim-helpers none`) leaving a connector built
+  entirely from this repository. Helpers are not open source; each release
+  names every helper it bundles, with its hash, in a manifest signed by
+  the key whose public half is `packaging/units/cosign.pub`, and the
+  release workflow verifies that before bundling (`VERIFY.md`).
 
 ## Supply chain
 

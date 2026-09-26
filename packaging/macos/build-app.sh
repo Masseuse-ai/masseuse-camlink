@@ -5,31 +5,36 @@
 # actool (for the icon, below), so ci.yml builds the bundle unsigned on every
 # pull request.
 #
-# usage: sh packaging/macos/build-app.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR -o OUTDIR
+# usage: sh packaging/macos/build-app.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR
 #   VERSION     the release version without the v (CFBundleShortVersionString)
 #   CONNECTOR   the masseuse-camlink binary to bundle (lipo -create'd for a
 #               universal app); it becomes Contents/MacOS/Masseuse
 #   FFMPEG_DIR  packaging/ffmpeg/build.sh's output directory: ffmpeg and
 #               licenses/ (their absence is an error: the bundle promises
 #               a camera without an install step)
+#   UNITS_DIR   packaging/units/fetch.sh's output for darwin/all: the unit
+#               driver helpers (camlink-unit-*, docs/UNITS.md), copied into
+#               Contents/Helpers/units/; without -u the bundle has none and
+#               serves the Mastago alone
 #   OUTDIR      OUTDIR/Masseuse.app is (re)created
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-version="" connector="" ffmpegdir="" outdir=""
+version="" connector="" ffmpegdir="" unitsdir="" outdir=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -v) version="$2"; shift 2 ;;
     -b) connector="$2"; shift 2 ;;
     -f) ffmpegdir="$2"; shift 2 ;;
+    -u) unitsdir="$2"; shift 2 ;;
     -o) outdir="$2"; shift 2 ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [ -n "$version" ] && [ -n "$connector" ] && [ -n "$ffmpegdir" ] && [ -n "$outdir" ] ||
-  { echo "usage: $0 -v VERSION -b CONNECTOR -f FFMPEG_DIR -o OUTDIR" >&2; exit 2; }
+  { echo "usage: $0 -v VERSION -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR" >&2; exit 2; }
 case "$version" in
   [0-9]*.[0-9]*.[0-9]*) ;;
   *) echo "version $version is not X.Y.Z" >&2; exit 2 ;;
@@ -37,6 +42,10 @@ esac
 [ -f "$connector" ] || { echo "no connector at $connector" >&2; exit 2; }
 [ -f "$ffmpegdir/ffmpeg" ] || { echo "no ffmpeg at $ffmpegdir/ffmpeg (packaging/ffmpeg/build.sh)" >&2; exit 2; }
 [ -d "$ffmpegdir/licenses" ] || { echo "no $ffmpegdir/licenses (packaging/ffmpeg/build.sh)" >&2; exit 2; }
+if [ -n "$unitsdir" ]; then
+  [ -d "$unitsdir" ] || { echo "no units directory at $unitsdir (packaging/units/fetch.sh)" >&2; exit 2; }
+  ls "$unitsdir"/camlink-unit-* >/dev/null 2>&1 || { echo "no camlink-unit-* in $unitsdir (packaging/units/fetch.sh)" >&2; exit 2; }
+fi
 
 # The bundle, its executable and the name under the icon. It is Masseuse,
 # not Masseuse.ai: the Finder and Launchpad refuse to hide .app when the rest
@@ -53,6 +62,25 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources/
 cp "$connector" "$app/Contents/MacOS/$name"
 cp "$ffmpegdir/ffmpeg" "$app/Contents/Helpers/ffmpeg"
 chmod 755 "$app/Contents/MacOS/$name" "$app/Contents/Helpers/ffmpeg"
+# The unit driver helpers, where the connector looks for them
+# (cmd/masseuse-camlink/helpers.go: Contents/Helpers/units in a bundle).
+# Each must be universal like the app, or one architecture would run the
+# connector without its units.
+if [ -n "$unitsdir" ]; then
+  mkdir -p "$app/Contents/Helpers/units"
+  for f in "$unitsdir"/camlink-unit-*; do
+    case "$(basename "$f")" in *.exe) echo "$f is a Windows helper" >&2; exit 2 ;; esac
+    if command -v lipo >/dev/null 2>&1; then
+      archs=$(lipo -archs "$f" 2>/dev/null || true)
+      case "$archs" in
+        *arm64*x86_64*|*x86_64*arm64*) ;;
+        *) echo "$(basename "$f") is not universal ($archs); fetch darwin/all" >&2; exit 2 ;;
+      esac
+    fi
+    cp "$f" "$app/Contents/Helpers/units/$(basename "$f")"
+    chmod 755 "$app/Contents/Helpers/units/$(basename "$f")"
+  done
+fi
 cp "$here/masseuse-camlink.icns" "$app/Contents/Resources/masseuse-camlink.icns"
 
 # The icon a second time, for macOS 26, which draws app icons itself from
