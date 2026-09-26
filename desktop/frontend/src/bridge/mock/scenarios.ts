@@ -119,8 +119,8 @@ export const scenarios: Scenario[] = [
     {
         id: 'pair-just-paired',
         group: 'Pair',
-        title: 'A phone pairs',
-        note: 'The code is typed into the phone three seconds in.',
+        title: 'A phone pairs, on to Cameras',
+        note: 'The code is typed into the phone three seconds in; the page moves on to the camera.',
         step: 'pair',
         script: [...opening(), { at: 900, event: code(9) }, { at: 3000, event: { type: 'paired', phones: 1 } }],
     },
@@ -132,6 +132,14 @@ export const scenarios: Scenario[] = [
         step: 'pair',
         setupDone: true,
         script: [...opening({ phones: 2 }), { at: 900, event: code(9) }],
+    },
+    {
+        id: 'launch-paired',
+        group: 'Pair',
+        title: 'Launch on a paired computer',
+        note: 'The page starts on Pair as any launch does; the hello says a phone is paired, and the window opens on Ready with every step a place to change a choice.',
+        step: 'pair',
+        script: [...opening({ phones: 1 }), { at: 900, event: code(9) }],
     },
 
     // Camera and microphone

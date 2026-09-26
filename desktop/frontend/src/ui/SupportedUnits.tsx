@@ -30,32 +30,34 @@ export const SUPPORTED_UNITS: readonly SupportedUnit[] = [
 export const TRADEMARK_LINE = 'Mastogo, DG-Lab, E-Stim Systems and ErosTek are trademarks of their owners, who are not affiliated with masseuse.ai.';
 
 interface Props {
-    /** `list`: full rows with the marks in a well (the dialog); `compact`: the same rows, smaller (the empty state). */
+    /** `list`: full rows with the marks in a well (the dialog); `compact`: 44-pt rows, the marks smaller (the empty state). */
     layout?: 'list' | 'compact';
+    /** The trademark line under the list; off where the screen puts it elsewhere (Unit's footer). */
+    trademark?: boolean;
     className?: string;
 }
 
-export function SupportedUnits({ layout = 'list', className }: Props) {
+export function SupportedUnits({ layout = 'list', trademark = true, className }: Props) {
     const compact = layout === 'compact';
     return (
         <div className={className}>
             {/* One well the same size in every row, the mark fitted inside it,
                 so the four marks read at one scale and the names start on one
                 line; the widest mark (E-Stim Systems, 6:1) sets the well. */}
-            <ul className={cn(compact ? 'space-y-1' : 'space-y-2')} aria-label="Units Masseuse.ai works with">
+            <ul className={cn(compact ? 'space-y-1.5' : 'space-y-2')} aria-label="Units Masseuse.ai works with">
                 {SUPPORTED_UNITS.map((unit) => (
-                    <li key={unit.model} className={cn('flex min-w-0 items-center rounded-2xl bg-white/6 ring-1 ring-white/10', compact ? 'gap-3 p-1.5' : 'gap-3.5 p-3')}>
-                        <div className={cn('grid shrink-0 place-items-center rounded-xl bg-ink px-2 ring-1 ring-white/10', compact ? 'h-9 w-[112px]' : 'h-14 w-40')}>
-                            <img src={unit.mark} alt={unit.maker} className={cn('w-full object-contain', compact ? 'max-h-5' : 'max-h-10')} />
+                    <li key={unit.model} className={cn('flex min-w-0 items-center rounded-2xl bg-white/6 ring-1 ring-white/10', compact ? 'h-11 gap-3 px-1.5' : 'gap-3.5 p-3')}>
+                        <div className={cn('grid shrink-0 place-items-center rounded-xl bg-ink px-2 ring-1 ring-white/10', compact ? 'h-8 w-[104px]' : 'h-14 w-40')}>
+                            <img src={unit.mark} alt={unit.maker} className={cn('w-full object-contain', compact ? 'max-h-4.5' : 'max-h-10')} />
                         </div>
-                        <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
-                            <p className={cn('truncate font-semibold tracking-tight text-bone', compact ? 'text-[13px]' : 'text-[15px]')}>{unit.model}</p>
-                            <p className={cn('shrink-0 leading-snug text-bone/60', compact ? 'text-[11px]' : 'text-[13px]')}>{unit.link}</p>
+                        <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3 pr-2">
+                            <p className={cn('truncate font-semibold tracking-tight text-bone', compact ? 'type-secondary' : 'type-body')}>{unit.model}</p>
+                            <p className={cn('shrink-0 text-bone/60', compact ? 'type-caption' : 'type-secondary')}>{unit.link}</p>
                         </div>
                     </li>
                 ))}
             </ul>
-            <p className={cn('leading-snug text-bone/45', compact ? 'mt-2 text-[10px]' : 'mt-3 text-[12px]')}>{TRADEMARK_LINE}</p>
+            {trademark ? <p className={cn('type-caption text-bone/45', compact ? 'mt-2' : 'mt-3')}>{TRADEMARK_LINE}</p> : null}
         </div>
     );
 }

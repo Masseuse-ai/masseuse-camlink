@@ -30,6 +30,12 @@
     --color-amber: #f5c26b;
     --color-ember: #f06a6a;
 
+    /* The window's grid (docs/DESKTOP.md, "Shape"): an 8-pt base, one inset
+       for everything below the title strip, one gutter between columns. As
+       spacing tokens they are utilities too: px-inset, gap-gutter, pl-inset. */
+    --spacing-inset: 32px;
+    --spacing-gutter: 24px;
+
     --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", "Inter", system-ui, sans-serif;
     --font-brand: "Masseuse Serif", Charter, Georgia, serif;
     --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -129,6 +135,50 @@ body {
    controls do not. Wails reads these attributes from the element. */
 @utility drag-region { --wails-draggable: drag; }
 @utility no-drag { --wails-draggable: no-drag; }
+
+/* The body grid every screen lays its columns on: twelve columns, the
+   gutter between them. A column is `col-span-N`. */
+@utility grid-12 {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    column-gap: var(--spacing-gutter);
+}
+
+/* The type scale, six sizes, so screens stop choosing their own. Display
+   is a screen's title, title a card's headline, body the lead and a card's
+   prose, secondary the second line and the notes, caption the smallest
+   word, label the eyebrow over a card's contents (uppercase, tracked). */
+@utility type-display {
+    font-size: 28px;
+    line-height: 32px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+@utility type-title {
+    font-size: 20px;
+    line-height: 24px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+@utility type-body {
+    font-size: 15px;
+    line-height: 22px;
+}
+@utility type-secondary {
+    font-size: 13px;
+    line-height: 18px;
+}
+@utility type-caption {
+    font-size: 12px;
+    line-height: 16px;
+}
+@utility type-label {
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
 
 /* Scrollbars in the brand. Lists that can grow use the ScrollArea component
    (src/components/ui/scroll-area.tsx), which hides the native bar and draws

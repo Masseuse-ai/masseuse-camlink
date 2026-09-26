@@ -37,13 +37,13 @@ export function Blocked() {
     const Icon = copy.icon;
 
     return (
-        <div className="screen-body flex flex-1 items-center justify-center px-8 pb-10">
+        <div className="screen-body flex flex-1 items-center justify-center px-inset pb-10">
             <div className="w-full max-w-[560px]">
                 <span className="mb-5 inline-flex h-12 w-12 items-center justify-center rounded-full bg-ember/15 text-ember ring-1 ring-ember/30">
                     <Icon className="lucide h-6 w-6" strokeWidth={2.2} />
                 </span>
-                <h1 className="text-[26px] leading-tight font-semibold tracking-tight text-bone">{copy.title}</h1>
-                <p className="mt-2 text-[15px] leading-snug text-bone/75">{copy.text}</p>
+                <h1 className="type-display text-bone">{copy.title}</h1>
+                <p className="type-body mt-2 text-bone/70">{copy.text}</p>
                 {blocked.detail ? (
                     <Well className="mt-4 select-text">
                         <pre className="max-h-40 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-bone/70">{blocked.detail}</pre>

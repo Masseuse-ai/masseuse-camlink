@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { RadioGroupItem } from '@/components/ui/radio-group';
 import { cn } from '@/lib/utils';
 import type { Device } from '../bridge/types';
+import { CHOICE_ROW, CHOICE_ROW_DISABLED, ROW } from './Card';
 
 export type DeviceNature = 'built-in' | 'usb' | 'virtual' | 'continuity';
 
@@ -59,18 +60,16 @@ export function DeviceCard({ device, inUse = false, note, disabled = false }: Pr
     const badge = NATURE[nature];
     return (
         <label
-            className={cn(
-                'group/card flex min-w-0 cursor-pointer items-center gap-3.5 rounded-2xl bg-white/5 px-4 py-2.5 ring-1 ring-white/10 transition-colors hover:bg-white/8 has-data-checked:bg-rose/10 has-data-checked:ring-rose/40',
-                disabled && 'cursor-default opacity-60 hover:bg-white/5',
-            )}
+            className={cn('group/card', CHOICE_ROW, disabled && CHOICE_ROW_DISABLED)}
         >
             <RadioGroupItem value={device.name} disabled={disabled} aria-label={device.name} />
             <Icon className="lucide h-5 w-5 shrink-0 text-bone/80" strokeWidth={2.2} />
             <span className="min-w-0 flex-1">
-                <span className="block truncate text-[15px] font-semibold tracking-tight text-bone">{device.name}</span>
-                {note ? <span className="block text-[12px] leading-snug text-bone/50">{note}</span> : null}
+                <span className="type-body block truncate font-semibold tracking-tight text-bone">{device.name}</span>
+                {note ? <span className="type-caption block text-bone/50">{note}</span> : null}
             </span>
-            <span className="flex shrink-0 items-center gap-1.5">
+            {/* Two badges wrap onto two lines rather than squeezing the name. */}
+            <span className="flex max-w-[55%] min-w-0 shrink flex-wrap items-center justify-end gap-1.5">
                 {inUse ? <Badge variant="mint">Sending now</Badge> : null}
                 {device.kind === 'audio' && nature === 'usb' ? null : <Badge variant={badge.variant}>{device.kind === 'audio' && nature === 'built-in' ? 'Built in' : badge.label}</Badge>}
             </span>
@@ -82,12 +81,12 @@ export function DeviceCard({ device, inUse = false, note, disabled = false }: Pr
 export function MissingDeviceCard({ kind, name, using }: { kind: Device['kind']; name: string; using: string }) {
     const Icon = kind === 'audio' ? MicOff : Camera;
     return (
-        <div className="flex min-w-0 items-center gap-3.5 rounded-2xl border border-dashed border-white/15 px-4 py-2.5 opacity-80">
+        <div className={cn(ROW, 'border border-dashed border-white/15 opacity-80')}>
             <span className="size-[18px] shrink-0 rounded-full border border-dashed border-white/25" aria-hidden />
             <Icon className="lucide h-5 w-5 shrink-0 text-bone/50" strokeWidth={2.2} />
             <span className="min-w-0 flex-1">
-                <span className="block truncate text-[15px] font-semibold tracking-tight text-bone/60">{name}</span>
-                <span className="block text-[12px] leading-snug text-bone/50">Remembered · not connected · {using} stands in until it is back</span>
+                <span className="type-body block truncate font-semibold tracking-tight text-bone/60">{name}</span>
+                <span className="type-caption block text-bone/50">Remembered · not connected · {using} stands in until it is back</span>
             </span>
             <Badge variant="amber">Not connected</Badge>
         </div>
@@ -98,16 +97,13 @@ export function MissingDeviceCard({ kind, name, using }: { kind: Device['kind'];
 export function NoMicCard({ disabled = false }: { disabled?: boolean }) {
     return (
         <label
-            className={cn(
-                'flex min-w-0 cursor-pointer items-center gap-3.5 rounded-2xl bg-white/5 px-4 py-2.5 ring-1 ring-white/10 transition-colors hover:bg-white/8 has-data-checked:bg-rose/10 has-data-checked:ring-rose/40',
-                disabled && 'cursor-default opacity-60 hover:bg-white/5',
-            )}
+            className={cn(CHOICE_ROW, disabled && CHOICE_ROW_DISABLED)}
         >
             <RadioGroupItem value="none" disabled={disabled} aria-label="No microphone" />
             <MicOff className="lucide h-5 w-5 shrink-0 text-bone/60" strokeWidth={2.2} />
             <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-semibold tracking-tight text-bone/80">No microphone</span>
-                <span className="block text-[12px] leading-snug text-bone/50">Video only. The session hears your phone's microphone.</span>
+                <span className="type-body block font-semibold tracking-tight text-bone/80">No microphone</span>
+                <span className="type-caption block text-bone/50">Video only. The session hears your phone's microphone.</span>
             </span>
         </label>
     );

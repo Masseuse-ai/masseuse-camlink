@@ -1,5 +1,5 @@
 // In a browser the page has no window around it, so the mock-ups draw one
-// (development only): the default 960x640 window on a darker backdrop,
+// (development only): the default 1040x720 window on a darker backdrop,
 // with the chrome the platform would add, scaled down as a whole when the
 // browser is smaller than that so the layout stays the window's. On macOS
 // the chrome is the three traffic lights over the page's own top bar (the
@@ -11,7 +11,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 
 import type { Platform } from '../bridge/store';
 
-export const WINDOW = { width: 960, height: 640 };
+export const WINDOW = { width: 1040, height: 720 };
 
 /** The title bar and menu bar Windows and Linux draw above the page; macOS draws none (the page's top bar is the title bar). */
 const CHROME_HEIGHT = { darwin: 0, windows: 60, linux: 60 } as const;

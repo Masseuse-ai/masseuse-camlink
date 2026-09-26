@@ -1,7 +1,9 @@
 // Ready: what this computer offers a session, and what the session is
 // doing with it. Idle, it waits; in a session, the camera link and its
 // rates, the unit's standing, and the proof of the enclave the picture
-// goes to, the three lines the connector logs made readable.
+// goes to, the three lines the connector logs made readable. On the grid
+// (ui/Page.tsx): the phones as the screen's control beside the title, the
+// four choices as cards on three columns each, the session on all twelve.
 
 import { Camera, Mic, MicOff, ShieldCheck, SlidersHorizontal, Smartphone, TriangleAlert, Zap } from 'lucide-react';
 
@@ -11,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { faceViewOf, useAppState, useDispatch, type Step } from '../bridge/store';
 import type { CameraStats } from '../bridge/types';
 import { Card, CardLabel } from '../ui/Card';
+import { Page } from '../ui/Page';
 import { Scene } from '../ui/Scene';
 import { StatusChip, type Tone } from '../ui/StatusChip';
 import { familyName } from '../ui/UnitCard';
@@ -26,7 +29,7 @@ function Meter({ label, value, ceiling, tone = 'rose' }: { label: string; value:
     const bar = tone === 'mint' ? 'from-mint/70 to-mint' : tone === 'amber' ? 'from-amber/70 to-amber' : 'from-rose-deep to-rose';
     return (
         <div>
-            <div className="flex items-baseline justify-between text-[12px]">
+            <div className="type-caption flex items-baseline justify-between">
                 <span className="text-bone/55">{label}</span>
                 <span className="font-mono font-semibold tabular-nums text-bone">{rate(value)}</span>
             </div>
@@ -42,7 +45,7 @@ function Verified() {
     // leaves this computer; the window says so in one line and keeps the
     // digests and release names to the log.
     return (
-        <p className="inline-flex items-center gap-2 text-[13px] font-medium text-bone/75">
+        <p className="type-secondary inline-flex items-center gap-2 font-medium text-bone/75">
             <ShieldCheck className="lucide h-4 w-4 shrink-0 text-mint" strokeWidth={2.2} />
             Video's privacy protected
         </p>
@@ -52,24 +55,24 @@ function Verified() {
 function SummaryCard({ icon: Icon, label, value, note, badge, step, tab, disabled }: { icon: typeof Camera; label: string; value: string; note?: string; badge?: { text: string; variant: 'mint' | 'rose' | 'amber' | 'secondary' }; step: Step; tab?: 'behind' | 'face'; disabled?: boolean }) {
     const dispatch = useDispatch();
     return (
-        <Card className="flex min-w-0 flex-col px-4 pt-3.5 pb-2.5">
-            {/* The eyebrow alone on its row; the standing on the row under it, so a long word never runs out of the card. */}
-            <div className="flex items-center gap-2 text-[12px] font-semibold tracking-wide text-bone-dim uppercase">
+        <Card className="col-span-3 flex min-w-0 flex-col p-4 pb-2.5">
+            {/* The same rows in every card: the eyebrow, the standing, the choice, its note, the way to change it; a row keeps its height empty, so the four line up. */}
+            <div className="type-label flex items-center gap-2 text-bone-dim">
                 <Icon className="lucide h-4 w-4 shrink-0" strokeWidth={2.2} />
                 <span className="truncate">{label}</span>
             </div>
-            <div className="mt-1.5 flex min-h-5 items-center">
+            <div className="mt-2 flex h-5 items-center">
                 {badge ? (
                     <Badge variant={badge.variant} className="max-w-full">
                         <span className="truncate">{badge.text}</span>
                     </Badge>
                 ) : null}
             </div>
-            <span className="mt-2 truncate text-[15px] leading-tight font-semibold tracking-tight text-bone" title={value}>
+            <span className="type-body mt-2 truncate font-semibold tracking-tight text-bone" title={value}>
                 {value}
             </span>
-            {note ? <span className="mt-0.5 truncate text-[12px] leading-snug text-bone/55">{note}</span> : null}
-            <div className="mt-auto pt-1">
+            <span className="type-caption mt-0.5 line-clamp-2 h-8 text-bone/55">{note ?? ''}</span>
+            <div className="mt-2">
                 <Button variant="quiet" size="sm" className="-ml-2.5" disabled={disabled} onClick={() => dispatch({ type: 'ui/go', step, tab })}>
                     Change
                 </Button>
@@ -110,77 +113,70 @@ export function Home() {
 
     const micName = source?.kind === 'capture' ? source.mic : undefined;
 
+    // The screen's one control: the phones, and the way to pair another.
+    const control = (
+        <Button variant="ghost" size="sm" icon={<Smartphone className="lucide h-4 w-4" strokeWidth={2.4} />} onClick={() => dispatch({ type: 'ui/go', step: 'pair' })}>
+            {phones > 0 ? `${phones} phone${phones === 1 ? '' : 's'} paired` : 'Pair your phone'}
+        </Button>
+    );
+
     return (
-        <div className="screen-body flex min-h-0 flex-1 flex-col px-8 pt-1 pb-5">
-            <div className="flex items-end justify-between gap-6">
-                <div>
-                    <h1 className="text-[24px] leading-tight font-semibold tracking-tight text-bone">{headline}</h1>
-                    <p className="mt-1 text-[14px] leading-snug whitespace-nowrap text-bone/75">{lead}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                    <Button variant="ghost" size="sm" icon={<Smartphone className="lucide h-4 w-4" strokeWidth={2.4} />} onClick={() => dispatch({ type: 'ui/go', step: 'pair' })}>
-                        {phones > 0 ? `${phones} phone${phones === 1 ? '' : 's'} paired` : 'Pair your phone'}
-                    </Button>
-                </div>
-            </div>
+        <Page title={headline} lead={lead} control={control} bodyClassName="grid-rows-[auto_minmax(0,1fr)] gap-y-4">
+            <SummaryCard
+                icon={Camera}
+                label="Behind you"
+                value={source?.kind === 'camera' ? source.label : (source?.camera ?? source?.label ?? 'Finding…')}
+                note={source?.ready ? (camera.on ? 'Sending to the verified enclave' : 'On only while a session reads it') : source?.note}
+                badge={source?.ready ? (camera.on ? { text: 'On', variant: 'mint' } : { text: 'Off until watched', variant: 'secondary' }) : source ? { text: 'Not available', variant: 'amber' } : undefined}
+                step="camera"
+                tab="behind"
+                disabled={camera.on}
+            />
+            <SummaryCard
+                icon={micName && micName !== 'none' ? Mic : MicOff}
+                label="Microphone"
+                value={source?.kind === 'camera' ? "The camera's own" : micName && micName !== 'none' ? micName : 'None · video only'}
+                note={micName && micName !== 'none' ? 'Sent with the picture' : source?.kind === 'camera' ? 'Whatever the camera carries' : "The session hears your phone's microphone"}
+                step="camera"
+                tab="behind"
+                disabled={camera.on}
+            />
+            <SummaryCard
+                icon={processed ? SlidersHorizontal : Smartphone}
+                label="Your face"
+                value={processed ? 'OBS Studio' : "Your phone's camera"}
+                note={processed ? (source?.face?.camera ?? 'No camera carries it back yet') : 'Straight to the room, no detour'}
+                badge={
+                    processed
+                        ? faceCamera.on
+                            ? { text: 'Live', variant: 'mint' }
+                            : share?.receiving
+                              ? { text: 'Phone picture arriving', variant: 'rose' }
+                              : { text: 'Waiting for your phone', variant: 'secondary' }
+                        : undefined
+                }
+                step="camera"
+                tab="face"
+                disabled={faceCamera.on}
+            />
+            <SummaryCard
+                icon={Zap}
+                label="Unit"
+                value={unit?.connected ? unit.label : unit ? unit.label : 'No unit'}
+                note={unit?.connected ? (unit.armed ? `Armed · up to ${unit.armed.levelBound} of ${unit.capabilities.levelMax}` : `${familyName(unit.kind)} · held at zero`) : unit ? 'Disconnected; reconnects on its own' : 'Optional; found on its own when switched on'}
+                badge={unit?.connected ? (unit.armed ? { text: 'Armed', variant: 'rose' } : { text: 'Held at zero', variant: 'mint' }) : unit ? { text: 'Disconnected', variant: 'amber' } : undefined}
+                step="unit"
+                disabled={Boolean(unit?.armed)}
+            />
 
-            <div className="mt-4 grid shrink-0 grid-cols-4 gap-3">
-                <SummaryCard
-                    icon={Camera}
-                    label="Behind you"
-                    value={source?.kind === 'camera' ? source.label : (source?.camera ?? source?.label ?? 'Finding…')}
-                    note={source?.ready ? (camera.on ? 'Sending to the verified enclave' : 'On only while a session reads it') : source?.note}
-                    badge={source?.ready ? (camera.on ? { text: 'On', variant: 'mint' } : { text: 'Off until watched', variant: 'secondary' }) : source ? { text: 'Not available', variant: 'amber' } : undefined}
-                    step="camera"
-                    tab="behind"
-                    disabled={camera.on}
-                />
-                <SummaryCard
-                    icon={micName && micName !== 'none' ? Mic : MicOff}
-                    label="Microphone"
-                    value={source?.kind === 'camera' ? "The camera's own" : micName && micName !== 'none' ? micName : 'None · video only'}
-                    note={micName && micName !== 'none' ? 'Sent with the picture' : source?.kind === 'camera' ? 'Whatever the camera carries' : "The session hears your phone's microphone"}
-                    step="camera"
-                    tab="behind"
-                    disabled={camera.on}
-                />
-                <SummaryCard
-                    icon={processed ? SlidersHorizontal : Smartphone}
-                    label="Your face"
-                    value={processed ? 'OBS Studio' : "Your phone's camera"}
-                    note={processed ? (source?.face?.camera ?? 'No camera carries it back yet') : 'Straight to the room, no detour'}
-                    badge={
-                        processed
-                            ? faceCamera.on
-                                ? { text: 'Live', variant: 'mint' }
-                                : share?.receiving
-                                  ? { text: 'Phone picture arriving', variant: 'rose' }
-                                  : { text: 'Waiting for your phone', variant: 'secondary' }
-                            : undefined
-                    }
-                    step="camera"
-                    tab="face"
-                    disabled={faceCamera.on}
-                />
-                <SummaryCard
-                    icon={Zap}
-                    label="Unit"
-                    value={unit?.connected ? unit.label : unit ? unit.label : 'No unit'}
-                    note={unit?.connected ? (unit.armed ? `Armed · up to ${unit.armed.levelBound} of ${unit.capabilities.levelMax}` : `${familyName(unit.kind)} · held at zero`) : unit ? 'Disconnected; reconnects on its own' : 'Optional; found on its own when switched on'}
-                    badge={unit?.connected ? (unit.armed ? { text: 'Armed', variant: 'rose' } : { text: 'Held at zero', variant: 'mint' }) : unit ? { text: 'Disconnected', variant: 'amber' } : undefined}
-                    step="unit"
-                    disabled={Boolean(unit?.armed)}
-                />
-            </div>
-
-            <Card className="mt-3 flex min-h-0 flex-1 flex-col p-4">
+            <Card className="col-span-12 flex min-h-0 flex-col">
                 <CardLabel icon={ShieldCheck} trailing={<StatusChip tone={linkChip.tone}>{linkChip.text}</StatusChip>}>
                     Session
                 </CardLabel>
 
                 {inSession ? (
-                    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_300px] gap-5">
-                        <div className="flex min-w-0 flex-col justify-center gap-3">
+                    <div className="grid-12 min-h-0 flex-1">
+                        <div className="col-span-7 flex min-w-0 flex-col justify-center gap-3">
                             {stats ? (
                                 <>
                                     <Meter label="Video" value={stats.videoBps} ceiling={2_500_000} tone={stats.congested ? 'amber' : 'rose'} />
@@ -188,10 +184,10 @@ export function Home() {
                                     {processed && faceCamera.on && faceCamera.stats ? <Meter label="Face · OBS's picture going back" value={faceCamera.stats.videoBps} ceiling={2_500_000} tone="rose" /> : null}
                                 </>
                             ) : (
-                                <p className="text-[14px] text-bone/65">Camera on but not sending yet (waiting for the source).</p>
+                                <p className="type-body text-bone/65">Camera on but not sending yet (waiting for the source).</p>
                             )}
                             {processed ? (
-                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-bone/60">
+                                <div className="type-caption flex flex-wrap items-center gap-x-3 gap-y-1 text-bone/60">
                                     {[
                                         { text: "Phone picture to this computer", on: Boolean(share?.receiving) },
                                         { text: 'OBS picture back', on: faceCamera.on },
@@ -213,16 +209,16 @@ export function Home() {
                             ) : null}
                             {link.enclave ? <Verified /> : null}
                         </div>
-                        <div className="flex flex-col justify-center">
-                            <Scene scene="cameraBehindYou" className="aspect-[2/1] w-full" />
-                            <p className="mt-1.5 text-center text-[11px] leading-snug text-bone/50">
+                        <div className="col-span-5 flex min-h-0 flex-col justify-center">
+                            <Scene scene="cameraBehindYou" className="aspect-[2/1] max-h-[220px] w-full" />
+                            <p className="type-caption mt-1.5 text-center text-bone/50">
                                 {processed && faceCamera.on ? "OBS's picture is your face, a small inset over this picture." : "The phone's camera stays live too, as a small inset over this picture."}
                             </p>
                         </div>
                     </div>
                 ) : (
-                    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_300px] gap-5">
-                        <div className="flex min-w-0 flex-col justify-center gap-3">
+                    <div className="grid-12 min-h-0 flex-1">
+                        <div className="col-span-7 flex min-w-0 flex-col justify-center gap-3">
                             {link.state === 'on-hold' ? (
                                 <Alert variant="neutral">
                                     <TriangleAlert />
@@ -236,21 +232,19 @@ export function Home() {
                                 </Alert>
                             ) : (
                                 <>
-                                    <p className="text-[15px] leading-snug text-bone/80">
-                                        {phones > 0 ? 'Waiting for a session on your phone.' : 'Waiting for a phone to pair.'}
-                                    </p>
-                                    <p className="text-[13px] leading-snug text-bone/55">
+                                    <p className="type-body text-bone/80">{phones > 0 ? 'Waiting for a session on your phone.' : 'Waiting for a phone to pair.'}</p>
+                                    <p className="type-secondary text-bone/55">
                                         To protect your privacy, we're setting up a confidential computing environment to process your video and protect your identity. Until then, your unit stays at zero. The computer stays awake while this window is open; the screen may go dark.
                                     </p>
                                 </>
                             )}
                         </div>
-                        <div className="flex flex-col justify-center">
-                            <Scene scene="laptopBehindYou" className="aspect-[2/1] w-full" />
+                        <div className="col-span-5 flex min-h-0 flex-col justify-center">
+                            <Scene scene="laptopBehindYou" className="aspect-[2/1] max-h-[220px] w-full" />
                         </div>
                     </div>
                 )}
             </Card>
-        </div>
+        </Page>
     );
 }

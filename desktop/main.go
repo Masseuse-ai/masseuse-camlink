@@ -98,10 +98,10 @@ func main() {
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      mainWindow,
 		Title:     appName,
-		Width:     960,
-		Height:    640,
-		MinWidth:  820,
-		MinHeight: 560,
+		Width:     1040,
+		Height:    720,
+		MinWidth:  1040,
+		MinHeight: 720,
 		// The brand's ink, so nothing lighter shows before the page paints.
 		BackgroundColour: application.NewRGB(11, 10, 16),
 		// Windows and Linux draw the application menu in the window.

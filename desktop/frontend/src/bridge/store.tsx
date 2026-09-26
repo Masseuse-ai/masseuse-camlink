@@ -56,8 +56,6 @@ export interface AppState {
     /** The pairing code, when it expires (ms since the epoch), how long a code lives, and when this one arrived. */
     code: { code: string; expiresAt: number; ttlMs: number; receivedAt: number } | null;
     phones: number;
-    /** When a phone paired during this run, for the moment of confirmation. */
-    pairedAt: number | null;
     devices: { cameras: Device[]; mics: Device[]; substitutions: Substitution[] } | null;
     /** Why the devices could not be listed (no ffmpeg), when they could not. */
     devicesError: string | null;
@@ -90,7 +88,6 @@ export const initialState: AppState = {
     online: null,
     code: null,
     phones: 0,
-    pairedAt: null,
     devices: null,
     devicesError: null,
     source: null,
@@ -134,7 +131,14 @@ export function reducer(state: AppState, action: Action): AppState {
         case 'ui/reset':
             return action.state;
         case 'ui/go':
-            return { ...state, step: action.step, cameraTab: action.tab ?? state.cameraTab, pairedAt: action.step === 'pair' ? state.pairedAt : null };
+            // Reaching Ready by any path ends the first run: Ready is home
+            // and the steps are where a choice is changed from then on.
+            return {
+                ...state,
+                step: action.step,
+                setupDone: state.setupDone || action.step === 'home',
+                cameraTab: action.tab ?? state.cameraTab,
+            };
         case 'ui/setup-done':
             return { ...state, setupDone: true, step: 'home' };
         case 'ui/about':
@@ -152,8 +156,17 @@ export function reducer(state: AppState, action: Action): AppState {
 
 function applyEvent(state: AppState, ev: ConnectorEvent): AppState {
     switch (ev.type) {
-        case 'hello':
-            return { ...state, hello: ev.hello, phones: ev.hello.phones };
+        case 'hello': {
+            // A computer that is already paired opens on Ready: pairing is
+            // the setup's gate, and a phone paired on an earlier run has
+            // passed it. Only from the page's first state (on Pair, the
+            // first run, no phone known yet): a scenario that starts
+            // elsewhere stays there, and a phone paired during this run
+            // (the paired event) walks the steps.
+            const pristine = state.step === 'pair' && !state.setupDone && state.phones === 0;
+            const paired = pristine && ev.hello.phones > 0;
+            return { ...state, hello: ev.hello, phones: ev.hello.phones, ...(paired ? { setupDone: true, step: 'home' as const } : {}) };
+        }
         case 'online':
             return { ...state, online: ev.online };
         case 'code': {
@@ -161,7 +174,11 @@ function applyEvent(state: AppState, ev: ConnectorEvent): AppState {
             return { ...state, code: { code: ev.code, expiresAt: Number.isNaN(expiresAt) ? 0 : expiresAt, ttlMs: ev.ttlMs ?? CODE_TTL_MS, receivedAt: Date.now() } };
         }
         case 'paired':
-            return { ...state, phones: ev.phones, pairedAt: Date.now() };
+            // A phone pairing is the way on, not a screen: in the first run, on
+            // to the camera (Pair's check turning green in the bar is the
+            // confirmation); once the setup is done, back to Ready. Paired while
+            // on another step, the page stays where it is.
+            return { ...state, phones: ev.phones, step: state.setupDone ? 'home' : state.step === 'pair' ? 'camera' : state.step };
         case 'devices':
             return {
                 ...state,

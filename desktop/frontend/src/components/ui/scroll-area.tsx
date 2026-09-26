@@ -7,7 +7,12 @@
 // the sides, and keeps a gutter at the right for the thumb so nothing sits
 // under it; the root's negative margins pay that room back, so the list
 // sits where it would without the scroll area. A ScrollArea fills the box
-// it is given: put it in a column with `min-h-0 flex-1`.
+// it is given: put it in a column with `min-h-0 flex-1`. The root is a
+// column and the viewport its one flexing child, rather than `height:
+// 100%`: a percentage does not resolve inside a card whose height is only
+// capped (`max-h-full`), and the list would run past the card instead of
+// scrolling. The scrollbar is positioned absolutely by Base UI, so it is
+// not in the column.
 //
 // Source: https://ui.shadcn.com/docs/components/base/scroll-area
 
@@ -17,10 +22,10 @@ import { cn } from '@/lib/utils';
 
 function ScrollArea({ className, children, viewportClassName, ...props }: ScrollAreaPrimitive.Root.Props & { viewportClassName?: string }) {
     return (
-        <ScrollAreaPrimitive.Root data-slot="scroll-area" className={cn('relative -mx-1 -mt-1 min-h-0', className)} {...props}>
+        <ScrollAreaPrimitive.Root data-slot="scroll-area" className={cn('relative -mx-1 -mt-1 flex min-h-0 flex-col', className)} {...props}>
             <ScrollAreaPrimitive.Viewport
                 data-slot="scroll-area-viewport"
-                className={cn('size-full rounded-[inherit] pt-1 pr-3 pb-1 pl-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/50', viewportClassName)}
+                className={cn('min-h-0 w-full flex-1 rounded-[inherit] pt-1 pr-3 pb-1 pl-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/50', viewportClassName)}
             >
                 {children}
             </ScrollAreaPrimitive.Viewport>
