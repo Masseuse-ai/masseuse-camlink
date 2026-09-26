@@ -416,8 +416,11 @@ type Driver interface {
 	Port() string
 	Capabilities() Capabilities
 	// Release fails closed: every output to zero and stopped, the device's
-	// own controls live, the power range back to normal. It carries on
-	// through failures and reports them together.
+	// own controls live and, on a device with several power ranges, the
+	// range it was found in when the connection opened put back (the
+	// device's own setting, which an armed window may have changed; a
+	// driver that could not read it puts the normal range back). It
+	// carries on through failures and reports them together.
 	Release(ctx context.Context) error
 	// Arm prepares the device for an armed window with outputs still at
 	// zero, in the power range named (PowerModeNormal or PowerModeHigh); a

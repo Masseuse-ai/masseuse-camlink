@@ -329,8 +329,8 @@ func (r *Runtime) clearArmLocked() { r.armDeadline, r.renewedUntil = time.Time{}
 // -- connection ----------------------------------------------------------------
 
 // Open connects to a device if none is held. Every fresh connection starts
-// released: outputs zero, knobs live, normal power. Arming later raises the
-// power range.
+// released: outputs zero, knobs live, the power range the device was found
+// in. Arming later selects the session's range.
 func (r *Runtime) Open(ctx context.Context) error {
 	r.dev.Lock()
 	defer r.dev.Unlock()
@@ -671,9 +671,9 @@ func (r *Runtime) RenewDeviceArm(ctx context.Context) {
 	r.log().Debug("estim: device countdown renewed", "until", deadline.UTC().Format(time.RFC3339))
 }
 
-// Release fails closed: outputs to zero, knobs live, normal power, the arm
-// revoked and the latch set. The status afterwards is returned even when
-// the release itself failed.
+// Release fails closed: outputs to zero, knobs live, the power range the
+// device was found in, the arm revoked and the latch set. The status
+// afterwards is returned even when the release itself failed.
 func (r *Runtime) Release(ctx context.Context, reason string) (Status, error) {
 	r.cancel.Store(true)
 	r.dev.Lock()

@@ -426,7 +426,7 @@ the tag pins.
 The key's public half is `packaging/units/cosign.pub` at the tag, and
 `packaging/units/VERSION` lists the helpers releases, one per line: each
 line is the release's path under `https://masseuse.ai/app/units/`, a bare
-version (`1.0.3`) or a helper family's prefix and its version
+version (`1.0.4`) or a helper family's prefix and its version
 (`<family>/0.1.0`, a family that publishes its releases apart from the
 first). Each release has its own manifest and signature:
 
