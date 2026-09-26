@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
-	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig/petest"
 )
 
 // The test binary doubles as a fake connector when FAKE_CONNECTOR is set:

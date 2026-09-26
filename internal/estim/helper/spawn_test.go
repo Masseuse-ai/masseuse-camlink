@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim/helper"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/helper"
 )
 
 // startTestBinary runs this test binary as the helper program (TestMain

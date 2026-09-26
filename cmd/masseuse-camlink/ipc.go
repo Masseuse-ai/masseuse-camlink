@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/capture"
-	"github.com/FemLed/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/capture"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
 // The desktop window (docs/DESKTOP.md) runs this program with -ipc and

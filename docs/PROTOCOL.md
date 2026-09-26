@@ -258,7 +258,7 @@ policy fields are:
 | `minRelease` | raised to the floor when lower or absent | `v0.4.0` |
 | `allowDebug` | always `false` | |
 | `requireStable`, `requireGpuCc` | always `true` | |
-| `sourceUri`, `imageRepo` | must equal the floor; filled when absent | `github.com/FemLed/masseuse-video-tee`, `ghcr.io/femled/masseuse-video-tee` |
+| `sourceUri`, `imageRepo` | must equal the floor; filled when absent | the values compiled into `internal/attest/floors.go` |
 | `teeSlotHostSuffixes` | kept where under the floor; none left is refused | `.tee.masseuse.ai` |
 | `projectId` | must equal the floor; filled when absent | `prod-masseuse-video-tee` |
 | `imageReferencePrefix` | must be under the floor; filled when absent | the enclave image in that project's Artifact Registry |

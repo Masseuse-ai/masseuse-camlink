@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
 )
 
 // Installer puts a verified download in place of the running install and

@@ -1,4 +1,4 @@
-module github.com/FemLed/masseuse-camlink
+module github.com/Masseuse-ai/masseuse-camlink
 
 go 1.27.1
 

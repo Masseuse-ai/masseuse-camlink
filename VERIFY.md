@@ -1,6 +1,6 @@
 # Verifying a release
 
-Every release on the [releases page](https://github.com/FemLed/masseuse-camlink/releases)
+Every release on the [releases page](https://github.com/Masseuse-ai/masseuse-camlink/releases)
 carries:
 
 - `checksums.txt`: SHA-256 of every archive and of the raw gateway binaries;
@@ -40,12 +40,25 @@ the macOS app, the Windows package and the unit driver helpers included); `sh sc
 runs the enclave check (4). (Both are plain POSIX sh; the repository stores
 them without the executable bit.)
 
+## Which identity signed a release
+
+Releases up to and including v0.24.0 were built and signed by this release
+workflow at the project's previous GitHub home, `github.com/FemLed/masseuse-camlink`,
+and their Go module declares that path. Their signatures and provenance name
+that identity, so for those tags read `github.com/FemLed/masseuse-camlink` wherever
+the commands below say `github.com/Masseuse-ai/masseuse-camlink` (the certificate
+identity, `--source-uri`, `go get`, `go run`). From v0.25.0 on, releases are
+built and signed here, at the paths as written. This repository carries every
+release's tag with the tree it was built from, and every release's files;
+`scripts/verify-release.sh` applies the right identity and module path for the
+tag it is given.
+
 ## 1. Signature
 
 ```sh
 cosign verify-blob \
   --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
+  --certificate-identity-regexp '^https://github.com/Masseuse-ai/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
 sha256sum -c checksums.txt --ignore-missing
@@ -56,7 +69,7 @@ sha256sum -c checksums.txt --ignore-missing
 ```sh
 slsa-verifier verify-artifact masseuse-camlink_X.Y.Z_windows_amd64.zip \
   --provenance-path multiple.intoto.jsonl \
-  --source-uri github.com/FemLed/masseuse-camlink \
+  --source-uri github.com/Masseuse-ai/masseuse-camlink \
   --source-tag vX.Y.Z
 ```
 
@@ -82,7 +95,7 @@ exactly what `go install` yields:
 ```sh
 export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOFLAGS=
 GOOS=linux GOARCH=amd64 go install -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-  github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@vX.Y.Z
+  github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink-gateway@vX.Y.Z
 sha256sum "$(go env GOPATH)/bin/linux_amd64/masseuse-camlink-gateway"
 grep masseuse-camlink-gateway_X.Y.Z_linux_amd64 checksums.txt
 ```
@@ -105,9 +118,9 @@ module), so repeat it the same way:
 ```sh
 export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOFLAGS=
 mkdir connector && cd connector && printf 'module connector\n' > go.mod
-go get github.com/FemLed/masseuse-camlink@vX.Y.Z
+go get github.com/Masseuse-ai/masseuse-camlink@vX.Y.Z
 GOOS=windows GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-  -o masseuse-camlink.exe github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink
+  -o masseuse-camlink.exe github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink
 sha256sum masseuse-camlink.exe
 unzip -p ../masseuse-camlink_X.Y.Z_windows_amd64.zip masseuse-camlink.exe | sha256sum
 ```
@@ -135,11 +148,11 @@ untouched.
 ```sh
 export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOFLAGS=
 mkdir connector && cd connector && printf 'module connector\n' > go.mod
-go get github.com/FemLed/masseuse-camlink@vX.Y.Z
+go get github.com/Masseuse-ai/masseuse-camlink@vX.Y.Z
 GOOS=darwin GOARCH=arm64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-  -o rebuilt github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink
+  -o rebuilt github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink
 tar -xzOf ../masseuse-camlink_X.Y.Z_darwin_arm64.tar.gz masseuse-camlink > published
-go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 rebuilt published
+go run github.com/Masseuse-ai/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 rebuilt published
 ```
 
 The two hashes match. The release workflow's `reproduce` job runs this for
@@ -229,13 +242,13 @@ signed and attested like the first:
 ```sh
 cosign verify-blob \
   --bundle checksums-darwin.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
+  --certificate-identity-regexp '^https://github.com/Masseuse-ai/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums-darwin.txt
 shasum -a 256 -c checksums-darwin.txt
 slsa-verifier verify-artifact Masseuse.ai-X.Y.Z.dmg \
   --provenance-path darwin.intoto.jsonl \
-  --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
+  --source-uri github.com/Masseuse-ai/masseuse-camlink --source-tag vX.Y.Z
 ```
 
 The app's connector is the published binaries, and so the rebuild: strip
@@ -246,7 +259,7 @@ per architecture, named as the archives are:
 
 ```sh
 hdiutil attach -readonly -nobrowse Masseuse.ai-X.Y.Z.dmg
-go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 \
+go run github.com/Masseuse-ai/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 \
   /Volumes/Masseuse.ai/Masseuse.app/Contents/MacOS/masseuse-camlink
 # two lines, "(arm64)" and "(amd64)": compare each with the stripped
 # archive binary or the rebuild of the previous section
@@ -345,13 +358,13 @@ Windows, which rewrites a backslash in an argument to a native program
 ```sh
 cosign verify-blob \
   --bundle checksums-windows.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
+  --certificate-identity-regexp '^https://github.com/Masseuse-ai/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums-windows.txt
 sha256sum -c checksums-windows.txt
 slsa-verifier verify-artifact Masseuse.exe \
   --provenance-path windows.intoto.jsonl \
-  --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
+  --source-uri github.com/Masseuse-ai/masseuse-camlink --source-tag vX.Y.Z
 ```
 
 The signature and the payload are the two things the package carries
@@ -366,8 +379,8 @@ same way, is the archive's executable, and so the rebuild of "The
 connector" above with `GOOS=windows GOARCH=amd64`:
 
 ```sh
-go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -payload payload Masseuse.exe
-go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 payload/masseuse-camlink.exe
+go run github.com/Masseuse-ai/masseuse-camlink/cmd/pestrip@vX.Y.Z -payload payload Masseuse.exe
+go run github.com/Masseuse-ai/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 payload/masseuse-camlink.exe
 unzip -p masseuse-camlink_X.Y.Z_windows_amd64.zip masseuse-camlink.exe | sha256sum
 ```
 
@@ -380,8 +393,8 @@ hash; ffmpeg's linker writes a checksum, so ffmpeg is compared `pestrip
 -sha256` against `pestrip -sha256`, never against a plain hash:
 
 ```sh
-go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 payload/ffmpeg.exe   # against your own build of ffmpeg, stripped the same way
-go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 Masseuse.exe         # the window, signature and payload off: what the windows-app job built
+go run github.com/Masseuse-ai/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 payload/ffmpeg.exe   # against your own build of ffmpeg, stripped the same way
+go run github.com/Masseuse-ai/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 Masseuse.exe         # the window, signature and payload off: what the windows-app job built
 ```
 
 On Windows, the signatures themselves are checked with Windows' own tools:
@@ -431,8 +444,8 @@ version (`1.0.4`) or a helper family's prefix and its version
 first). Each release has its own manifest and signature:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/FemLed/masseuse-camlink/vX.Y.Z/packaging/units/cosign.pub
-for R in $(curl -fsSL https://raw.githubusercontent.com/FemLed/masseuse-camlink/vX.Y.Z/packaging/units/VERSION); do
+curl -fsSLO https://raw.githubusercontent.com/Masseuse-ai/masseuse-camlink/vX.Y.Z/packaging/units/cosign.pub
+for R in $(curl -fsSL https://raw.githubusercontent.com/Masseuse-ai/masseuse-camlink/vX.Y.Z/packaging/units/VERSION); do
   curl -fsSL -o "manifest-${R##*/}.json" "https://masseuse.ai/app/units/$R/manifest.json"
   curl -fsSL -o "manifest-${R##*/}.json.sigstore.json" "https://masseuse.ai/app/units/$R/manifest.json.sigstore.json"
   cosign verify-blob --key cosign.pub --bundle "manifest-${R##*/}.json.sigstore.json" "manifest-${R##*/}.json"
@@ -455,11 +468,11 @@ arm64 file's raw hash is not its stripped one):
 ```sh
 for arch in arm64 amd64; do
   sh packaging/units/fetch-all.sh darwin "$arch" "units-$arch"   # from the tag's checkout
-  go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 units-$arch/camlink-unit-*
+  go run github.com/Masseuse-ai/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 units-$arch/camlink-unit-*
 done
 hdiutil attach -readonly -nobrowse Masseuse.ai-X.Y.Z.dmg
 for f in /Volumes/Masseuse.ai/Masseuse.app/Contents/Helpers/units/camlink-unit-*; do
-  go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 "$f"
+  go run github.com/Masseuse-ai/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 "$f"
 done
 # each "(arm64)" and "(amd64)" line of a bundled helper is the stripped
 # hash of the thin file of the same name for that architecture
@@ -500,6 +513,11 @@ its source lives:
 "sourceUri": "github.com/FemLed/masseuse-video-tee",
 "imageRepo": "ghcr.io/femled/masseuse-video-tee"
 ```
+
+(`sourceUri` and `imageRepo` name where the enclave image that is running
+today was built and published; the connector's compiled floors,
+`internal/attest/floors.go`, carry the same values. Both move together with
+the first enclave image released from `github.com/Masseuse-ai/masseuse-video-tee`.)
 
 `imageSignatures` is the key the Confidential Space launcher must have
 verified a signature from before it started the image (the token lists the
@@ -605,8 +623,8 @@ publish (its `README.md`, "What happens to your video and audio").
 `masseuse-camlink --version` prints this module's version and the Go
 toolchain from the binary's embedded build information, e.g.
 `v0.1.0 go1.27.1`. `go version -m <binary>` prints the whole module list,
-including `github.com/FemLed/masseuse-camlink vX.Y.Z h1:...`; that `h1:` hash
-is the one `go mod download -json github.com/FemLed/masseuse-camlink@vX.Y.Z`
+including `github.com/Masseuse-ai/masseuse-camlink vX.Y.Z h1:...`; that `h1:` hash
+is the one `go mod download -json github.com/Masseuse-ai/masseuse-camlink@vX.Y.Z`
 reports from `sum.golang.org`. A build from a working tree prints `(devel)`,
 or Go's pseudo-version for the commit with `+dirty` when the tree has
 changes; neither is a release, and such a build never updates itself.
@@ -624,7 +642,7 @@ enclave image) before any file is moved:
    the Sigstore trust root the program carries (refreshed through TUF into
    its state directory when the network allows, as for the enclave), with a
    certificate issued by GitHub Actions to
-   `https://github.com/FemLed/masseuse-camlink/.github/workflows/release.yml@refs/tags/vX.Y.Z`
+   `https://github.com/Masseuse-ai/masseuse-camlink/.github/workflows/release.yml@refs/tags/vX.Y.Z`
    for a run on this repository, logged in Rekor: step 1 above. The release
    tag is read from that certificate, never from a file name or a version
    string on the page, and only a tag newer than the running program's own

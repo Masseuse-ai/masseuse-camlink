@@ -4,7 +4,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/FemLed/masseuse-camlink/internal/awake"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/awake"
 )
 
 // awakeReason is what the system shows beside the hold (System Settings,

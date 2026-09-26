@@ -16,7 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/FemLed/masseuse-camlink/internal/frame"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/frame"
 )
 
 func pair(t *testing.T) (opener, acceptor *Session) {

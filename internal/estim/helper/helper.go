@@ -36,7 +36,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
 // Protocol is the version both ends speak; `hello` reports it.

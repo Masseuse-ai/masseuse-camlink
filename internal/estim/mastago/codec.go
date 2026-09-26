@@ -22,8 +22,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/FemLed/masseuse-camlink/internal/ble"
-	"github.com/FemLed/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/ble"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
 // GATT identifiers.

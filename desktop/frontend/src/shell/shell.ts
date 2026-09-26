@@ -5,7 +5,7 @@
 
 import { Clipboard, Events, System } from '@wailsio/runtime';
 
-import { ConnectorService } from '../../bindings/github.com/FemLed/masseuse-camlink/desktop';
+import { ConnectorService } from '../../bindings/github.com/Masseuse-ai/masseuse-camlink/desktop';
 import type { Platform } from '../bridge/store';
 
 // The webview's own bridge object, there from the moment the document is
@@ -89,11 +89,11 @@ export function runtimeReady(timeoutMs = 3000): Promise<void> {
 /** The pages the Help menu and About open, by name; the shell holds the same list (connector.go). */
 export const LINKS = {
     'learn-more': 'https://masseuse.ai/app',
-    privacy: 'https://github.com/FemLed/masseuse-camlink#how-it-stays-private',
-    verify: 'https://github.com/FemLed/masseuse-camlink/blob/main/VERIFY.md',
-    security: 'https://github.com/FemLed/masseuse-camlink/blob/main/SECURITY.md',
-    source: 'https://github.com/FemLed/masseuse-camlink',
-    releases: 'https://github.com/FemLed/masseuse-camlink/releases',
+    privacy: 'https://github.com/Masseuse-ai/masseuse-camlink#how-it-stays-private',
+    verify: 'https://github.com/Masseuse-ai/masseuse-camlink/blob/HEAD/VERIFY.md',
+    security: 'https://github.com/Masseuse-ai/masseuse-camlink/blob/HEAD/SECURITY.md',
+    source: 'https://github.com/Masseuse-ai/masseuse-camlink',
+    releases: 'https://github.com/Masseuse-ai/masseuse-camlink/releases',
     'privacy-policy': 'https://masseuse.ai/privacy',
     terms: 'https://masseuse.ai/terms',
 } as const;

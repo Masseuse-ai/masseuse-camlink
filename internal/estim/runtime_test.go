@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago/fakeunit"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago/fakeunit"
 )
 
 // The Runtime's own rules (arm, latch, caps, settings, fault, telemetry),

@@ -3,7 +3,7 @@
 // compared with an unsigned rebuild (VERIFY.md, "The Windows package"). It
 // is the Windows twin of cmd/machostrip and runs on any operating system:
 //
-//	go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 Masseuse.exe
+//	go run github.com/Masseuse-ai/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 Masseuse.exe
 //
 // prints the SHA-256 of the executable without its signature (internal/pesig)
 // and without the payload the Windows package carries (internal/payload),
@@ -13,7 +13,7 @@
 // its linker (ffmpeg.exe) has it zeroed on both sides, so compare
 // `pestrip -sha256` with `pestrip -sha256`, not with a plain hash.
 //
-//	go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -payload DIR Masseuse.exe
+//	go run github.com/Masseuse-ai/masseuse-camlink/cmd/pestrip@vX.Y.Z -payload DIR Masseuse.exe
 //
 // writes the payload's files into DIR, each checked against the payload's
 // manifest, and lists them with their hashes (the ffmpeg.exe and the
@@ -28,8 +28,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
-	"github.com/FemLed/masseuse-camlink/internal/pesig"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/FemLed/masseuse-camlink/internal/update"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/update"
 )
 
 // The macOS application bundle (packaging/macos) has this very program as

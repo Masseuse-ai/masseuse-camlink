@@ -11,8 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/FemLed/masseuse-camlink/internal/buildinfo"
-	"github.com/FemLed/masseuse-camlink/internal/gateway"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/buildinfo"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/gateway"
 )
 
 func main() {

@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
 )
 
 // connectorName is the connector's file beside the shell.

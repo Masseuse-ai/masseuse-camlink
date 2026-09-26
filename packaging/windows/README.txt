@@ -31,7 +31,7 @@ Windows may ask before the first start whether to run an app it does not
 recognize while the program's publisher is still new to it: "More info",
 then "Run anyway". The file is listed, with its checksum, in the release
 it came from, and every release is built in public and verifiable:
-https://github.com/FemLed/masseuse-camlink (VERIFY.md, "The Windows
+https://github.com/Masseuse-ai/masseuse-camlink (VERIFY.md, "The Windows
 package").
 
 Video is encoded by Windows' own H.264 encoder (Media Foundation). The N

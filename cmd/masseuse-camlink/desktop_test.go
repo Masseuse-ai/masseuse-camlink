@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/FemLed/masseuse-camlink/internal/update"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/update"
 )
 
 func TestBundleExecutable(t *testing.T) {

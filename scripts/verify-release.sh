@@ -39,10 +39,8 @@
 # optional.
 set -eu
 
-REPO="FemLed/masseuse-camlink"
-# [.] rather than \. : Git Bash on Windows rewrites a backslash in an argument
-# to a native program (cosign) as a path separator.
-WORKFLOW_RE='^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v'
+# Where every release's files are published (this repository).
+REPO="Masseuse-ai/masseuse-camlink"
 ISSUER="https://token.actions.githubusercontent.com"
 # The Apple Developer ID the darwin binaries are signed with (VERIFY.md,
 # "The macOS binaries"): the team and the leaf certificate's SHA-256.
@@ -51,6 +49,20 @@ APPLE_CERT_SHA256="8D:A7:D2:FD:A7:BE:3C:AC:CE:6E:20:19:FE:0C:1A:68:B2:C1:B5:DC:A
 
 tag="${1:?usage: $0 vX.Y.Z [dir]}"
 version="${tag#v}"
+# Releases up to v0.24.0 were built and signed by the release workflow at the
+# project's previous GitHub home, github.com/FemLed/masseuse-camlink, and
+# declare that module path; later releases by this repository's workflow, at
+# this module path. The certificate identity and the module path follow the
+# tag; the files are downloaded from this repository either way.
+major="${version%%.*}"; rest="${version#*.}"; minor="${rest%%.*}"
+case "$major.$minor" in
+  0.[0-9]|0.1[0-9]|0.2[0-4]) SOURCE="github.com/FemLed/masseuse-camlink" ;;
+  *) SOURCE="github.com/Masseuse-ai/masseuse-camlink" ;;
+esac
+MODULE="$SOURCE"
+# [.] rather than \. : Git Bash on Windows rewrites a backslash in an argument
+# to a native program (cosign) as a path separator.
+WORKFLOW_RE="^https://${SOURCE}/[.]github/workflows/release[.]yml@refs/tags/v"
 dir="${2:-release-$tag}"
 mkdir -p "$dir"
 cd "$dir"
@@ -93,7 +105,7 @@ echo "==> 3. SLSA provenance for every artifact"
 awk '{print $2}' checksums.txt | while read -r f; do
   slsa-verifier verify-artifact "$f" \
     --provenance-path multiple.intoto.jsonl \
-    --source-uri "github.com/$REPO" \
+    --source-uri "$SOURCE" \
     --source-tag "$tag" >/dev/null
   echo "    ok  $f"
 done
@@ -109,7 +121,7 @@ if command -v go >/dev/null 2>&1; then
   modcache="$(go env GOMODCACHE)"
   GOPATH="$work/gopath" GOMODCACHE="$modcache" GOOS=linux GOARCH=amd64 \
     go install -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-    "github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@$tag"
+    "$MODULE/cmd/masseuse-camlink-gateway@$tag"
   built=$(find "$work/gopath/bin" -type f -name masseuse-camlink-gateway | head -n 1)
   [ -n "$built" ] || { echo "    go install produced no binary" >&2; exit 1; }
   rebuilt=$($SHA "$built" | cut -d' ' -f1)
@@ -128,9 +140,9 @@ if command -v go >/dev/null 2>&1; then
   mkdir -p "$work/connector"
   printf 'module connector\n' > "$work/connector/go.mod"
   (cd "$work/connector" \
-    && go get "github.com/FemLed/masseuse-camlink@$tag" >/dev/null 2>&1 \
+    && go get "$MODULE@$tag" >/dev/null 2>&1 \
     && GOOS=windows GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-         -o masseuse-camlink.exe github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink)
+         -o masseuse-camlink.exe "$MODULE/cmd/masseuse-camlink")
   rebuilt=$($SHA "$work/connector/masseuse-camlink.exe" | cut -d' ' -f1)
   if command -v unzip >/dev/null 2>&1; then
     published=$(unzip -p "masseuse-camlink_${version}_windows_amd64.zip" masseuse-camlink.exe | $SHA | cut -d' ' -f1)
@@ -150,10 +162,10 @@ if command -v go >/dev/null 2>&1; then
     [ -s "$archive" ] || { echo "    skipped darwin/$arch (no $archive in the release)"; continue; }
     (cd "$work/connector" \
       && GOOS=darwin GOARCH="$arch" go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-           -o "rebuilt_darwin_$arch" github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink)
+           -o "rebuilt_darwin_$arch" "$MODULE/cmd/masseuse-camlink")
     tar -xzOf "$archive" masseuse-camlink > "$work/published_darwin_$arch"
-    rebuilt=$(go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$work/connector/rebuilt_darwin_$arch" | cut -d' ' -f1)
-    stripped=$(go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$work/published_darwin_$arch" | cut -d' ' -f1)
+    rebuilt=$(go run "$MODULE/cmd/machostrip@$tag" -sha256 "$work/connector/rebuilt_darwin_$arch" | cut -d' ' -f1)
+    stripped=$(go run "$MODULE/cmd/machostrip@$tag" -sha256 "$work/published_darwin_$arch" | cut -d' ' -f1)
     if [ "$rebuilt" != "$stripped" ]; then
       echo "    MISMATCH darwin/$arch: rebuilt $rebuilt, in archive (signature stripped) $stripped" >&2
       exit 1
@@ -213,7 +225,7 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
   awk '{print $2}' checksums-darwin.txt | while read -r f; do
     slsa-verifier verify-artifact "$f" \
       --provenance-path darwin.intoto.jsonl \
-      --source-uri "github.com/$REPO" \
+      --source-uri "$SOURCE" \
       --source-tag "$tag" >/dev/null
     echo "    ok  $f"
   done
@@ -240,12 +252,12 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
       # window beside it (Contents/MacOS/Masseuse) is not rebuilt byte for
       # byte; its signature is checked below.
       appwork="$(mktemp -d)"
-      go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$exe" > "$appwork/bundle.txt"
+      go run "$MODULE/cmd/machostrip@$tag" -sha256 "$exe" > "$appwork/bundle.txt"
       for arch in arm64 amd64; do
         archive="masseuse-camlink_${version}_darwin_${arch}.tar.gz"
         [ -s "$archive" ] || { echo "    skipped $arch (no $archive)"; continue; }
         tar -xzOf "$archive" masseuse-camlink > "$appwork/thin_$arch"
-        thin=$(go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$appwork/thin_$arch" | cut -d' ' -f1)
+        thin=$(go run "$MODULE/cmd/machostrip@$tag" -sha256 "$appwork/thin_$arch" | cut -d' ' -f1)
         grep -q "^$thin  .* ($arch)\$" "$appwork/bundle.txt" \
           || { echo "    MISMATCH: the app's connector's $arch slice is not the published darwin/$arch binary" >&2; cat "$appwork/bundle.txt" >&2; hdiutil detach "$mount" -quiet; exit 1; }
         echo "    ok  the app's connector's $arch slice is the published darwin/$arch binary: $thin"
@@ -319,7 +331,7 @@ if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/ch
   winfiles | while read -r f; do
     slsa-verifier verify-artifact "$f" \
       --provenance-path windows.intoto.jsonl \
-      --source-uri "github.com/$REPO" \
+      --source-uri "$SOURCE" \
       --source-tag "$tag" >/dev/null
     echo "    ok  $f"
   done
@@ -335,16 +347,16 @@ if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/ch
     if [ -s "$archive" ] && command -v go >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
       published=$(unzip -p "$archive" masseuse-camlink.exe | $SHA | cut -d' ' -f1)
       rm -rf winpayload
-      go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -payload winpayload Masseuse.exe > winpayload.txt
+      go run "$MODULE/cmd/pestrip@$tag" -payload winpayload Masseuse.exe > winpayload.txt
       grep -q '  ffmpeg.exe$' winpayload.txt || { echo "    no ffmpeg.exe in the payload" >&2; exit 1; }
       if [ -s winpayload/masseuse-camlink.exe ]; then
-        inside=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 winpayload/masseuse-camlink.exe | cut -d' ' -f1)
+        inside=$(go run "$MODULE/cmd/pestrip@$tag" -sha256 winpayload/masseuse-camlink.exe | cut -d' ' -f1)
         [ "$inside" = "$published" ] \
           || { echo "    MISMATCH: the connector in Masseuse.exe's payload, minus its signature ($inside), is not the published windows/amd64 connector ($published)" >&2; exit 1; }
         echo "    ok  the connector in Masseuse.exe's payload minus its signature is the published windows/amd64 connector: $published"
         echo "    ok  Masseuse.exe itself is the desktop window: signed, covered by the checksum file and the provenance, not rebuilt byte for byte (VERIFY.md, \"The desktop window\")"
       else
-        stripped=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 Masseuse.exe | cut -d' ' -f1)
+        stripped=$(go run "$MODULE/cmd/pestrip@$tag" -sha256 Masseuse.exe | cut -d' ' -f1)
         [ "$stripped" = "$published" ] \
           || { echo "    MISMATCH: Masseuse.exe minus signature and payload ($stripped) is not the published windows/amd64 connector ($published)" >&2; exit 1; }
         echo "    ok  Masseuse.exe minus its signature and payload is the published windows/amd64 connector: $stripped"
@@ -423,7 +435,7 @@ if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
         [ -f "$p" ] || continue
         name=$(basename "$p")
         want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "windows" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
-        got=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 "$p" | cut -d' ' -f1)
+        got=$(go run "$MODULE/cmd/pestrip@$tag" -sha256 "$p" | cut -d' ' -f1)
         [ -n "$want" ] && [ "$got" = "$want" ] \
           || { echo "    MISMATCH: units/$name in Masseuse.exe is not the manifest's ($got, manifest $want)" >&2; exit 1; }
         echo "    ok  units/$name in Masseuse.exe is the manifest's once its signature is stripped: $got"

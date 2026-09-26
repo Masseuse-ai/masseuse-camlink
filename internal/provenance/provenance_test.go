@@ -20,7 +20,7 @@ import (
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 
-	"github.com/FemLed/masseuse-camlink/internal/oci"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/oci"
 )
 
 // The fixtures under testdata are the records cosign and the SLSA

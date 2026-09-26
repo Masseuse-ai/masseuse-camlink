@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
 )
 
 // lines decodes every JSON line written so far.
@@ -600,8 +600,8 @@ func TestConsoleReporterLines(t *testing.T) {
 	c.Device(estim.Descriptor{Reason: estim.ReasonLetGo}, true)
 	c.Link(linkActive, "")
 	c.Link(linkReset, "gone")
-	c.Enclave(enclaveProof{Image: "sha256:0123456789abcdef0123", Release: "v1.2.3", Commit: "abcdef0123456789", Source: "github.com/FemLed/masseuse-video-tee", Cached: true})
-	c.Enclave(enclaveProof{Image: "sha256:0123456789abcdef0123", Release: "v1.2.3", Commit: "abcdef0123456789", Source: "github.com/FemLed/masseuse-video-tee"})
+	c.Enclave(enclaveProof{Image: "sha256:0123456789abcdef0123", Release: "v1.2.3", Commit: "abcdef0123456789", Source: "github.com/Masseuse-ai/masseuse-video-tee", Cached: true})
+	c.Enclave(enclaveProof{Image: "sha256:0123456789abcdef0123", Release: "v1.2.3", Commit: "abcdef0123456789", Source: "github.com/Masseuse-ai/masseuse-video-tee"})
 	c.Sending("1280x720 30 fps", 2.5e6, 64e3, true, 1500*time.Millisecond)
 	c.NotSending("")
 	c.NotSending("ffmpeg exited")
@@ -634,7 +634,7 @@ Stimulation device connected: One. It is held at zero until a session on your ph
 Stimulation device disconnected: it was switched off at its power button. It reconnects on its own when it is on again.
 Camera link active: connected to the verified enclave.
 The enclave closed the camera link (gone); waiting for the service.
-Enclave image 0123456789ab… is github.com/FemLed/masseuse-video-tee v1.2.3 (commit abcdef0): signature and build provenance verified in the public registry and the Sigstore log.
+Enclave image 0123456789ab… is github.com/Masseuse-ai/masseuse-video-tee v1.2.3 (commit abcdef0): signature and build provenance verified in the public registry and the Sigstore log.
 Sending 1280x720 30 fps: video 2.5 Mb/s, audio 64 kb/s
 Connection congested: dropping video to keep up (backlog 1.5 s).
 Camera on but not sending yet (waiting for the source).

@@ -2,7 +2,7 @@
 // signed macOS release binary can be compared with an unsigned rebuild
 // (VERIFY.md, "The macOS binaries"). It runs on any operating system:
 //
-//	go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 masseuse-camlink
+//	go run github.com/Masseuse-ai/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 masseuse-camlink
 //
 // prints the SHA-256 of the binary without its signature; an unsigned binary
 // passes through unchanged, so the same command hashes a rebuild. A
@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/FemLed/masseuse-camlink/internal/machosig"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/machosig"
 )
 
 func main() {

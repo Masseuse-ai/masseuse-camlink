@@ -15,7 +15,7 @@
 import { StrictMode, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import { ConnectorService } from '../bindings/github.com/FemLed/masseuse-camlink/desktop';
+import { ConnectorService } from '../bindings/github.com/Masseuse-ai/masseuse-camlink/desktop';
 import { App } from './App';
 import { MockBridge } from './bridge/mock/MockBridge';
 import { DEFAULT_SCENARIO, findScenario, scenarioState } from './bridge/mock/scenarios';

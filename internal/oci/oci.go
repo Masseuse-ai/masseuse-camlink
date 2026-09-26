@@ -33,7 +33,7 @@ const maxBody = 4 << 20
 // Repository is a registry host and a repository path within it.
 type Repository struct {
 	Host string // e.g. ghcr.io
-	Path string // e.g. femled/masseuse-video-tee
+	Path string // e.g. masseuse-ai/masseuse-video-tee
 }
 
 var (

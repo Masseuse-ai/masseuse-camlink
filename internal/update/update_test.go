@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
-	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
-	"github.com/FemLed/masseuse-camlink/internal/provenance"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig/petest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/provenance"
 )
 
 func TestDetectTellsTheLayoutsApart(t *testing.T) {
@@ -343,6 +343,10 @@ func recordedFiles(t *testing.T) map[string][]byte {
 	return files
 }
 
+// recordedSource is the repository whose release workflow signed the recorded
+// v0.10.0 files (testdata): the project's previous GitHub home.
+const recordedSource = "github.com/FemLed/masseuse-camlink"
+
 func TestCheckReadsTheLatestReleaseOffItsSignature(t *testing.T) {
 	// The real verifier over the real v0.10.0 files: the tag comes from the
 	// certificate, and the comparison with the running version decides.
@@ -357,7 +361,7 @@ func TestCheckReadsTheLatestReleaseOffItsSignature(t *testing.T) {
 		{"v0.11.0", ErrUpToDate},
 		{"(devel)", ErrNotARelease},
 	} {
-		cl := &Client{ReleasesURL: srv.URL, Verifier: verifier, Current: c.current}
+		cl := &Client{ReleasesURL: srv.URL, Source: recordedSource, Verifier: verifier, Current: c.current}
 		rel, err := cl.Check(context.Background())
 		if !errors.Is(err, c.want) {
 			t.Fatalf("current %s: %v", c.current, err)
@@ -370,13 +374,13 @@ func TestCheckReadsTheLatestReleaseOffItsSignature(t *testing.T) {
 	files := recordedFiles(t)
 	files["checksums.txt"] = append(files["checksums.txt"], []byte("deadbeef  extra\n")...)
 	bad := releaseServer(t, "v0.10.0", files)
-	cl := &Client{ReleasesURL: bad.URL, Verifier: verifier, Current: "v0.9.4"}
+	cl := &Client{ReleasesURL: bad.URL, Source: recordedSource, Verifier: verifier, Current: "v0.9.4"}
 	if _, err := cl.Check(context.Background()); err == nil || errors.Is(err, ErrUpToDate) {
 		t.Fatalf("a tampered checksums file passed: %v", err)
 	}
 	// No network: an error, not a panic, not a downgrade.
 	down := releaseServer(t, "v0.10.0", map[string][]byte{})
-	cl = &Client{ReleasesURL: down.URL, Verifier: verifier, Current: "v0.9.4"}
+	cl = &Client{ReleasesURL: down.URL, Source: recordedSource, Verifier: verifier, Current: "v0.9.4"}
 	if _, err := cl.Check(context.Background()); err == nil {
 		t.Fatal("a release with no files was accepted")
 	}

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
-	"github.com/FemLed/masseuse-camlink/internal/pesig"
-	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig/petest"
 )
 
 // A stand-in for everything the release hands the packer: the window, a

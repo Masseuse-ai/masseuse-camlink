@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/FemLed/masseuse-camlink/internal/pesig"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig"
 )
 
 // UnpackUnder unpacks the payload the executable at exe carries into

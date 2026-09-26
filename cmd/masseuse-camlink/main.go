@@ -22,17 +22,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/attest"
-	"github.com/FemLed/masseuse-camlink/internal/buildinfo"
-	"github.com/FemLed/masseuse-camlink/internal/capture"
-	"github.com/FemLed/masseuse-camlink/internal/identity"
-	"github.com/FemLed/masseuse-camlink/internal/mux"
-	"github.com/FemLed/masseuse-camlink/internal/oci"
-	"github.com/FemLed/masseuse-camlink/internal/provenance"
-	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
-	"github.com/FemLed/masseuse-camlink/internal/serve"
-	"github.com/FemLed/masseuse-camlink/internal/share"
-	"github.com/FemLed/masseuse-camlink/internal/tunnel"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/attest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/buildinfo"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/capture"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/identity"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/mux"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/oci"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/provenance"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/rendezvous"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/share"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/tunnel"
 )
 
 func main() {

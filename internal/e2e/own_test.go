@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/gateway"
-	"github.com/FemLed/masseuse-camlink/internal/serve"
-	"github.com/FemLed/masseuse-camlink/internal/share"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/gateway"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/share"
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"

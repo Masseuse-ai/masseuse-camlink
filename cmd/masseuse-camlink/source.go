@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/camera"
-	"github.com/FemLed/masseuse-camlink/internal/capture"
-	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
-	"github.com/FemLed/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/camera"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/capture"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/rendezvous"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
 )
 
 // sourceFile remembers the camera chosen on the command line, so the next
