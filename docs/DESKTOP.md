@@ -154,7 +154,8 @@ Native, built in `desktop/menu.go`, in each platform's shape.
   which goes once the shell hears the connector itself).
 - **Help**: Learn more about Masseuse.ai (masseuse.ai/app) · How it stays
   private (README) · Verify this download (VERIFY.md) · Report a security
-  issue (SECURITY.md) · Show the log · Open the state folder.
+  issue (SECURITY.md) · Privacy Policy (masseuse.ai/privacy) · Terms of
+  Service (masseuse.ai/terms) · Show the log · Open the state folder.
 
 About opens the page's dialog through a `menu` event, so it is the same
 everywhere and can carry links. The Help links are a fixed list in the

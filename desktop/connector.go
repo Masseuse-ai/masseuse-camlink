@@ -519,12 +519,14 @@ func (s *ConnectorService) Quit() {
 // links are the pages the Help menu and the About dialog open, by name, so
 // the page can only ever open these.
 var links = map[string]string{
-	"learn-more": "https://masseuse.ai/app",
-	"privacy":    "https://github.com/FemLed/masseuse-camlink#how-it-stays-private",
-	"verify":     "https://github.com/FemLed/masseuse-camlink/blob/main/VERIFY.md",
-	"security":   "https://github.com/FemLed/masseuse-camlink/blob/main/SECURITY.md",
-	"source":     "https://github.com/FemLed/masseuse-camlink",
-	"releases":   "https://github.com/FemLed/masseuse-camlink/releases",
+	"learn-more":     "https://masseuse.ai/app",
+	"privacy":        "https://github.com/FemLed/masseuse-camlink#how-it-stays-private",
+	"verify":         "https://github.com/FemLed/masseuse-camlink/blob/main/VERIFY.md",
+	"security":       "https://github.com/FemLed/masseuse-camlink/blob/main/SECURITY.md",
+	"source":         "https://github.com/FemLed/masseuse-camlink",
+	"releases":       "https://github.com/FemLed/masseuse-camlink/releases",
+	"privacy-policy": "https://masseuse.ai/privacy",
+	"terms":          "https://masseuse.ai/terms",
 }
 
 // OpenLink opens one of the known pages in the default browser.

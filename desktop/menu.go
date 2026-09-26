@@ -73,6 +73,9 @@ func buildMenu(app *application.App, c *ConnectorService) *application.Menu {
 	help.Add("Verify this download").OnClick(link("verify"))
 	help.Add("Report a security issue").OnClick(link("security"))
 	help.AddSeparator()
+	help.Add("Privacy Policy").OnClick(link("privacy-policy"))
+	help.Add("Terms of Service").OnClick(link("terms"))
+	help.AddSeparator()
 	help.Add("Show the log").OnClick(func(*application.Context) { _ = c.ShowLog() })
 	help.Add("Open the state folder").OnClick(func(*application.Context) { _ = c.RevealStateDir() })
 	if runtime.GOOS != "darwin" {

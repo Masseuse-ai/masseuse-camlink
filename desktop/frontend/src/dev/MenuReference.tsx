@@ -21,6 +21,9 @@ const HELP_LINKS: Item[] = [
     { label: 'Verify this download', opens: 'VERIFY.md' },
     { label: 'Report a security issue', opens: 'SECURITY.md' },
     'separator',
+    { label: 'Privacy Policy', opens: 'masseuse.ai/privacy' },
+    { label: 'Terms of Service', opens: 'masseuse.ai/terms' },
+    'separator',
     { label: 'Show the log' },
     { label: 'Open the state folder' },
 ];

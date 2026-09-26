@@ -94,6 +94,8 @@ export const LINKS = {
     security: 'https://github.com/FemLed/masseuse-camlink/blob/main/SECURITY.md',
     source: 'https://github.com/FemLed/masseuse-camlink',
     releases: 'https://github.com/FemLed/masseuse-camlink/releases',
+    'privacy-policy': 'https://masseuse.ai/privacy',
+    terms: 'https://masseuse.ai/terms',
 } as const;
 
 export type LinkName = keyof typeof LINKS;

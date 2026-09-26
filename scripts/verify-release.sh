@@ -393,13 +393,14 @@ if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
   for release in $releases; do
     i=$((i + 1))
     fetch_units "https://masseuse.ai/app/units/$release/manifest.json" "units-manifest-$i.json"
-    fetch_units "https://masseuse.ai/app/units/$release/manifest.json.sigstore.json" "units-manifest-$i.json.sigstore.json"
-    cosign verify-blob --key units-cosign.pub --bundle "units-manifest-$i.json.sigstore.json" "units-manifest-$i.json" >/dev/null
+    fetch_units "https://masseuse.ai/app/units/$release/manifest.json.sigstore.json" "units-bundle-$i.sigstore.json"
+    cosign verify-blob --key units-cosign.pub --bundle "units-bundle-$i.sigstore.json" "units-manifest-$i.json" >/dev/null
     echo "    ok  $release/manifest.json signed by the helpers' key at $tag"
   done
   if command -v jq >/dev/null 2>&1; then
-    # Every release's files in one list, for the comparisons below.
-    jq -s '{files: [.[].files[]]}' units-manifest-*.json > units-manifest.json
+    # Every release's files in one list, for the comparisons below (the
+    # bundles are named apart so the glob takes manifests alone).
+    jq -s '{files: [.[].files[]]}' units-manifest-[0-9]*.json > units-manifest.json
     # windows/amd64 archive: units/<name>.exe hashes to the manifest's
     # windows/amd64 entry (the archive's helpers are unsigned; the
     # package's are signed and compared below with the signature stripped).
