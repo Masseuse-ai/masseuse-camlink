@@ -56,27 +56,25 @@ type Floors struct {
 
 // Production is the floor for masseuse.ai enclaves: Confidential Space on
 // Intel TDX, images signed by the masseuse-video-tee release workflow's key
-// and released at v0.4.0 or later, running in that repository's project
-// from its registry, reachable under .tee.masseuse.ai. The key id is the
-// hex SHA-256 of the release signing key's DER public key, the value the
-// launcher reports in image_signatures[].key_id (masseuse-video-tee,
-// VERIFY.md).
+// and released at v0.12.4 or later, the first release built and published
+// at github.com/Masseuse-ai/masseuse-video-tee, running in that
+// repository's project from its registry, reachable under
+// .tee.masseuse.ai. The key id is the hex SHA-256 of the release signing
+// key's DER public key, the value the launcher reports in
+// image_signatures[].key_id (masseuse-video-tee, VERIFY.md).
 var Production = Floors{
 	Issuer:          DefaultIssuer,
 	JWKSURL:         DefaultJWKSURL,
 	SWName:          DefaultSWName,
 	HWModel:         DefaultHWModel,
 	ImageSignatures: []string{"cfb085b950e93abb8332cede62fa50df662ef9aebb1533b2ae0bf1403ea4f811"},
-	MinRelease:      "v0.4.0",
+	MinRelease:      "v0.12.4",
 	RequireStable:   true,
 	RequireGpuCc:    true,
-	// Where the enclave image that runs today was built and published: the
-	// enclave's source moved to github.com/Masseuse-ai/masseuse-video-tee, and
-	// these two values follow the first image released from there, together
-	// with the policy the service publishes; until then they name the image
-	// that is attested, not the repository that holds its code.
-	SourceURI:            "github.com/FemLed/masseuse-video-tee",
-	ImageRepo:            "ghcr.io/femled/masseuse-video-tee",
+	// Where the enclave image is built and published, and where its
+	// provenance is checked at dial time (internal/provenance).
+	SourceURI:            "github.com/Masseuse-ai/masseuse-video-tee",
+	ImageRepo:            "ghcr.io/masseuse-ai/masseuse-video-tee",
 	TeeSlotHostSuffixes:  []string{".tee.masseuse.ai"},
 	ProjectID:            "prod-masseuse-video-tee",
 	ImageReferencePrefix: "us-central1-docker.pkg.dev/prod-masseuse-video-tee/masseuse-video-tee/masseuse-video-tee",

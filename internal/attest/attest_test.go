@@ -28,8 +28,8 @@ const (
 	testKeyID   = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
 	testRelease = "v0.4.0"
 	testCommit  = "0123456789abcdef0123456789abcdef01234567"
-	testRepo    = "ghcr.io/femled/masseuse-video-tee"
-	testSrcURI  = "github.com/FemLed/masseuse-video-tee"
+	testRepo    = "ghcr.io/masseuse-ai/masseuse-video-tee"
+	testSrcURI  = "github.com/Masseuse-ai/masseuse-video-tee"
 )
 
 var testSource = ImageSource{Repo: testRepo, Tag: "v0.1.0", SourceURI: testSrcURI}
