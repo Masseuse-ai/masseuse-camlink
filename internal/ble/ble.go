@@ -3,7 +3,8 @@
 // notifications. It is pure Go so the connector keeps cross-compiling with
 // CGO_ENABLED=0: on macOS it drives CoreBluetooth through the Objective-C
 // runtime (purego), on Linux it speaks to BlueZ over D-Bus, and on Windows
-// it reports ErrUnsupported until a backend exists.
+// it drives the Windows Runtime's Windows.Devices.Bluetooth through its
+// COM vtables (winrt-go).
 //
 // Everything above the Central and Conn interfaces is tested against fakes;
 // the backends themselves are exercised by `estim probe` on a real system.
@@ -51,7 +52,8 @@ func (u UUID) Equal(o UUID) bool { return u.Canonical() == o.Canonical() }
 // system knows about one it already holds a connection to.
 type Advertisement struct {
 	// ID is the system's identifier for the peripheral: a CoreBluetooth
-	// UUID on macOS (per computer), the device address on Linux.
+	// UUID on macOS (per computer), the device address on Linux and
+	// Windows (AA:BB:CC:DD:EE:FF).
 	ID string
 	// Name is the advertised local name, or the system's cached name.
 	Name string

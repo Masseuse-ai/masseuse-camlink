@@ -26,9 +26,11 @@ Video is encoded by Windows' own H.264 encoder (Media Foundation). The N
 editions of Windows ship without it: install Microsoft's "Media Feature
 Pack" from Settings > Apps > Optional features, then open the program again.
 
-On Windows the program serves the camera and microphone. It does not yet
-reach a TENS unit over Bluetooth (the Mac version does); a Bluetooth backend
-for Windows is planned.
+The program serves the camera and microphone and, over this computer's
+Bluetooth, a TENS unit within reach (Windows 10 version 1703 or newer).
+Nothing to set up: Bluetooth on in Settings > Bluetooth & devices, the unit
+switched on, and the window says when it has found it. To check the unit
+without a session, from a terminal in this folder: Masseuse.ai.exe estim probe
 
 The program remembers its pairing and camera choice in
 %LOCALAPPDATA%\masseuse-camlink. To move it, move the whole folder. To

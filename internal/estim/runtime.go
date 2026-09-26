@@ -17,6 +17,11 @@ const (
 	MaxArmWindow = 30 * time.Minute
 	// HealthInterval is how often the device is read in full while idle.
 	HealthInterval = 5 * time.Second
+	// HealthRetryPause separates a full reading that failed from the one
+	// more taken before the device is given up on: a serial or radio link
+	// garbles a reply now and then, and one garbled reply is not a lost
+	// device.
+	HealthRetryPause = 250 * time.Millisecond
 	// DefaultListInterval is how often the units in reach are listed while
 	// the program runs (Runtime.ListInterval). A listing is a scan window
 	// on the Bluetooth family, so it is not the health tick's.
@@ -483,9 +488,12 @@ func (r *Runtime) closeFailed(ctx context.Context, d Driver, restore bool) {
 	}
 }
 
-// HealthCheck reads the device in full; on failure the device is released
-// as far as it can be, closed and forgotten. A device that is busy with a
-// command is taken as healthy. Reports whether a device is held afterwards.
+// HealthCheck reads the device in full; a reading that fails is taken once
+// more after HealthRetryPause, and on the second failure the device is
+// released as far as it can be, closed without restore (abandoned: what
+// the driver keeps to resume the device stays kept) and forgotten. A
+// device that is busy with a command is taken as healthy. Reports whether
+// a device is held afterwards.
 func (r *Runtime) HealthCheck(ctx context.Context) bool {
 	if !r.dev.TryLock() {
 		return true
@@ -495,6 +503,12 @@ func (r *Runtime) HealthCheck(ctx context.Context) bool {
 		return false
 	}
 	status, err := r.device.Status(ctx)
+	if err != nil && ctx.Err() == nil {
+		r.log().Debug("estim: reading the device failed; reading once more", "err", err)
+		if perr := pause(ctx, HealthRetryPause); perr == nil {
+			status, err = r.device.Status(ctx)
+		}
+	}
 	if err == nil {
 		r.setStatus(status)
 		return true
@@ -855,4 +869,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// pause waits d, or until ctx ends.
+func pause(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

@@ -432,8 +432,15 @@ type Driver interface {
 	// and passes the level no step may pass (LevelMaxFor); cancelled,
 	// polled between steps, preempts a ramp.
 	Execute(ctx context.Context, cmd Command, levelMax int, cancelled func() bool) (Result, error)
-	// Close releases the device when restore is set and leaves it ready for
-	// a fresh connection. It never leaves a stale session behind.
+	// Close ends the connection. With restore (a clean close: exit, another
+	// unit selected, a connection that failed to open) it releases the
+	// device and leaves it ready for a fresh connection, and never leaves
+	// a stale session behind. Without restore the connection is abandoned:
+	// the Runtime is giving up on a device whose link has misbehaved (a
+	// full reading failed twice, a release failed), so the driver writes
+	// nothing over that link and keeps whatever lets the next Connect
+	// resume the device as it is (a session key, a pairing), rather than
+	// leave it in a state only a power cycle clears.
 	Close(ctx context.Context, restore bool) error
 }
 

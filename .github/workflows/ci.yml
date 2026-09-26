@@ -119,11 +119,13 @@ jobs:
   windows-package:
     # The Windows download (packaging/windows) assembled with a stand-in
     # ffmpeg.exe, so a broken script, resource file or console path is
-    # caught here rather than on a tag; and the connector's and capture's
-    # tests run on the system the package is for. The committed resource
-    # objects must be what make-syso.sh produces from winres.json and the
-    # icon (go-winres is deterministic), and the built program must show
-    # Explorer the strings in them.
+    # caught here rather than on a tag; and the connector's, capture's,
+    # Bluetooth backend's and stimulation link's tests run on the system
+    # the package is for (the runner has no Bluetooth radio: the backend's
+    # Open must say so, through the Windows Runtime, without hanging). The
+    # committed resource objects must be what make-syso.sh produces from
+    # winres.json and the icon (go-winres is deterministic), and the built
+    # program must show Explorer the strings in them.
     runs-on: windows-2022
     defaults:
       run:
@@ -138,7 +140,7 @@ jobs:
           cache: true
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: go test on Windows
-        run: go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/ ./internal/awake/ ./internal/estim/helper/ ./internal/update/
+        run: go test -count=1 -v -run 'TestOpenWithoutBluetooth|TestScanEndsOnDeadline' ./internal/ble/ && go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/ ./internal/awake/ ./internal/ble/ ./internal/estim/... ./internal/update/
       - name: The committed resource objects are current
         run: |
           sh packaging/windows/make-syso.sh

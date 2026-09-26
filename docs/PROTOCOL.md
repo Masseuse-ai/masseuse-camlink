@@ -441,24 +441,37 @@ helper is behind the same `Driver` interface, bounds and all.
 
 The Mastago is found over Bluetooth Low Energy, in pure Go so the releases
 stay reproducible: CoreBluetooth through the Objective-C runtime on macOS,
-BlueZ over D-Bus on Linux; Windows has no backend yet and reports no
-device. The finder looks first among the peripherals the system already
-holds a connection to that offer the unit's service (`FFF0`): on macOS a
-unit the vendor's own app has open is shared with the connector without
-that app being touched, and such a unit answers in well under a second. It
-then scans for about four seconds for a unit advertising by name
-(`MASTOGO…`) or by that service, and connects to the first one. Either way
-the unit is only taken as found when it answers a program query
-(`AT+CMODE?`). `-estim-ble G-12AB` (the unit's own suffix, its full
-advertised name or the system's identifier for it) pins the search to one
-unit; `-estim-ble off` leaves Bluetooth alone. `masseuse-camlink estim
-probe` describes what each registered family can see, runs the same search
-once and prints the device's status.
+BlueZ over D-Bus on Linux, the Windows Runtime's
+`Windows.Devices.Bluetooth` through its COM vtables on Windows (Windows 10
+version 1703 or newer). The finder looks first among the peripherals the
+system already holds a connection to that offer the unit's service
+(`FFF0`): on macOS a unit the vendor's own app has open is shared with the
+connector without that app being touched, and such a unit answers in well
+under a second; on Windows this is the system's own list of connected Low
+Energy devices, read without connecting, and a unit it does not list is
+left to the scan. It then scans for about four seconds for a unit
+advertising by name (`MASTOGO…`) or by that service, and connects to the
+first one. Either way the unit is only taken as found when it answers a
+program query (`AT+CMODE?`). `-estim-ble G-12AB` (the unit's own suffix,
+its full advertised name or the system's identifier for it) pins the
+search to one unit; `-estim-ble off` leaves Bluetooth alone.
+`masseuse-camlink estim probe` describes what each registered family can
+see, runs the same search once and prints the device's status.
+
+The system's identifier for a unit, the `id` of `device` and `units`
+(7.3) and what a selection may name, is a CoreBluetooth identifier on
+macOS (a UUID the computer gives the unit) and the unit's Bluetooth
+address on Linux and Windows (`C4:BE:84:70:29:3F`). On Windows a unit that
+advertises with a random address is looked up by that address type, which
+the scan remembers for the run; an identifier remembered from an earlier
+run is tried as given, then as a public and as a random address.
 
 On macOS the first Bluetooth use asks the person, once, to allow the
 program (the terminal it runs in) to use Bluetooth; refused, or with
 Bluetooth switched off, the connector logs so once and keeps trying every
-health tick, with no device reported.
+health tick, with no device reported. Windows asks nothing of a program
+run from its own window; with Bluetooth switched off in Settings, or
+disabled, the connector logs so once and keeps trying the same way.
 
 A unit another program on this computer has open (the vendor's app, a
 script keeping the unit awake) is served through that program's link: the

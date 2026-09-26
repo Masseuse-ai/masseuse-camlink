@@ -334,6 +334,85 @@ func TestRuntimeFaultAndReconnect(t *testing.T) {
 	}
 }
 
+// flaky is a Driver whose full reading fails the next few times it is
+// asked, as a link that garbles a reply does.
+type flaky struct {
+	estim.Driver
+	mu    sync.Mutex
+	fail  int
+	asked int
+}
+
+func (f *flaky) Status(ctx context.Context) (estim.Status, error) {
+	f.mu.Lock()
+	f.asked++
+	failing := f.fail > 0
+	if failing {
+		f.fail--
+	}
+	f.mu.Unlock()
+	if failing {
+		return estim.Status{}, errors.New("reply checksum mismatch: 0xa4 != 0x52")
+	}
+	return f.Driver.Status(ctx)
+}
+
+func (f *flaky) setFail(n int) { f.mu.Lock(); f.fail = n; f.mu.Unlock() }
+func (f *flaky) count() int    { f.mu.Lock(); defer f.mu.Unlock(); return f.asked }
+
+func TestRuntimeHealthCheckReadsOnceMoreBeforeAFault(t *testing.T) {
+	ctx := context.Background()
+	u := fakeunit.New("id-1", "MASTOGO G-12AB")
+	rt, seen := watched(t, u)
+	var f *flaky
+	inner := rt.Connect
+	rt.Connect = func(ctx context.Context) (estim.Driver, error) {
+		d, err := inner(ctx)
+		if err != nil {
+			return nil, err
+		}
+		f = &flaky{Driver: d}
+		return f, nil
+	}
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Arm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// One garbled reading: the check reads once more, the device stays
+	// held and armed, and nothing is reported.
+	reports := len(seen())
+	asked := f.count()
+	f.setFail(1)
+	if !rt.HealthCheck(ctx) {
+		t.Fatal("one failed reading faulted the device")
+	}
+	if f.count()-asked != 2 {
+		t.Fatalf("readings taken by the check = %d, want 2", f.count()-asked)
+	}
+	if !rt.Connected() || !rt.Armed() || rt.CancelLatched() {
+		t.Fatal("a recovered reading must leave the device held and armed")
+	}
+	if st := rt.LastStatus(); !st.Connected || st.LevelA == nil {
+		t.Fatalf("status after the recovered reading = %+v", st)
+	}
+	if len(seen()) != reports {
+		t.Fatal("a recovered reading was reported as a device change")
+	}
+	// Two in a row: the device is given up on, as before.
+	f.setFail(2)
+	if rt.HealthCheck(ctx) {
+		t.Fatal("two failed readings passed the check")
+	}
+	if rt.Connected() || rt.Armed() || !rt.CancelLatched() {
+		t.Fatal("fault must forget the device and latch")
+	}
+	if got := seen(); len(got) != reports+1 || got[len(got)-1].Connected || got[len(got)-1].Reason != estim.ReasonStoppedAnswering {
+		t.Fatalf("OnDevice calls = %+v", got)
+	}
+}
+
 func TestRuntimeNamesWhyTheUnitWent(t *testing.T) {
 	ctx := context.Background()
 	u := fakeunit.New("id-1", "MASTOGO G-12AB")

@@ -49,12 +49,12 @@ with a Windows certificate, so the first time Windows asks whether to run an
 app it does not recognize: *More info*, then *Run anyway*. Video is encoded
 by Windows' own Media Foundation H.264 encoder (the graphics chip's, or the
 software one every Windows edition carries except the N editions, which need
-Microsoft's *Media Feature Pack* from Settings, *Optional features*). On
-Windows the program serves the camera and microphone; it does not reach a
-stimulation device yet (there is no Bluetooth backend for Windows so far,
-see "Your stimulation device"), so a unit is driven from a Mac. The
-`windows_*` archives carry the bare `masseuse-camlink.exe` for people who
-run it from a terminal with their own ffmpeg.
+Microsoft's *Media Feature Pack* from Settings, *Optional features*). The
+program serves the camera and microphone and, over the computer's
+Bluetooth, a stimulation unit (Windows 10 version 1703 or newer; see "Your
+stimulation device"). The `windows_*` archives carry the bare
+`masseuse-camlink.exe` for people who run it from a terminal with their own
+ffmpeg.
 
 **Linux, and the bare binaries.** Unpack the archive anywhere and run
 `masseuse-camlink` from a terminal. To send the computer's camera it needs
@@ -277,9 +277,10 @@ your session sees its status and can adjust it, within limits the connector
 holds to. The reference device is the Mastago TENS unit (the Bluetooth
 unit that advertises as `MASTOGO G-xxxx`). Nothing to set up: switch the
 unit on and start the connector; the first time, macOS asks whether the
-terminal may use Bluetooth. The connector finds the unit whether it is
-advertising or already open in the vendor's own app on this computer, and
-says
+terminal may use Bluetooth (Windows asks nothing: Bluetooth only has to be
+on, in Settings, *Bluetooth & devices*). The connector finds the unit
+whether it is advertising or already open in the vendor's own app on this
+computer, and says
 
 ```
 Stimulation device connected: Mastago TENS G-12AB. It is held at zero until a session on your phone uses this computer.
@@ -313,8 +314,12 @@ says what the connector can see over Bluetooth (units already open in
 another program, units advertising), finds the unit, prints what it reports
 and leaves it released. `-estim-ble off` leaves Bluetooth alone. On Linux
 the connector talks to BlueZ over D-Bus, so your user needs to be allowed
-to use Bluetooth (usually the `bluetooth` group); on Windows there is no
-Bluetooth backend yet.
+to use Bluetooth (usually the `bluetooth` group). On Windows it talks to
+the Windows Runtime (Windows 10 version 1703 or newer) and names a unit by
+its Bluetooth address (`C4:BE:84:70:29:3F`), which is the identifier
+`-estim-ble` and `-estim-unit` take there; a unit another program has
+open is found where Windows lists it among its connected devices, and the
+scan finds the rest.
 
 **Several units.** The connector serves one unit at a time and keeps an eye
 on the others: every half minute it lists the units in reach without

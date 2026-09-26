@@ -35,9 +35,11 @@ Foundation's H.264 encoder (`h264_mf`): the graphics chip's when there is
 one, else the software encoder Windows carries. ffmpeg loads Media
 Foundation at run time, so on an N edition the program starts and the
 camera fails with ffmpeg's own words until Microsoft's Media Feature Pack is
-installed (`README.txt` says so). There is no Bluetooth backend for Windows
-yet (`internal/ble/ble_other.go`), so a stimulation device is not reached
-from Windows; the camera and microphone are.
+installed (`README.txt` says so). A stimulation unit is reached over the
+Windows Runtime's Bluetooth Low Energy classes (`internal/ble/ble_windows.go`,
+winrt-go's bindings over the COM vtables, no cgo; Windows 10 version 1703
+or newer), with no permission prompt: a program run from its own window may
+use Bluetooth as soon as the radio is on.
 
 ## Files here
 
