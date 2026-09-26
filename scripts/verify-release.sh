@@ -26,7 +26,9 @@ set -eu
 
 REPO="FemLed/masseuse-camlink"
 IMAGE="ghcr.io/femled/masseuse-camlink"
-WORKFLOW_RE='^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v'
+# [.] rather than \. : Git Bash on Windows rewrites a backslash in an argument
+# to a native program (cosign) as a path separator.
+WORKFLOW_RE='^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v'
 ISSUER="https://token.actions.githubusercontent.com"
 # The Apple Developer ID the darwin binaries are signed with (VERIFY.md,
 # "The macOS binaries"): the team and the leaf certificate's SHA-256.

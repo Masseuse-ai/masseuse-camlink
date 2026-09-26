@@ -264,7 +264,7 @@ jobs:
             sleep 15
           done
           cosign verify-blob --bundle checksums.txt.sigstore.json \
-            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v' \
+            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
           grep -E "_darwin_(arm64|amd64)\.tar\.gz$" checksums.txt | shasum -a 256 -c -
           for arch in arm64 amd64; do
@@ -484,8 +484,10 @@ jobs:
               --pattern "masseuse-camlink_${version}_windows_amd64.zip" && break
             sleep 15
           done
+          # [.] rather than \. : Git Bash rewrites a backslash in an argument to
+          # a native program (cosign) as a path separator, \. becoming /.
           cosign verify-blob --bundle checksums.txt.sigstore.json \
-            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v' \
+            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
           grep -E "_windows_amd64\.zip$" checksums.txt | sha256sum -c -
           7z e -y -o. "masseuse-camlink_${version}_windows_amd64.zip" masseuse-camlink.exe > /dev/null
