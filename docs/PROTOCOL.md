@@ -342,10 +342,20 @@ remembered in `source.json`:
   RTSP to a loopback port the connector chose, on a path that is a fresh
   random secret, and the connector forwards the packets into its stream
   unchanged. The child runs only while a session is reading: it starts at the
-  first `OPEN` for the reserved target and stops when the session's tunnel
-  ends, so the camera light is off between sessions. A `DESCRIBE` that
-  arrives while ffmpeg is still starting waits for it (up to 8 s; the enclave
-  allows 15 s).
+  first `OPEN` for the reserved target and stops when the session ends, so
+  the camera light is off between sessions. When the session's tunnel goes
+  down while the session lasts (the service re-dials with a new ticket on
+  every new lease, and the connector re-dials after a network failure) the
+  child keeps running for 15 s, since the relay is back at the stream within
+  seconds and a restart would put it back to zero just as the relay's
+  `DESCRIBE` arrives; with no stream opened by then it stops. A `DESCRIBE`
+  that arrives while ffmpeg is still starting waits for it (up to 12 s, longer
+  than the relay's own 10 s patience for the answer, so that the connector is
+  never what gives up first; the enclave gives the path 15 s to be ready).
+  By default the capture uses the first camera and the first microphone
+  listed, passing over an iPhone or iPad joined through Continuity Camera
+  when the computer has a device of its own: those open over the air, in
+  several seconds and not always.
 - **A camera on the network** (`camera`). The connector is an RTSPS client of
   the camera (`-camera-url rtsps://user:password@host:port/path`; the host
   must be a private-network address or a name resolving only to such

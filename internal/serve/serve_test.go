@@ -252,6 +252,16 @@ func TestDescribeWaitsForSource(t *testing.T) {
 }
 
 func TestDescribeWithoutSourceIs404(t *testing.T) {
+	// The default wait outlasts the enclave's relay, which gives the answer
+	// 10 s: the connector is never what gives up first.
+	if s, err := New(Config{StateDir: t.TempDir(), Logger: quiet()}); err != nil {
+		t.Fatal(err)
+	} else {
+		s.Close()
+		if s.cfg.DescribeWait != DefaultDescribeWait || DefaultDescribeWait <= 10*time.Second {
+			t.Fatalf("default DescribeWait %s", s.cfg.DescribeWait)
+		}
+	}
 	s, err := New(Config{StateDir: t.TempDir(), Logger: quiet(), DescribeWait: 200 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)

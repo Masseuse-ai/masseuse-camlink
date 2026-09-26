@@ -252,8 +252,9 @@ type Substitution struct {
 
 // Resolve picks the camera and, unless Mic is "none", the microphone that
 // opts name among devs. With Fallback, a named device that is absent gives
-// way to the first of its kind and is reported in the substitutions; with
-// no device of that kind at all the error stands either way.
+// way to the default of its kind (Select with no selector) and is reported
+// in the substitutions; with no device of that kind at all the error stands
+// either way.
 func Resolve(devs []Device, opts Options) (cam Device, mic *Device, subs []Substitution, err error) {
 	pick := func(kind Kind, selector string) (Device, error) {
 		d, err := Select(devs, kind, selector)
@@ -282,7 +283,11 @@ func Resolve(devs []Device, opts Options) (cam Device, mic *Device, subs []Subst
 
 // Select picks the device of a kind named by selector: its number in the
 // listing, its exact name, or a case-insensitive substring of its name
-// matching exactly one device. An empty selector picks the first.
+// matching exactly one device. An empty selector picks the default: the
+// first device that is the computer's own or wired to it. An iPhone or
+// iPad joining through Continuity Camera is passed over (macOS lists them
+// first, and they open over the air, in several seconds and not always)
+// unless nothing else of the kind is connected.
 func Select(devs []Device, kind Kind, selector string) (Device, error) {
 	var ofKind []Device
 	for _, d := range devs {
@@ -295,7 +300,7 @@ func Select(devs []Device, kind Kind, selector string) (Device, error) {
 	}
 	sel := strings.TrimSpace(selector)
 	if sel == "" {
-		return ofKind[0], nil
+		return defaultDevice(ofKind), nil
 	}
 	if n, err := strconv.Atoi(sel); err == nil {
 		if n < 0 || n >= len(ofKind) {
@@ -326,4 +331,23 @@ func Select(devs []Device, kind Kind, selector string) (Device, error) {
 		}
 		return Device{}, fmt.Errorf("%w: %q matches several %s devices: %s", ErrNoDevice, selector, kind, strings.Join(names, ", "))
 	}
+}
+
+// defaultDevice is the first of devs that is not a Continuity Camera
+// device, or the first of all when every one is.
+func defaultDevice(devs []Device) Device {
+	for _, d := range devs {
+		if !continuity(d) {
+			return d
+		}
+	}
+	return devs[0]
+}
+
+// continuity reports whether d is an iPhone or iPad joining the computer
+// through Continuity Camera; macOS names them after the phone ("…'s iPhone
+// Microphone", "iPhone Camera", "iPhone Desk View").
+func continuity(d Device) bool {
+	name := strings.ToLower(d.Name)
+	return strings.Contains(name, "iphone") || strings.Contains(name, "ipad")
 }

@@ -233,6 +233,60 @@ func TestSelect(t *testing.T) {
 	}
 }
 
+// avfContinuityListing is a Mac with an iPhone joined through Continuity
+// Camera: macOS lists the phone's microphone before the computer's own.
+const avfContinuityListing = `[AVFoundation indev @ 0x7f8] AVFoundation video devices:
+[AVFoundation indev @ 0x7f8] [0] iPhone Desk View
+[AVFoundation indev @ 0x7f8] [1] iPhone Camera
+[AVFoundation indev @ 0x7f8] [2] FaceTime HD Camera
+[AVFoundation indev @ 0x7f8] [3] Capture screen 0
+[AVFoundation indev @ 0x7f8] AVFoundation audio devices:
+[AVFoundation indev @ 0x7f8] [0] Someone’s iPhone Microphone
+[AVFoundation indev @ 0x7f8] [1] MacBook Pro Microphone
+[in#0 @ 0x7f9] Error opening input: Input/output error
+Error opening input file .
+`
+
+func TestDefaultPassesOverContinuityDevices(t *testing.T) {
+	devs := parseAVFoundation(avfContinuityListing)
+	cases := []struct {
+		kind   Kind
+		sel    string
+		wantID string
+	}{
+		{Video, "", "2"},  // the computer's own camera, not the phone's
+		{Audio, "", "1"},  // the computer's own microphone, not the phone's
+		{Video, "0", "0"}, // numbers keep the listing's order
+		{Audio, "0", "0"},
+		{Audio, "iphone", "0"}, // and the phone can be asked for by name
+		{Video, "desk view", "0"},
+	}
+	for _, tc := range cases {
+		d, err := Select(devs, tc.kind, tc.sel)
+		if err != nil || d.ID != tc.wantID {
+			t.Errorf("%s %q: got %s, %v; want %s", tc.kind, tc.sel, d.ID, err, tc.wantID)
+		}
+	}
+	// A remembered device that is absent gives way to the same default.
+	cam, mic, subs, err := Resolve(devs, Options{Camera: "Studio Cam 4K", Mic: "USB Mic", Fallback: true})
+	if err != nil || cam.ID != "2" || mic == nil || mic.ID != "1" {
+		t.Fatalf("cam %+v mic %+v err %v", cam, mic, err)
+	}
+	if len(subs) != 2 || subs[0].Using.Name != "FaceTime HD Camera" || subs[1].Using.Name != "MacBook Pro Microphone" {
+		t.Fatalf("substitutions %+v", subs)
+	}
+	// With nothing but the phone connected, the phone it is.
+	phoneOnly := []Device{
+		{Kind: Video, ID: "0", Name: "iPhone Camera"},
+		{Kind: Audio, ID: "0", Name: "Someone’s iPhone Microphone"},
+	}
+	for _, kind := range []Kind{Video, Audio} {
+		if d, err := Select(phoneOnly, kind, ""); err != nil || d.ID != "0" {
+			t.Errorf("phone only, %s: got %+v, %v", kind, d, err)
+		}
+	}
+}
+
 func TestResolveFallsBackForARememberedDeviceOnly(t *testing.T) {
 	devs := parseAVFoundation(avfListing)
 	// Named on the command line and absent: an error, whatever else is there.

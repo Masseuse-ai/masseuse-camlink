@@ -69,8 +69,10 @@ Sending 1280x720 30 fps, h264_videotoolbox: video 2.1 Mb/s, audio 64 kb/s
 Camera off.
 ```
 
-By default it uses the first camera and the first microphone it finds. To
-pick others:
+By default it uses the first camera and the first microphone it finds,
+passing over an iPhone or iPad joined through Continuity Camera when the
+computer has one of its own (those open over the air, slowly and not
+always). To pick others:
 
 ```
 $ masseuse-camlink devices
@@ -219,6 +221,8 @@ camera tunnel and the enclave never sees it.
   else on your computer or network can watch it.
 - **Camera on only when watched.** The camera and microphone are captured
   only while a session is reading the stream, and never between sessions.
+  If the connection to the enclave drops mid-session, they stay on for up
+  to 15 s while it is re-established, then go off.
 - **Open and reproducible.** Apache-2.0, built from a pinned Go toolchain
   with SLSA provenance and keyless signatures. `VERIFY.md` shows how to check
   a download and rebuild it byte for byte.

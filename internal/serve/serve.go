@@ -56,6 +56,13 @@ const (
 	// DefaultHandoverGrace is how long a publication waits for the
 	// replacement publisher after ArmHandover before it closes.
 	DefaultHandoverGrace = 8 * time.Second
+	// DefaultDescribeWait is how long a DESCRIBE waits for the source to
+	// start publishing (Config.DescribeWait). It outlasts the enclave's
+	// relay, which waits 10 s for the answer, so that the wait is never
+	// what gives up first: whenever the source comes up within the
+	// reader's patience the reader gets its answer. The enclave gives the
+	// path 15 s to be ready in all.
+	DefaultDescribeWait = 12 * time.Second
 )
 
 var (
@@ -75,7 +82,7 @@ type Config struct {
 	// StateDir holds the certificate (CertFile).
 	StateDir string
 	// DescribeWait bounds how long a DESCRIBE waits for a source to start
-	// publishing; 0 means 8 s. The enclave gives the path 15 s to be ready.
+	// publishing; 0 means DefaultDescribeWait.
 	DescribeWait time.Duration
 	// GateBacklog is the tunnel backlog at which video frames are dropped;
 	// 0 means DefaultGateBacklog.
@@ -109,7 +116,7 @@ type Server struct {
 // New loads (or creates) the certificate and starts the server.
 func New(cfg Config) (*Server, error) {
 	if cfg.DescribeWait == 0 {
-		cfg.DescribeWait = 8 * time.Second
+		cfg.DescribeWait = DefaultDescribeWait
 	}
 	if cfg.GateBacklog == 0 {
 		cfg.GateBacklog = DefaultGateBacklog

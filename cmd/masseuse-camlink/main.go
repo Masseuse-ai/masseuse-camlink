@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -160,7 +161,7 @@ func main() {
 	go func() { defer close(estimDone); mgr.estim.run(estimCtx) }()
 	err = client.Run(ctx, mgr)
 	mgr.closeAll("shutting down")
-	cam.off()
+	cam.off(false)
 	stopEstim()
 	<-estimDone
 	if err != nil && ctx.Err() == nil {
@@ -342,6 +343,10 @@ type active struct {
 	// done is closed when run has given up on this dial (the enclave
 	// refused the ticket or closed the link); a fresh dial then replaces it.
 	done chan struct{}
+	// ended is set before cancel when the session is over (cleared, or the
+	// connector shutting down) rather than the tunnel being replaced: the
+	// camera then goes off at once instead of waiting for the next tunnel.
+	ended atomic.Bool
 }
 
 func (a *active) finished() bool {
@@ -417,7 +422,7 @@ func (m *manager) OnDial(d rendezvous.Dial) {
 	a := &active{dial: d, cancel: cancel, done: make(chan struct{})}
 	m.tunnels[d.SessionID] = a
 	m.mu.Unlock()
-	go m.run(ctx, d, a.done)
+	go m.run(ctx, a)
 }
 
 func (m *manager) OnClear(sessionID, reason string) {
@@ -428,6 +433,7 @@ func (m *manager) OnClear(sessionID, reason string) {
 	}
 	m.mu.Unlock()
 	if ok {
+		cur.ended.Store(true)
 		cur.cancel()
 		m.log.Info("session ended", "session", sessionID, "reason", reason)
 		m.printf("Camera link closed.\n")
@@ -441,6 +447,7 @@ func (m *manager) closeAll(reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, a := range m.tunnels {
+		a.ended.Store(true)
 		a.cancel()
 		delete(m.tunnels, id)
 	}
@@ -449,8 +456,9 @@ func (m *manager) closeAll(reason string) {
 
 // run keeps a tunnel up for the session until it is cleared, re-dialing
 // after network failures with backoff. The camera, if the session turned
-// it on, goes off whenever the tunnel is down: it comes back at the next
-// stream the enclave opens.
+// it on, stays on for a while when the tunnel goes down (cameraGrace), so
+// that the next tunnel's first stream finds it publishing, and goes off
+// when that grace passes with no stream, or at once when the session ends.
 //
 // Two endings are final for this ticket and are not retried: the enclave
 // answering that it is not expecting the connector (the ticket is spent or
@@ -458,9 +466,10 @@ func (m *manager) closeAll(reason string) {
 // closing the link itself. Either way the service sends a new dial when a
 // session wants the camera again; the session entry stays so that a clear
 // is still reported and the same ticket is not dialed twice.
-func (m *manager) run(ctx context.Context, d rendezvous.Dial, done chan struct{}) {
-	defer close(done)
-	defer m.cam.off()
+func (m *manager) run(ctx context.Context, a *active) {
+	d := a.dial
+	defer close(a.done)
+	defer func() { m.cam.off(!a.ended.Load()) }()
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
@@ -491,7 +500,7 @@ func (m *manager) run(ctx context.Context, d rendezvous.Dial, done chan struct{}
 		m.cam.attach(t.Backlog)
 		err = t.Serve(ctx)
 		m.cam.attach(nil)
-		m.cam.off()
+		m.cam.off(!a.ended.Load())
 		if ctx.Err() != nil {
 			return
 		}

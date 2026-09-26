@@ -230,19 +230,37 @@ func listDevices(ctx context.Context, ffmpegPath string) int {
 	return 0
 }
 
+// cameraGrace is how long the camera stays on after its tunnel ends before
+// it is turned off, in case the next tunnel opens a stream in the meantime.
+// The service replaces the ticket on every new lease and the connector
+// re-dials a tunnel that dropped, and each time the enclave's relay is back
+// at the stream within seconds; turning the camera off and on again in
+// between would put the capture back to zero just as the relay's DESCRIBE
+// arrives, and its startup, several seconds, is the one thing the relay's
+// patience does not cover. A session's end turns the camera off at once.
+const cameraGrace = 15 * time.Second
+
 // camControl turns the offer on at the first stream a session opens and
-// off when the session's tunnel ends, and prints what is being sent.
+// off when the session ends, or when its tunnel has been down for
+// cameraGrace with no stream opened since, and prints what is being sent.
 type camControl struct {
 	sink  *serve.Server
 	offer *offer
 	log   *slog.Logger
 	// out is the console; nil means standard output.
 	out io.Writer
+	// grace is how long off(true) leaves the camera on; 0 means cameraGrace.
+	grace time.Duration
 
 	mu      sync.Mutex
 	on      bool
 	cancel  context.CancelFunc
 	backlog func() time.Duration // the active tunnel's, nil between tunnels
+	// pending turns the camera off when the grace runs out; nil while none
+	// is running. pendingGen tells a timer that fired whether it is still
+	// the one that counts.
+	pending    *time.Timer
+	pendingGen uint64
 }
 
 func (c *camControl) printf(format string, args ...any) {
@@ -283,6 +301,13 @@ func (c *camControl) dialLocal() (net.Conn, error) {
 		return nil, errors.New(note)
 	}
 	c.mu.Lock()
+	if c.pending != nil {
+		// The next tunnel opened a stream within the grace: the camera
+		// stays on, already publishing for it.
+		c.pending.Stop()
+		c.pending = nil
+		c.log.Debug("camera: a stream came within the grace; staying on")
+	}
 	if !c.on {
 		c.on = true
 		ctx, cancel := context.WithCancel(context.Background())
@@ -298,17 +323,56 @@ func (c *camControl) dialLocal() (net.Conn, error) {
 	return c.sink.Dial()
 }
 
-// off turns the camera off if it is on.
-func (c *camControl) off() {
+// off turns the camera off if it is on: at once, or, with later, once the
+// grace has passed with no stream opened (dialLocal) in the meantime. A
+// grace already running is left to run.
+func (c *camControl) off(later bool) {
 	c.mu.Lock()
-	on := c.on
+	if !c.on {
+		c.mu.Unlock()
+		return
+	}
+	if later {
+		if c.pending == nil {
+			grace := c.grace
+			if grace == 0 {
+				grace = cameraGrace
+			}
+			c.pendingGen++
+			gen := c.pendingGen
+			c.pending = time.AfterFunc(grace, func() { c.graceOver(gen) })
+			c.log.Debug("camera: the tunnel ended; staying on for the next one", "grace", grace.String())
+		}
+		c.mu.Unlock()
+		return
+	}
+	if c.pending != nil {
+		c.pending.Stop()
+		c.pending = nil
+	}
+	c.stopLocked()
+}
+
+// graceOver is the grace running out: the camera goes off unless a stream
+// came in the meantime (dialLocal cleared the timer) or off(false) already
+// turned it off.
+func (c *camControl) graceOver(gen uint64) {
+	c.mu.Lock()
+	if c.pending == nil || c.pendingGen != gen || !c.on {
+		c.mu.Unlock()
+		return
+	}
+	c.pending = nil
+	c.stopLocked()
+}
+
+// stopLocked turns the camera off; the caller holds c.mu, which is released
+// before the source is stopped (ffmpeg takes a moment to exit).
+func (c *camControl) stopLocked() {
 	c.on = false
 	cancel := c.cancel
 	c.cancel = nil
 	c.mu.Unlock()
-	if !on {
-		return
-	}
 	cancel()
 	c.offer.stop()
 	c.printf("Camera off.\n")
