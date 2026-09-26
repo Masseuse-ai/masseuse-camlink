@@ -16,6 +16,12 @@
 // terminates inside the attested enclave; the connector then pins the
 // tunnel's TLS to that same key.
 //
+// The served policy is applied on top of the Floors this build carries
+// (Production): the token issuer and key set, the image signing key, the
+// lowest release, the project and registry the enclave runs from, and the
+// hosts it may live on. The service can tighten what the connector
+// accepts; it cannot loosen it.
+//
 // Which code runs is read off the token, not off a list: the enclave
 // repository's release workflow bakes the release tag and source commit
 // into the image (TEE_IMAGE_VERSION, TEE_IMAGE_COMMIT), the launcher
@@ -93,6 +99,14 @@ type Policy struct {
 	SWName              string                 `json:"swname"`
 	HWModel             string                 `json:"hwmodel"`
 	TeeSlotHostSuffixes []string               `json:"teeSlotHostSuffixes"`
+	// ProjectID, when set, is the Google Cloud project the enclave VM must
+	// run in (the token's submods.gce.project_id). ImageReferencePrefix,
+	// when set, is the registry image the launcher must have pulled
+	// (submods.container.image_reference before its @digest or :tag; a
+	// value ending in "/" is a registry path any image under it satisfies).
+	// Both are normally supplied by the connector's Floors.
+	ProjectID            string `json:"projectId"`
+	ImageReferencePrefix string `json:"imageReferencePrefix"`
 }
 
 // ImageSource is the public build record of one image digest.
@@ -266,6 +280,12 @@ func (p *Policy) Validate() error {
 			return fmt.Errorf("policy imageSources[%s].sourceUri %q is not a source URI", d, s.SourceURI)
 		}
 	}
+	if strings.ContainsAny(p.ProjectID, " \n/") {
+		return fmt.Errorf("policy projectId %q is not a project id", p.ProjectID)
+	}
+	if p.ImageReferencePrefix != "" && (strings.ContainsAny(p.ImageReferencePrefix, " \n") || !strings.Contains(p.ImageReferencePrefix, "/")) {
+		return fmt.Errorf("policy imageReferencePrefix %q is not a registry path", p.ImageReferencePrefix)
+	}
 	if p.Issuer == "" {
 		p.Issuer = DefaultIssuer
 	}
@@ -326,9 +346,13 @@ type Result struct {
 	// policy's sourceUri/imageRepo with the token's release tag, or the
 	// policy's per-digest record for an unstamped image; nil when the
 	// policy publishes neither.
-	Source       *ImageSource
-	InstanceID   string
-	DbgStat      string
+	Source     *ImageSource
+	InstanceID string
+	DbgStat    string
+	// SignerKeyID is the policy-listed key id the launcher verified the
+	// image's signature with (image_signatures[].key_id); empty when the
+	// policy pins digests only.
+	SignerKeyID  string
 	Leaf         *x509.Certificate
 	SPKISHA256   [32]byte
 	TLSSpkiNonce string // base64url(SPKISHA256), the form eat_nonce carries
@@ -470,12 +494,26 @@ func (v *Verifier) Verify(ctx context.Context, origin string) (*Result, error) {
 	res.Source = sourceOf(v.Policy, res.ImageDigest, res.Release)
 	res.InstanceID = nestedString(claims.Submods, "gce", "instance_id")
 	res.DbgStat = claims.DbgStat
+	res.SignerKeyID = signerKeyID(v.Policy, claims)
 	res.TokenExpiry = time.Unix(claims.Expiry, 0)
 
 	if reasons := checkClaims(v.Policy, claims, &doc, nonceStr, res.TLSSpkiNonce); len(reasons) > 0 {
 		return nil, &PolicyError{Reasons: reasons}
 	}
 	return res, nil
+}
+
+// signerKeyID returns the first policy-listed key id among the signatures
+// the launcher verified the image with, or "".
+func signerKeyID(p *Policy, c *Claims) string {
+	sigs, _ := nestedAny(c.Submods, "container", "image_signatures").([]any)
+	for _, s := range sigs {
+		m, _ := s.(map[string]any)
+		if id, _ := m["key_id"].(string); id != "" && contains(p.ImageSignatures, id) {
+			return id
+		}
+	}
+	return ""
 }
 
 // containerEnv returns the attested container environment.
@@ -574,17 +612,17 @@ func checkClaims(p *Policy, c *Claims, doc *attestationDoc, nonce, tlsSpki strin
 			fail("slot posts to %s, not the expected service", orNowhere(trainer))
 		}
 	}
-	if len(p.ImageSignatures) > 0 {
-		sigs, _ := nestedAny(c.Submods, "container", "image_signatures").([]any)
-		ok := false
-		for _, s := range sigs {
-			m, _ := s.(map[string]any)
-			if id, _ := m["key_id"].(string); id != "" && contains(p.ImageSignatures, id) {
-				ok = true
-			}
+	if len(p.ImageSignatures) > 0 && signerKeyID(p, c) == "" {
+		fail("image carries none of the required signatures")
+	}
+	if p.ProjectID != "" {
+		if got := nestedString(c.Submods, "gce", "project_id"); got != p.ProjectID {
+			fail("enclave runs in project %s, not %s", orUnknown(got), p.ProjectID)
 		}
-		if !ok {
-			fail("image carries none of the required signatures")
+	}
+	if p.ImageReferencePrefix != "" {
+		if ref := nestedString(c.Submods, "container", "image_reference"); !refUnder(ref, p.ImageReferencePrefix) {
+			fail("image was pulled from %s, not %s", orUnknown(ref), p.ImageReferencePrefix)
 		}
 	}
 

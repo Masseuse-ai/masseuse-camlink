@@ -26,7 +26,10 @@ docker logs masseuse-camlink
 With Go installed, `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink@latest`
 builds the same code from the module proxy.
 
-Every release is reproducible and signed; see [VERIFY.md](VERIFY.md).
+Every release is reproducible and signed; see [VERIFY.md](VERIFY.md). The
+macOS binaries are also signed with an Apple Developer ID and notarized, so
+they run without a Gatekeeper warning; VERIFY.md, "The macOS binaries", shows
+how to check the signer and how to compare them with a rebuild all the same.
 
 ## Use
 
@@ -52,7 +55,14 @@ Flags: `--service https://masseuse.ai` (the rendezvous service),
 - **One attested peer.** Before dialing an enclave the connector verifies the
   enclave's Confidential Space attestation against the published policy and
   pins the enclave's TLS key to the one bound into that attestation. It does
-  not dial anything else.
+  not dial anything else. The policy can only tighten floors compiled into
+  the connector (the token issuer, the image signing key, the lowest
+  release, the project and registry the enclave runs from, the host suffix),
+  so the service cannot steer it to an enclave this build does not accept.
+  It then checks, in the public registry and the Sigstore transparency log,
+  that the attested image digest is what the enclave repository's release
+  workflow signed and built at the release the image claims; an image
+  without that public record is refused.
 - **One private target.** The connector will only connect to the single
   private-network camera address your session names. It is not a proxy.
 - **Open and reproducible.** Apache-2.0, built from a pinned Go toolchain
@@ -79,20 +89,24 @@ repository's release workflow on GitHub Actions from a tagged commit, with
 SLSA provenance and a keyless signature; the workflow alone holds the key
 the enclave's launcher checks the image against, and it stamps the release
 tag and source commit into the image, where the attestation reports them.
-When the connector dials an enclave it logs two things:
+When the connector dials an enclave it logs three things:
 
 ```
-enclave verified  image=sha256:… instance=… dbgstat=disabled-since-boot release=vX.Y.Z commit=…
-enclave source    image=sha256:… source=github.com/FemLed/masseuse-video-tee@vX.Y.Z registry=ghcr.io/femled/masseuse-video-tee
-                  verify="slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:… --source-uri github.com/FemLed/masseuse-video-tee --source-tag vX.Y.Z"
+enclave verified    image=sha256:… signer=cfb085b9… instance=… dbgstat=disabled-since-boot release=vX.Y.Z commit=…
+enclave source      image=sha256:… source=github.com/FemLed/masseuse-video-tee@vX.Y.Z registry=ghcr.io/femled/masseuse-video-tee
+                    verify="slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:… --source-uri github.com/FemLed/masseuse-video-tee --source-tag vX.Y.Z"
+enclave provenance  image=sha256:… release=vX.Y.Z commit=… signed_by=https://github.com/FemLed/masseuse-video-tee/.github/workflows/release.yml@refs/tags/vX.Y.Z signature_log_index=… builder=https://github.com/slsa-framework/slsa-github-generator/… provenance_log_index=…
 ```
 
-Run the `verify` command (or `sh scripts/verify-enclave.sh --origin
+The third line is the connector doing, from the public registry and the
+Sigstore transparency log, what the `verify` command does: checking that
+this exact digest carries a logged signature by that repository's release
+workflow at that tag, and logged build provenance naming that tag and
+commit. It refuses the enclave otherwise. You can repeat the check yourself
+with the `verify` command (or `sh scripts/verify-enclave.sh --origin
 https://slot-N.tee.masseuse.ai`, which reads the digest and release off a
-live enclave's attestation) and `slsa-verifier` confirms, from the public
-registry, that this exact digest was produced by that repository at that
-tag. [VERIFY.md](VERIFY.md), "The enclave your camera streams to", walks
-through it.
+live enclave's attestation). [VERIFY.md](VERIFY.md), "The enclave your
+camera streams to", walks through it.
 
 ## Build from source
 

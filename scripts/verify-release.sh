@@ -6,7 +6,10 @@
 #   3. the SLSA provenance names each artifact and this source at this tag,
 #   4. (optional) the container image is signed and has provenance,
 #   5. (optional, needs Go) the gateway binary rebuilds to the same bytes,
-#   6. (optional, needs Go) so does the connector in the linux/amd64 archive.
+#   6. (optional, needs Go) so does the connector in the linux/amd64 archive,
+#   7. (optional, needs Go) so do the darwin connectors once their Apple
+#      signature is stripped from both sides; on a Mac, the signature itself
+#      is checked (team id, certificate fingerprint, notarization).
 #
 # usage: scripts/verify-release.sh vX.Y.Z [download dir]
 # needs: curl, sha256sum (or shasum), cosign (3 or later for the image),
@@ -17,6 +20,10 @@ REPO="FemLed/masseuse-camlink"
 IMAGE="ghcr.io/femled/masseuse-camlink"
 WORKFLOW_RE='^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v'
 ISSUER="https://token.actions.githubusercontent.com"
+# The Apple Developer ID the darwin binaries are signed with (VERIFY.md,
+# "The macOS binaries"): the team and the leaf certificate's SHA-256.
+APPLE_TEAM_ID="B8Z4RP3846"
+APPLE_CERT_SHA256="8D:A7:D2:FD:A7:BE:3C:AC:CE:6E:20:19:FE:0C:1A:68:B2:C1:B5:DC:A0:14:55:68:52:C6:8E:62:3A:35:44:80"
 
 tag="${1:?usage: $0 vX.Y.Z [dir]}"
 version="${tag#v}"
@@ -121,10 +128,57 @@ if command -v go >/dev/null 2>&1; then
     echo "    MISMATCH: rebuilt $rebuilt, in archive $published" >&2
     exit 1
   fi
+
+  echo "==> 7. rebuild the darwin connectors and compare with the signature stripped (VERIFY.md 3)"
+  for arch in arm64 amd64; do
+    archive="masseuse-camlink_${version}_darwin_${arch}.tar.gz"
+    [ -s "$archive" ] || { echo "    skipped darwin/$arch (no $archive in the release)"; continue; }
+    (cd "$work/connector" \
+      && GOOS=darwin GOARCH="$arch" go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+           -o "rebuilt_darwin_$arch" github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink)
+    tar -xzOf "$archive" masseuse-camlink > "$work/published_darwin_$arch"
+    rebuilt=$(go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$work/connector/rebuilt_darwin_$arch" | cut -d' ' -f1)
+    stripped=$(go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$work/published_darwin_$arch" | cut -d' ' -f1)
+    if [ "$rebuilt" != "$stripped" ]; then
+      echo "    MISMATCH darwin/$arch: rebuilt $rebuilt, in archive (signature stripped) $stripped" >&2
+      exit 1
+    fi
+    if [ "$($SHA "$work/published_darwin_$arch" | cut -d' ' -f1)" = "$stripped" ]; then
+      echo "    the published darwin/$arch binary carries no code signature" >&2
+      exit 1
+    fi
+    echo "    ok  darwin/$arch connector reproduces once its signature is stripped: $rebuilt"
+  done
+
+  if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+    echo "==> 7b. the Apple signature itself (this is a Mac)"
+    for arch in arm64 amd64; do
+      bin="$work/published_darwin_$arch"
+      [ -s "$bin" ] || continue
+      chmod +x "$bin"
+      codesign --verify --strict "$bin"
+      info=$(codesign -dvv "$bin" 2>&1)
+      echo "$info" | grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" \
+        || { echo "    darwin/$arch: signed by another team: $(echo "$info" | grep '^TeamIdentifier=')" >&2; exit 1; }
+      echo "$info" | grep -q 'flags=0x10000(runtime)' \
+        || { echo "    darwin/$arch: not signed with the hardened runtime" >&2; exit 1; }
+      mkdir -p "$work/certs_$arch"
+      (cd "$work/certs_$arch" && codesign -d --extract-certificates "$bin" 2>/dev/null)
+      fp=$(openssl x509 -inform DER -in "$work/certs_$arch/codesign0" -noout -fingerprint -sha256 | sed 's/^.*=//')
+      [ "$fp" = "$APPLE_CERT_SHA256" ] \
+        || { echo "    darwin/$arch: unexpected signing certificate $fp" >&2; exit 1; }
+      # A bare executable is assessed as an "open" with its primary
+      # signature; "--type execute" only ever evaluates app bundles.
+      assess=$(spctl --assess --type open --context context:primary-signature -vv "$bin" 2>&1 || true)
+      echo "$assess" | grep -q 'source=Notarized Developer ID' \
+        || { echo "    darwin/$arch: not accepted as notarized:"; echo "$assess" | sed 's/^/      /'; exit 1; }
+      echo "    ok  darwin/$arch: team $APPLE_TEAM_ID, certificate $fp, notarized"
+    done
+  fi
   chmod -R u+w "$work" 2>/dev/null || true
   rm -rf "$work"
 else
-  echo "==> 5-6. rebuild: skipped (no go)"
+  echo "==> 5-7. rebuild: skipped (no go)"
 fi
 
 echo "all checks passed for $tag"

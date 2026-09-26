@@ -15,6 +15,15 @@
 #     else. (A goreleaser proxy build embeds a different main module and
 #     would not be byte-identical to `go install`; the `reproduce` job in
 #     .github/workflows/release.yml checks that these are.)
+#
+# The darwin connector binaries are additionally signed with FemLed's Apple
+# Developer ID (Team ID B8Z4RP3846) and notarized, so macOS runs them
+# without a Gatekeeper warning. The signature is the one per-build input:
+# `cmd/machostrip` removes it, and the rest of the binary is byte for byte
+# the proxy build (VERIFY.md, "The macOS binaries"; the `reproduce` job
+# checks this too). The signing identity and notary credentials come from
+# repository secrets; without them (a fork, a local snapshot) the step is
+# skipped and the darwin binaries ship unsigned.
 version: 2
 project_name: masseuse-camlink
 
@@ -70,6 +79,25 @@ checksum:
     # masseuse-camlink-gateway_<version>_linux_<arch>, written by the
     # workflow's "go install the gateway" step (see the header).
     - glob: ./gateway-bin/*
+
+# Sign and notarize the darwin binaries before they are archived (goreleaser
+# embeds anchore/quill, so this runs on the Linux release runner). The p12
+# must carry the Apple chain (`quill p12 attach-chain`). Every field is a
+# strict template: a missing secret fails the release instead of shipping an
+# unnotarized binary.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [connector]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
 
 signs:
   - id: checksums

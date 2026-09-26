@@ -78,6 +78,19 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple Developer ID signing and notarization of the darwin
+          # binaries (.goreleaser.yaml, notarize): the with-chain .p12 and
+          # the App Store Connect key, base64; the p12 password; the key's
+          # id and issuer. All five are needed; the templates are strict.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          # Referenced only so the runner masks its value in the public job
+          # log: the signing certificate's subject, which the embedded signer
+          # prints at debug level. Nothing reads it.
+          MACOS_SIGN_SUBJECT: ${{ secrets.MACOS_SIGN_SUBJECT }}
       - name: Subjects for provenance
         id: hashes
         run: echo "hashes=$(base64 -w0 < dist/checksums.txt)" >> "$GITHUB_OUTPUT"
@@ -176,5 +189,34 @@ jobs:
           echo "published linux/amd64 connector ${published}"
           test "$sum" = "$published"
           echo "reproduced: the connector in the archive is the bytes the scratch-module build produces"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Connector, darwin, signature stripped
+        # The darwin binaries are signed with the Developer ID and notarized,
+        # so they cannot match a rebuild as published. Strip the signature
+        # from both sides with cmd/machostrip (the Go project checks its own
+        # macOS distributions this way) and compare; and check that what was
+        # published does carry a signature, so a release with the signing
+        # step silently skipped fails here.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cd connector
+          for arch in arm64 amd64; do
+            GOOS=darwin GOARCH="$arch" go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+              -o "rebuilt_darwin_${arch}" github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern "masseuse-camlink_${version}_darwin_${arch}.tar.gz" --clobber
+            tar -xzOf "masseuse-camlink_${version}_darwin_${arch}.tar.gz" masseuse-camlink > "published_darwin_${arch}"
+            go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@${GITHUB_REF_NAME}" -sha256 \
+              "rebuilt_darwin_${arch}" "published_darwin_${arch}" | tee "stripped_${arch}.txt"
+            test "$(cut -d' ' -f1 < "stripped_${arch}.txt" | uniq | wc -l)" -eq 1
+            raw=$(sha256sum "published_darwin_${arch}" | cut -d' ' -f1)
+            stripped=$(head -n 1 "stripped_${arch}.txt" | cut -d' ' -f1)
+            if [ "$raw" = "$stripped" ]; then
+              echo "the published darwin/${arch} binary carries no code signature" >&2
+              exit 1
+            fi
+            echo "reproduced: darwin/${arch} connector matches the rebuild once its signature is stripped"
+          done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

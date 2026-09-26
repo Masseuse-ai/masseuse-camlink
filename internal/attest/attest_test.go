@@ -150,14 +150,16 @@ func signJWT(t *testing.T, key *rsa.PrivateKey, kid, alg string, claims map[stri
 // key, a release floor, and where the source and the public image live.
 func policyFor() *Policy {
 	p := &Policy{
-		AllowDebug:         false,
-		RequireStable:      true,
-		RequireGpuCc:       true,
-		ExpectedTrainerURL: testTrainer,
-		ImageSignatures:    []string{testKeyID},
-		MinRelease:         "v0.4.0",
-		SourceURI:          testSrcURI,
-		ImageRepo:          testRepo,
+		AllowDebug:           false,
+		RequireStable:        true,
+		RequireGpuCc:         true,
+		ExpectedTrainerURL:   testTrainer,
+		ImageSignatures:      []string{testKeyID},
+		MinRelease:           "v0.4.0",
+		SourceURI:            testSrcURI,
+		ImageRepo:            testRepo,
+		ProjectID:            "p",
+		ImageReferencePrefix: "us-central1-docker.pkg.dev/p/r/masseuse-video-tee",
 	}
 	if err := p.Validate(); err != nil {
 		panic(err)
@@ -189,6 +191,9 @@ func TestReleaseStampAndSource(t *testing.T) {
 	}
 	if res.Release == nil || res.Release.Version != testRelease || res.Release.Commit != testCommit {
 		t.Fatalf("release %+v", res.Release)
+	}
+	if res.SignerKeyID != testKeyID {
+		t.Fatalf("signer key id %q, want %q", res.SignerKeyID, testKeyID)
 	}
 	// The source record comes from the policy's constants and the token's
 	// tag, so the verify command names the release that is running.
@@ -461,6 +466,21 @@ func TestVerifyPolicyFailures(t *testing.T) {
 		{name: "no instance id", mutate: func(c, _ map[string]any) {
 			c["submods"].(map[string]any)["gce"] = map[string]any{}
 		}, want: "no GCE instance id"},
+		{name: "other project", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["gce"].(map[string]any)["project_id"] = "someone-else"
+		}, want: "runs in project someone-else, not p"},
+		{name: "no project", mutate: func(c, _ map[string]any) {
+			delete(c["submods"].(map[string]any)["gce"].(map[string]any), "project_id")
+		}, want: "runs in project unknown"},
+		{name: "image from another registry", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["container"].(map[string]any)["image_reference"] = "docker.io/library/masseuse-video-tee@" + testDigest
+		}, want: "pulled from docker.io/library/masseuse-video-tee@"},
+		{name: "image name extended", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["container"].(map[string]any)["image_reference"] = "us-central1-docker.pkg.dev/p/r/masseuse-video-tee-debug@" + testDigest
+		}, want: "pulled from"},
+		{name: "no image reference", mutate: func(c, _ map[string]any) {
+			delete(c["submods"].(map[string]any)["container"].(map[string]any), "image_reference")
+		}, want: "pulled from unknown"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -21,6 +21,8 @@ import (
 	"github.com/FemLed/masseuse-camlink/internal/attest"
 	"github.com/FemLed/masseuse-camlink/internal/buildinfo"
 	"github.com/FemLed/masseuse-camlink/internal/identity"
+	"github.com/FemLed/masseuse-camlink/internal/oci"
+	"github.com/FemLed/masseuse-camlink/internal/provenance"
 	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
 	"github.com/FemLed/masseuse-camlink/internal/tunnel"
 )
@@ -68,8 +70,18 @@ func main() {
 		log: logger,
 		dialer: &tunnel.Dialer{
 			Identity: id,
-			Attester: &policyAttester{service: *service, client: httpClient, log: logger},
-			Logger:   logger,
+			Attester: &policyAttester{
+				service: *service,
+				client:  httpClient,
+				log:     logger,
+				floors:  attest.Production,
+				provenance: &provenance.Verifier{
+					Registry: &oci.Client{HTTP: &http.Client{Timeout: 30 * time.Second}},
+					CacheDir: *stateDir,
+					Logger:   logger,
+				},
+			},
+			Logger: logger,
 		},
 		tunnels: map[string]*active{},
 	}
@@ -82,12 +94,21 @@ func main() {
 	fmt.Println("\nStopped.")
 }
 
-// policyAttester fetches the service's policy (cached briefly) and verifies
-// an enclave against it.
+// policyAttester fetches the service's policy (cached briefly), tightens it
+// to the floors this build carries, verifies an enclave against it, and
+// then checks the attested image's provenance against the public registry
+// and the Sigstore log.
 type policyAttester struct {
 	service string
 	client  *http.Client
 	log     *slog.Logger
+	// floors is what the served policy may only tighten (internal/attest,
+	// Floors); the served policy is refused when it contradicts them.
+	floors attest.Floors
+	// provenance ties the attested digest to the release workflow's logged
+	// signature and the builder's SLSA provenance (internal/provenance).
+	// nil skips the check; the connector never leaves it nil.
+	provenance *provenance.Verifier
 
 	mu      sync.Mutex
 	policy  *attest.Policy
@@ -98,7 +119,7 @@ type policyAttester struct {
 func (a *policyAttester) Verify(ctx context.Context, origin string) (*attest.Result, error) {
 	a.mu.Lock()
 	if a.policy == nil || time.Since(a.fetched) > 5*time.Minute {
-		p, err := attest.FetchPolicy(ctx, a.client, a.service)
+		p, err := a.fetchPolicy(ctx)
 		if err != nil {
 			a.mu.Unlock()
 			return nil, err
@@ -114,7 +135,7 @@ func (a *policyAttester) Verify(ctx context.Context, origin string) (*attest.Res
 	if err != nil {
 		return nil, err
 	}
-	attrs := []any{"origin", origin, "image", res.ImageDigest, "instance", res.InstanceID, "dbgstat", res.DbgStat}
+	attrs := []any{"origin", origin, "image", res.ImageDigest, "signer", res.SignerKeyID, "instance", res.InstanceID, "dbgstat", res.DbgStat}
 	if res.Release != nil {
 		// The release tag and source commit the image was built from, read
 		// off the attested container environment.
@@ -128,7 +149,65 @@ func (a *policyAttester) Verify(ctx context.Context, origin string) (*attest.Res
 	} else {
 		a.log.Warn("enclave source unpublished", "image", res.ImageDigest, "note", "the policy names no source repository for its images; the attestation holds but the source cannot be checked")
 	}
+	if a.provenance != nil {
+		if err := a.checkProvenance(ctx, res); err != nil {
+			return nil, err
+		}
+	}
 	return res, nil
+}
+
+// checkProvenance runs the provenance check the attestation makes
+// possible: the digest the launcher attested must carry, in the public
+// registry, a logged signature by the enclave repository's release
+// workflow at the release the image is stamped with, and logged SLSA
+// provenance for that release and commit. Without a stamp or a source
+// there is nothing to check against, and the enclave is refused.
+func (a *policyAttester) checkProvenance(ctx context.Context, res *attest.Result) error {
+	if res.Release == nil {
+		return fmt.Errorf("enclave provenance: image %s carries no release stamp to check against", res.ImageDigest)
+	}
+	if res.Source == nil {
+		return fmt.Errorf("enclave provenance: the policy names no source repository for image %s", res.ImageDigest)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	p, err := a.provenance.Verify(ctx, provenance.Expect{
+		Digest:    res.ImageDigest,
+		Release:   res.Release.Version,
+		Commit:    res.Release.Commit,
+		Repo:      res.Source.Repo,
+		SourceURI: res.Source.SourceURI,
+	})
+	if err != nil {
+		return fmt.Errorf("enclave provenance: %w", err)
+	}
+	a.log.Info("enclave provenance",
+		"image", p.Digest, "release", p.Release, "commit", p.Commit,
+		"signed_by", p.SignatureIdentity, "signature_log_index", p.SignatureLogIndex,
+		"builder", p.Builder, "provenance_log_index", p.ProvenanceLogIndex,
+		"cached", p.Cached)
+	if !p.Cached {
+		fmt.Printf("Enclave image %s… is %s %s (commit %.7s): signature and build provenance verified in the public registry and the Sigstore log.\n",
+			strings.TrimPrefix(p.Digest, "sha256:")[:12], p.SourceURI, p.Release, p.Commit)
+	}
+	return nil
+}
+
+// fetchPolicy downloads the served policy with its own deadline and applies
+// the floors: the result is at least as strict as both.
+func (a *policyAttester) fetchPolicy(ctx context.Context) (*attest.Policy, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	p, err := attest.FetchPolicy(ctx, a.client, a.service)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.floors.Apply(p); err != nil {
+		return nil, fmt.Errorf("%s/api/tee-policy: %w", a.service, err)
+	}
+	a.log.Debug("enclave policy", "signers", p.ImageSignatures, "minRelease", p.MinRelease, "hosts", p.TeeSlotHostSuffixes, "project", p.ProjectID, "imageRef", p.ImageReferencePrefix, "source", p.SourceURI)
+	return p, nil
 }
 
 // manager holds at most one tunnel per session and reacts to rendezvous
