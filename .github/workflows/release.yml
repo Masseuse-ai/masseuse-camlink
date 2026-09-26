@@ -222,7 +222,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   macos-app:
-    # The Mac download (packaging/macos/README.md): Masseuse.ai.app,
+    # The Mac download (packaging/macos/README.md): Masseuse.app,
     # universal, with ffmpeg inside, in Masseuse.ai-<version>.dmg; app and
     # image signed with the Developer ID, notarized and stapled. The bundle's
     # executable is the two darwin binaries goreleaser published, verified
@@ -315,18 +315,18 @@ jobs:
           # Referenced so the runner masks the certificate's subject wherever
           # a tool might print it; the scripts themselves never do.
           MACOS_SIGN_SUBJECT: ${{ secrets.MACOS_SIGN_SUBJECT }}
-        run: sh packaging/macos/sign-notarize.sh app dist/Masseuse.ai.app
+        run: sh packaging/macos/sign-notarize.sh app dist/Masseuse.app
       - name: Gatekeeper accepts the bundle
-        run: sh packaging/macos/assess.sh app dist/Masseuse.ai.app
+        run: sh packaging/macos/assess.sh app dist/Masseuse.app
       - name: The bundle's executable is the archives' binaries
         # Signature stripped, each slice of the universal binary is byte for
         # byte the archive's binary for that architecture, which the
         # reproduce job ties to the proxy rebuild.
         run: |
-          go run ./cmd/machostrip -sha256 dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai | tee bundle.txt
+          go run ./cmd/machostrip -sha256 dist/Masseuse.app/Contents/MacOS/Masseuse | tee bundle.txt
           for arch in arm64 amd64; do
             thin=$(go run ./cmd/machostrip -sha256 "published/${arch}/masseuse-camlink" | cut -d' ' -f1)
-            grep -qF "${thin}  dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai (${arch})" bundle.txt ||
+            grep -qF "${thin}  dist/Masseuse.app/Contents/MacOS/Masseuse (${arch})" bundle.txt ||
               { echo "the bundle's ${arch} slice is not the published darwin/${arch} binary" >&2; exit 1; }
             echo "the bundle's ${arch} slice is the published darwin/${arch} binary (${thin})"
           done
@@ -340,7 +340,7 @@ jobs:
           MACOS_SIGN_SUBJECT: ${{ secrets.MACOS_SIGN_SUBJECT }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          sh packaging/macos/build-dmg.sh -a dist/Masseuse.ai.app -v "$version" -o dist
+          sh packaging/macos/build-dmg.sh -a dist/Masseuse.app -v "$version" -o dist
           sh packaging/macos/sign-notarize.sh dmg "dist/Masseuse.ai-${version}.dmg"
           sh packaging/macos/assess.sh dmg "dist/Masseuse.ai-${version}.dmg"
       - name: checksums-darwin.txt, signed keyless
@@ -512,7 +512,10 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           cd dist
-          sha256sum "Masseuse.ai-${version}-windows.zip" > checksums-windows.txt
+          # sha256sum on Windows hashes in binary mode and marks the name with
+          # an asterisk; the file keeps the two-space form the other checksum
+          # files have, which is also the name the provenance's subject gets.
+          sha256sum "Masseuse.ai-${version}-windows.zip" | sed 's/ \*/  /' > checksums-windows.txt
           cat checksums-windows.txt
           cosign sign-blob --yes --bundle checksums-windows.txt.sigstore.json checksums-windows.txt
       - name: Upload to the release

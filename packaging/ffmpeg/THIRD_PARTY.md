@@ -1,6 +1,6 @@
 # Third-party software in the Masseuse.ai downloads
 
-The Mac app (`Masseuse.ai.app`) and the Windows package
+The Mac app (`Masseuse.app`) and the Windows package
 (`Masseuse.ai-<version>-windows.zip`) carry, beside the connector, an
 `ffmpeg` program (`Contents/Helpers/ffmpeg` in the app; `ffmpeg.exe` beside
 `Masseuse.ai.exe` in the zip) so that the computer's camera and microphone

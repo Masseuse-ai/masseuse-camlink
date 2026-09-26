@@ -1,5 +1,5 @@
 #!/bin/sh
-# Assemble Masseuse.ai.app: the connector (universal or thin) as the
+# Assemble Masseuse.app: the connector (universal or thin) as the
 # bundle's executable, ffmpeg as a helper, the icon, the notices. Nothing is
 # signed here (sign-notarize.sh does that); the script needs only sh, so
 # ci.yml builds the bundle unsigned on every pull request.
@@ -7,11 +7,11 @@
 # usage: sh packaging/macos/build-app.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR -o OUTDIR
 #   VERSION     the release version without the v (CFBundleShortVersionString)
 #   CONNECTOR   the masseuse-camlink binary to bundle (lipo -create'd for a
-#               universal app); it becomes Contents/MacOS/Masseuse.ai
+#               universal app); it becomes Contents/MacOS/Masseuse
 #   FFMPEG_DIR  packaging/ffmpeg/build.sh's output directory: ffmpeg and
 #               licenses/ (their absence is an error: the bundle promises
 #               a camera without an install step)
-#   OUTDIR      OUTDIR/Masseuse.ai.app is (re)created
+#   OUTDIR      OUTDIR/Masseuse.app is (re)created
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,8 +37,14 @@ esac
 [ -f "$ffmpegdir/ffmpeg" ] || { echo "no ffmpeg at $ffmpegdir/ffmpeg (packaging/ffmpeg/build.sh)" >&2; exit 2; }
 [ -d "$ffmpegdir/licenses" ] || { echo "no $ffmpegdir/licenses (packaging/ffmpeg/build.sh)" >&2; exit 2; }
 
-# The name people see, everywhere: the bundle, its executable, the Finder.
-name="Masseuse.ai"
+# The bundle, its executable and the name under the icon. It is Masseuse,
+# not Masseuse.ai: the Finder and Launchpad refuse to hide .app when the rest
+# of the name ends in a file extension the system knows (a guard against
+# Invoice.pdf.app), and .ai is Adobe Illustrator's, declared by macOS itself,
+# so Masseuse.ai.app was shown as "Masseuse.ai.app" (v0.8.0 and v0.8.1). The
+# disk image, its volume, the window title and the first line printed still
+# say Masseuse.ai (packaging/macos/README.md).
+name="Masseuse"
 app="$outdir/$name.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources/licenses"

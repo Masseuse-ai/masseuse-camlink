@@ -11,7 +11,7 @@ carries:
 - container images at `ghcr.io/femled/masseuse-camlink`, signed keyless by
   digest, with SBOMs and their own SLSA container provenance;
 - `Masseuse.ai-X.Y.Z.dmg`: the Mac download, the application bundle
-  `Masseuse.ai.app` in a disk image, built by a second job of the same
+  `Masseuse.app` in a disk image, built by a second job of the same
   workflow after the archives are published; listed with the ffmpeg source
   tarballs in `checksums-darwin.txt`, signed the same way
   (`checksums-darwin.txt.sigstore.json`), with its own provenance
@@ -185,9 +185,12 @@ is established by the rebuild above, not by the signature.
 
 ### The macOS app
 
-The Mac download, `Masseuse.ai-X.Y.Z.dmg`, holds `Masseuse.ai.app`: the
+The Mac download, `Masseuse.ai-X.Y.Z.dmg`, holds `Masseuse.app`: the
 connector under the name people see (`CFBundleIdentifier` stays
-`ai.masseuse.camlink`). Its executable, `Contents/MacOS/Masseuse.ai`, is the
+`ai.masseuse.camlink`; v0.8.0 and v0.8.1 shipped it as `Masseuse.ai.app`
+with `Contents/MacOS/Masseuse.ai`, which the Finder showed extension and
+all; `packaging/macos/README.md` says why). Its executable,
+`Contents/MacOS/Masseuse`, is the
 two darwin binaries above joined into one universal binary with `lipo`, and
 beside it, in `Contents/Helpers/ffmpeg`, an ffmpeg built from pinned
 upstream sources so that the app needs no install step
@@ -221,7 +224,7 @@ per architecture, named as the archives are:
 ```sh
 hdiutil attach -readonly -nobrowse Masseuse.ai-X.Y.Z.dmg
 go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 \
-  /Volumes/Masseuse.ai/Masseuse.ai.app/Contents/MacOS/Masseuse.ai
+  /Volumes/Masseuse.ai/Masseuse.app/Contents/MacOS/Masseuse
 # two lines, "(arm64)" and "(amd64)": compare each with the stripped
 # archive binary or the rebuild of the previous section
 hdiutil detach /Volumes/Masseuse.ai
@@ -242,9 +245,9 @@ the system checks them at a double-click; the release fails if any of these
 does not hold (`packaging/macos/assess.sh`):
 
 ```sh
-codesign --verify --deep --strict --verbose=2 /Volumes/Masseuse.ai/Masseuse.ai.app
-spctl --assess --type execute -vv /Volumes/Masseuse.ai/Masseuse.ai.app
-xcrun stapler validate /Volumes/Masseuse.ai/Masseuse.ai.app
+codesign --verify --deep --strict --verbose=2 /Volumes/Masseuse.ai/Masseuse.app
+spctl --assess --type execute -vv /Volumes/Masseuse.ai/Masseuse.app
+xcrun stapler validate /Volumes/Masseuse.ai/Masseuse.app
 codesign --verify --strict --verbose=2 Masseuse.ai-X.Y.Z.dmg
 spctl --assess --type open --context context:primary-signature -vv Masseuse.ai-X.Y.Z.dmg
 xcrun stapler validate Masseuse.ai-X.Y.Z.dmg

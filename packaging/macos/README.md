@@ -1,6 +1,6 @@
 # The macOS application bundle and disk image
 
-Mac users get the connector as `Masseuse.ai.app` inside
+Mac users get the connector as `Masseuse.app` inside
 `Masseuse.ai-<version>.dmg`: one download for Apple silicon and Intel,
 signed with FemLed's Apple Developer ID, notarized and stapled, so it opens
 from the Finder without a Gatekeeper refusal. Gatekeeper accepts a
@@ -8,9 +8,20 @@ double-click only on an application bundle, an installer or a disk image; a
 bare executable, however well signed and notarized, is refused as "not an
 app". That is why the bundle exists.
 
-Masseuse.ai is the name a person sees: the app in the Finder, the volume,
-the Terminal window's title, the first line the program prints, the
-permission prompts. masseuse-camlink is the program's name for engineers
+Masseuse.ai is the name a person sees: the disk image and its volume, the
+Terminal window's title, the first line the program prints, the permission
+prompts. The bundle alone is `Masseuse.app`, shown as **Masseuse** in the
+Finder, Launchpad and the Dock. It cannot be `Masseuse.ai.app`: the Finder
+and Launchpad refuse to hide `.app` when the rest of the name ends in a
+file extension the system knows, a guard against `Invoice.pdf.app` passing
+for a document, and `.ai` is Adobe Illustrator's, declared by macOS itself
+(`com.adobe.illustrator.ai-image`) whether or not Illustrator is
+installed. v0.8.0 and v0.8.1 were `Masseuse.ai.app` and sat under the
+icon as "Masseuse.ai.app"; a localized `CFBundleDisplayName` of
+`Masseuse.ai` is refused by the same rule, and a look-alike dot would be
+the very trick the rule exists to catch. `CFBundleName`,
+`CFBundleDisplayName` and `CFBundleExecutable` match the bundle's name, as
+the Finder expects. masseuse-camlink is the program's name for engineers
 and stays in the bundle identifier (`ai.masseuse.camlink`), the state
 directory (`~/Library/Application Support/masseuse-camlink`) and the
 archives. Releases before v0.8.0 named the app and the image
@@ -18,7 +29,7 @@ masseuse-camlink too.
 
 The bundle's executable is the connector itself (`cmd/masseuse-camlink`),
 the universal binary made from the two signed release binaries with
-`lipo`, under the name `Masseuse.ai`. Opened from the Finder, it has no
+`lipo`, under the name `Masseuse`. Opened from the Finder, it has no
 terminal to print the pairing code to, so it writes a small
 `Masseuse.ai.command` file into its state directory and asks the system to
 open it; Terminal runs it, and it runs the connector in that window in
@@ -30,10 +41,10 @@ forward. The bundle is `LSUIElement`, so nothing bounces in the Dock.
 at `PATH`, so there is no Homebrew step.
 
 ```
-Masseuse.ai.app/Contents/
+Masseuse.app/Contents/
   Info.plist                     from Info.plist here, version filled in
   PkgInfo
-  MacOS/Masseuse.ai              the connector, universal, Developer ID + hardened runtime
+  MacOS/Masseuse                 the connector, universal, Developer ID + hardened runtime
   Helpers/ffmpeg                 universal, Developer ID + hardened runtime + ffmpeg.entitlements
   Resources/masseuse-camlink.icns
   Resources/LICENSE, NOTICE      the connector's (Apache-2.0)
@@ -45,7 +56,7 @@ Masseuse.ai.app/Contents/
 
 | File | What |
 | --- | --- |
-| `Info.plist` | the bundle's property list, `@VERSION@` filled in by `build-app.sh`; `CFBundleName`, `CFBundleDisplayName` and `CFBundleExecutable` all `Masseuse.ai`; `LSMinimumSystemVersion` 13.0 (Go's floor for macOS binaries), `LSUIElement`, the camera, microphone and Bluetooth usage strings |
+| `Info.plist` | the bundle's property list, `@VERSION@` filled in by `build-app.sh`; `CFBundleName`, `CFBundleDisplayName` and `CFBundleExecutable` all `Masseuse`, the bundle's name (above); `LSMinimumSystemVersion` 13.0 (Go's floor for macOS binaries), `LSUIElement`, the camera, microphone and Bluetooth usage strings |
 | `ffmpeg.entitlements` | camera and microphone, which a hardened-runtime process may open only with these |
 | `build-app.sh` | assembles the bundle from a connector binary, `packaging/ffmpeg/build.sh`'s output and the files here; plain `sh`, runs unsigned in `ci.yml` on every pull request |
 | `sign-notarize.sh` | temporary keychain from the release secrets, `codesign` (ffmpeg first, then the bundle, `--options runtime --timestamp`), `notarytool submit --wait`, `stapler staple`; the same for the disk image. The identity is picked by the certificate's SHA-1 from VERIFY.md, never by its subject, and the subject is never printed |
@@ -73,7 +84,7 @@ release secrets):
 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o dist/masseuse-camlink ./cmd/masseuse-camlink
 sh packaging/ffmpeg/build.sh -t darwin -o dist/ffmpeg -a "$(uname -m)"  # a few minutes; one architecture
 sh packaging/macos/build-app.sh -v 0.0.0 -b dist/masseuse-camlink -f dist/ffmpeg -o dist
-open dist/Masseuse.ai.app                                       # Terminal opens with the connector
+open dist/Masseuse.app                                          # Terminal opens with the connector
 ```
 
 ## The icon

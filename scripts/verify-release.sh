@@ -212,9 +212,10 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
       --source-tag "$tag" >/dev/null
     echo "    ok  $f"
   done
-  # The disk image is Masseuse.ai-X.Y.Z.dmg holding Masseuse.ai.app from
-  # v0.8.0; earlier releases named both masseuse-camlink. Either is read off
-  # the checksum file.
+  # The disk image is Masseuse.ai-X.Y.Z.dmg holding Masseuse.app (v0.8.2 on;
+  # Masseuse.ai.app in v0.8.0 and v0.8.1, masseuse-camlink.app and
+  # masseuse-camlink_*.dmg before). The image is read off the checksum file
+  # and the bundle found by its extension, so all of them verify.
   dmg=$(awk '{print $2}' checksums-darwin.txt | grep -E '\.dmg$' | head -n 1)
   if [ "$(uname -s)" = "Darwin" ] && [ -n "$dmg" ] && [ -s "$dmg" ]; then
     echo "==> 8b. the app itself (this is a Mac)"
@@ -280,16 +281,20 @@ if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/ch
     --certificate-identity-regexp "$WORKFLOW_RE" \
     --certificate-oidc-issuer "$ISSUER" \
     checksums-windows.txt
-  awk '{print $2}' checksums-windows.txt | while read -r f; do fetch "$f"; done
+  # v0.8.1's file was written by sha256sum on Windows, in its binary-mode
+  # form "<hash> *<name>": the name is taken without the marker (sha256sum -c
+  # and shasum -c read either form).
+  winfiles() { awk '{print $2}' checksums-windows.txt | sed 's/^\*//'; }
+  winfiles | while read -r f; do fetch "$f"; done
   $SHA -c checksums-windows.txt
-  awk '{print $2}' checksums-windows.txt | while read -r f; do
+  winfiles | while read -r f; do
     slsa-verifier verify-artifact "$f" \
       --provenance-path windows.intoto.jsonl \
       --source-uri "github.com/$REPO" \
       --source-tag "$tag" >/dev/null
     echo "    ok  $f"
   done
-  zipfile=$(awk '{print $2}' checksums-windows.txt | grep -E '\.zip$' | head -n 1)
+  zipfile=$(winfiles | grep -E '\.zip$' | head -n 1)
   archive="masseuse-camlink_${version}_windows_amd64.zip"
   if [ -n "$zipfile" ] && [ -s "$zipfile" ] && [ -s "$archive" ] && command -v unzip >/dev/null 2>&1; then
     packed=$(unzip -p "$zipfile" Masseuse.ai.exe | $SHA | cut -d' ' -f1)

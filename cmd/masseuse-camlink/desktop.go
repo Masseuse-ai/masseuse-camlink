@@ -13,10 +13,12 @@ import (
 // that window, in console mode. The pieces that need no macOS are here so
 // they can be tested anywhere; desktop_darwin.go does the opening.
 
-// appName is what a person sees the program called: the application
-// bundle, the disk image, the Windows package, the window title, the first
-// line printed. masseuse-camlink is its name for engineers: the repository,
-// the command, the archives, the state directory.
+// appName is what a person sees the program called: the disk image and its
+// volume, the Windows package and executable, the window title, the first
+// line printed. The Mac bundle alone is Masseuse.app, because the Finder
+// shows a bundle named Masseuse.ai.app with its extension
+// (packaging/macos/build-app.sh). masseuse-camlink is its name for
+// engineers: the repository, the command, the archives, the state directory.
 const appName = "Masseuse.ai"
 
 // commandFile is the name of the file Terminal runs, in the state directory.

@@ -3,15 +3,17 @@
 <plist version="1.0">
 <dict>
 	<!-- Template: build-app.sh replaces @VERSION@ with the release version.
-	     The app is called Masseuse.ai wherever a person sees a name (Finder,
-	     the menu bar, the permission prompts); masseuse-camlink is the
-	     program's name for engineers and stays in the bundle identifier. -->
+	     The bundle is Masseuse.app and these three names match it, as the
+	     Finder wants: macOS will not hide .app after a name that ends in a
+	     known extension, and .ai is Illustrator's, so the download's name,
+	     Masseuse.ai, cannot be the bundle's (build-app.sh). masseuse-camlink
+	     is the program's name for engineers and stays in the identifier. -->
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Masseuse.ai</string>
+	<string>Masseuse</string>
 	<key>CFBundleExecutable</key>
-	<string>Masseuse.ai</string>
+	<string>Masseuse</string>
 	<key>CFBundleIconFile</key>
 	<string>masseuse-camlink</string>
 	<key>CFBundleIdentifier</key>
@@ -19,7 +21,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Masseuse.ai</string>
+	<string>Masseuse</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

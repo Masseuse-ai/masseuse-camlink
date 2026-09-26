@@ -5,7 +5,7 @@
 # (the one VERIFY.md lists), never by its subject, and the subject is not
 # printed: this runs in a public job log.
 #
-# usage: sh packaging/macos/sign-notarize.sh app PATH/Masseuse.ai.app
+# usage: sh packaging/macos/sign-notarize.sh app PATH/Masseuse.app
 #        sh packaging/macos/sign-notarize.sh dmg PATH/Masseuse.ai-X.Y.Z.dmg
 # environment, all required (the release workflow's secrets):
 #   MACOS_SIGN_P12          the Developer ID Application certificate with its

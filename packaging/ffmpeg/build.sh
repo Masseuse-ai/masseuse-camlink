@@ -6,7 +6,7 @@
 # does the encoding, VideoToolbox on a Mac, Media Foundation on Windows), no
 # nonfree parts. The one external library is libopus (BSD-3-Clause).
 #
-#   -t darwin   for Masseuse.ai.app: universal (arm64 and x86_64), built on
+#   -t darwin   for Masseuse.app: universal (arm64 and x86_64), built on
 #               a Mac with the Xcode tools; AVFoundation input,
 #               h264_videotoolbox encoder
 #   -t windows  for the Masseuse.ai zip: ffmpeg.exe (x86_64), cross-compiled

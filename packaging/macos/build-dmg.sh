@@ -1,5 +1,5 @@
 #!/bin/sh
-# Wrap Masseuse.ai.app in a disk image the way Mac users expect: the app and
+# Wrap Masseuse.app in a disk image the way Mac users expect: the app and
 # an Applications shortcut side by side, the volume wearing the app's icon.
 # macOS only (hdiutil). The image is signed and notarized afterwards by
 # sign-notarize.sh.

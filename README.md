@@ -16,19 +16,23 @@ the stream goes from your computer to the enclave inside TLS.
 
 ## Install
 
-On the computer in the room, open [masseuse.ai/computer](https://masseuse.ai/computer):
+On the computer in the room, open [masseuse.ai/app](https://masseuse.ai/app):
 it offers the download for that computer (Mac, Windows, Linux), and the app
 on your phone can send it the address. The same files are on the
 [releases page](https://github.com/FemLed/masseuse-camlink/releases).
 
 The downloads are called **Masseuse.ai**: that is the one name a person
-sees, on the disk image, the app, the window and the permission prompts.
-`masseuse-camlink` is the program's name for engineers (this repository, the
-command, the archives, the state directory) and the same binary.
+sees, on the disk image, the window and the permission prompts (the Mac
+app's icon says **Masseuse**: macOS shows the extension of a bundle called
+`Masseuse.ai.app`, `.ai` being a file type it knows, so the bundle is
+`Masseuse.app`). `masseuse-camlink` is the program's name for engineers
+(this repository, the command, the archives, the state directory) and the
+same binary.
 
 **Mac.** The download is a disk image, `Masseuse.ai-X.Y.Z.dmg`, for Apple
-silicon and Intel alike. Open it, drag `Masseuse.ai` into `Applications`,
-and open it from there. A Terminal window titled Masseuse.ai opens with the
+silicon and Intel alike. Open it, drag `Masseuse` into `Applications`, and
+open it from there (a `Masseuse.ai` left there by 0.8.0 or 0.8.1 is the
+same program and can go). A Terminal window titled Masseuse.ai opens with the
 program running in it: it names the camera and microphone it will use and
 shows the pairing code. ffmpeg is included in the app, so there is nothing
 else to install. Leave the window open while you use it; closing it stops

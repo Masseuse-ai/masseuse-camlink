@@ -13,11 +13,12 @@ func TestBundleExecutable(t *testing.T) {
 		exe  string
 		want bool
 	}{
-		{"/Applications/Masseuse.ai.app/Contents/MacOS/Masseuse.ai", true},
-		{"/Users/me/Downloads/Masseuse.ai.app/Contents/MacOS/Masseuse.ai", true},
+		{"/Applications/Masseuse.app/Contents/MacOS/Masseuse", true},
+		{"/Users/me/Downloads/Masseuse.app/Contents/MacOS/Masseuse", true},
+		{"/Applications/Masseuse.ai.app/Contents/MacOS/Masseuse.ai", true},           // the bundle's name in 0.8.0 and 0.8.1
 		{"/Applications/masseuse-camlink.app/Contents/MacOS/masseuse-camlink", true}, // the bundle's name before 0.8.0
 		{"/Users/me/Downloads/masseuse-camlink_0.7.0_darwin_arm64/masseuse-camlink", false},
-		{"/Applications/Masseuse.ai.app/Contents/Helpers/ffmpeg", false},
+		{"/Applications/Masseuse.app/Contents/Helpers/ffmpeg", false},
 		{"/opt/homebrew/bin/masseuse-camlink", false},
 		{"masseuse-camlink", false},
 	} {
@@ -29,7 +30,8 @@ func TestBundleExecutable(t *testing.T) {
 
 func TestAppName(t *testing.T) {
 	// The name on the download, the .command file Terminal shows in its
-	// title bar and the window title all agree.
+	// title bar and the window title all agree (the bundle alone is
+	// Masseuse.app; desktop.go says why).
 	if appName != "Masseuse.ai" {
 		t.Fatalf("appName = %q", appName)
 	}
@@ -39,13 +41,13 @@ func TestAppName(t *testing.T) {
 }
 
 func TestCommandScript(t *testing.T) {
-	exe := "/Applications/Masseuse.ai.app/Contents/MacOS/Masseuse.ai"
+	exe := "/Applications/Masseuse.app/Contents/MacOS/Masseuse"
 	state := "/Users/o'brien/Library/Application Support/masseuse-camlink"
 	script := commandScript(exe, state)
 	if !strings.HasPrefix(script, "#!/bin/sh\n") {
 		t.Fatalf("no sh shebang:\n%s", script)
 	}
-	want := `exec '/Applications/Masseuse.ai.app/Contents/MacOS/Masseuse.ai' -console -state-dir '/Users/o'\''brien/Library/Application Support/masseuse-camlink' "$@"` + "\n"
+	want := `exec '/Applications/Masseuse.app/Contents/MacOS/Masseuse' -console -state-dir '/Users/o'\''brien/Library/Application Support/masseuse-camlink' "$@"` + "\n"
 	if !strings.HasSuffix(script, want) {
 		t.Fatalf("exec line wrong:\n%s\nwant suffix:\n%s", script, want)
 	}

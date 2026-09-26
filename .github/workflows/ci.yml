@@ -86,20 +86,20 @@ jobs:
           cp /usr/bin/true dist/ffmpeg/ffmpeg # a Mach-O stand-in, so codesign has nested code to seal
           printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg/licenses/README
           sh packaging/macos/build-app.sh -v 0.0.0 -b dist/masseuse-camlink -f dist/ffmpeg -o dist
-          plutil -lint dist/Masseuse.ai.app/Contents/Info.plist
-          test "$(plutil -extract CFBundleExecutable raw -o - dist/Masseuse.ai.app/Contents/Info.plist)" = Masseuse.ai
-          test "$(plutil -extract CFBundleDisplayName raw -o - dist/Masseuse.ai.app/Contents/Info.plist)" = Masseuse.ai
-          test "$(lipo -archs dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai)" = "x86_64 arm64"
-          go run ./cmd/machostrip -sha256 dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai
+          plutil -lint dist/Masseuse.app/Contents/Info.plist
+          test "$(plutil -extract CFBundleExecutable raw -o - dist/Masseuse.app/Contents/Info.plist)" = Masseuse
+          test "$(plutil -extract CFBundleDisplayName raw -o - dist/Masseuse.app/Contents/Info.plist)" = Masseuse
+          test "$(lipo -archs dist/Masseuse.app/Contents/MacOS/Masseuse)" = "x86_64 arm64"
+          go run ./cmd/machostrip -sha256 dist/Masseuse.app/Contents/MacOS/Masseuse
           # The bundle's own program, run from a shell, is the console program.
-          dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai --version
-          codesign --force --deep --sign - dist/Masseuse.ai.app
-          codesign --verify --deep --strict --verbose=2 dist/Masseuse.ai.app
-          sh packaging/macos/build-dmg.sh -a dist/Masseuse.ai.app -v 0.0.0 -o dist
+          dist/Masseuse.app/Contents/MacOS/Masseuse --version
+          codesign --force --deep --sign - dist/Masseuse.app
+          codesign --verify --deep --strict --verbose=2 dist/Masseuse.app
+          sh packaging/macos/build-dmg.sh -a dist/Masseuse.app -v 0.0.0 -o dist
           hdiutil imageinfo dist/Masseuse.ai-0.0.0.dmg | grep -E '^Format: UDZO'
           # The volume is named after the app, so the Finder's sidebar says so.
           hdiutil attach -readonly -nobrowse -noautoopen dist/Masseuse.ai-0.0.0.dmg | grep -q '/Volumes/Masseuse.ai$'
-          test -d /Volumes/Masseuse.ai/Masseuse.ai.app
+          test -d /Volumes/Masseuse.ai/Masseuse.app
           hdiutil detach /Volumes/Masseuse.ai -quiet
 
   windows-package:

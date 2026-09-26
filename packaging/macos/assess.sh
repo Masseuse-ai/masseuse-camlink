@@ -4,7 +4,7 @@
 # is false, and the ones VERIFY.md gives Mac users. Output leaves out the
 # certificate's subject (spctl's origin line, codesign's Authority lines).
 #
-# usage: sh packaging/macos/assess.sh app PATH/Masseuse.ai.app
+# usage: sh packaging/macos/assess.sh app PATH/Masseuse.app
 #        sh packaging/macos/assess.sh dmg PATH/Masseuse.ai-X.Y.Z.dmg
 set -eu
 

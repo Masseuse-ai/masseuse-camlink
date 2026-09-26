@@ -27,7 +27,7 @@
 #
 # The downloads people get are not goreleaser's, and are named Masseuse.ai:
 # the release workflow's `macos-app` job takes the two darwin archives
-# published here, joins their binaries into a universal `Masseuse.ai.app`
+# published here, joins their binaries into a universal `Masseuse.app`
 # with ffmpeg inside, signs, notarizes and staples the app and the disk
 # image around it (`Masseuse.ai-<version>.dmg`), and adds them to the
 # release with `checksums-darwin.txt`, its signature bundle and
@@ -183,8 +183,9 @@ release:
     carries an SBOM and its own provenance.
 
     **Mac users:** the download is `Masseuse.ai-{{ .Version }}.dmg` (Apple
-    silicon and Intel; open it, drag Masseuse.ai to Applications, open it
-    from there). It is added to this release by the workflow's `macos-app`
+    silicon and Intel; open it, drag Masseuse to Applications, open it
+    from there; if a Masseuse.ai from 0.8.0 or 0.8.1 is in Applications,
+    it is the same program and can go). It is added to this release by the workflow's `macos-app`
     job a few minutes after the archives, signed with FemLed's Apple
     Developer ID, notarized and stapled, with ffmpeg inside; it is listed
     with the ffmpeg source tarballs in `checksums-darwin.txt`, signed the
