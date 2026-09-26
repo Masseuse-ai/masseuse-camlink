@@ -14,13 +14,16 @@
 #   MACOS_NOTARY_KEY        the App Store Connect API key, .p8, base64
 #   MACOS_NOTARY_KEY_ID     its key id
 #   MACOS_NOTARY_ISSUER_ID  its issuer id
-# For the bundle, the helpers are signed first: ffmpeg (hardened runtime,
-# with ffmpeg.entitlements for the camera and microphone) and each unit
-# driver helper in Contents/Helpers/units (hardened runtime, identifier
-# ai.masseuse.camlink.unit.<name>, no entitlements: a helper gets no camera
-# or microphone; docs/UNITS.md), then the bundle (hardened runtime); the
-# bundle is zipped for the notary service and stapled. The disk image is
-# signed, notarized and stapled as it is.
+# For the bundle, the programs inside are signed first: ffmpeg (hardened
+# runtime, with ffmpeg.entitlements for the camera and microphone), each
+# unit driver helper in Contents/Helpers/units (hardened runtime,
+# identifier ai.masseuse.camlink.unit.<name>, no entitlements: a helper
+# gets no camera or microphone; docs/UNITS.md) and the connector,
+# Contents/MacOS/masseuse-camlink (hardened runtime, identifier
+# ai.masseuse.camlink.connector, no entitlements: it opens neither device),
+# then the bundle, whose executable is the desktop window (hardened
+# runtime); the bundle is zipped for the notary service and stapled. The
+# disk image is signed, notarized and stapled as it is.
 set -eu
 
 # The leaf certificate's SHA-1 fingerprint (VERIFY.md, "The macOS binaries";
@@ -121,6 +124,11 @@ case "$kind" in
       $sign --options runtime --identifier "ai.masseuse.camlink.unit.$uname" "$unit"
       describe "$unit"
     done
+    # The connector the window runs (docs/DESKTOP.md): signed as a program
+    # of its own inside the bundle, with no entitlements (it opens neither
+    # device; ffmpeg does, above), before the bundle that holds it.
+    $sign --options runtime --identifier ai.masseuse.camlink.connector "$target/Contents/MacOS/masseuse-camlink"
+    describe "$target/Contents/MacOS/masseuse-camlink"
     $sign --options runtime "$target"
     codesign --verify --deep --strict --verbose=2 "$target"
     describe "$target"

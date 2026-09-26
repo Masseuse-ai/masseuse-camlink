@@ -178,11 +178,101 @@ func TestArtifactNamesFollowTheRelease(t *testing.T) {
 		{Install{Layout: LayoutArchive, GOOS: "linux", GOARCH: "arm", GOARM: "7"}, "masseuse-camlink_0.11.0_linux_armv7.tar.gz", "checksums.txt", "multiple.intoto.jsonl"},
 		{Install{Layout: LayoutArchive, GOOS: "windows", GOARCH: "arm64"}, "masseuse-camlink_0.11.0_windows_arm64.zip", "checksums.txt", "multiple.intoto.jsonl"},
 		{Install{Layout: LayoutArchive, GOOS: "darwin", GOARCH: "amd64"}, "masseuse-camlink_0.11.0_darwin_amd64.tar.gz", "checksums.txt", "multiple.intoto.jsonl"},
+		{Install{Layout: LayoutDesktop, GOOS: "linux", GOARCH: "amd64"}, "Masseuse.ai-0.11.0-linux-amd64.tar.gz", "checksums-linux.txt", "linux.intoto.jsonl"},
 	}
 	for _, c := range cases {
 		name, sums, prov := c.in.Artifact("v0.11.0")
 		if name != c.name || sums != c.checksums || prov != c.prov {
 			t.Fatalf("%+v: %s %s %s", c.in, name, sums, prov)
+		}
+	}
+}
+
+func TestDetectRootIsTheWindowsInstall(t *testing.T) {
+	dir := t.TempDir()
+	// The Linux desktop archive: the window and the connector in one
+	// directory; the connector is what is version-checked and named in
+	// the swap, the directory is what is replaced.
+	exe := filepath.Join(dir, "masseuse-camlink")
+	if err := os.WriteFile(exe, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in, err := DetectRoot(exe, dir, "linux", "amd64")
+	if err != nil || in.Layout != LayoutDesktop || in.Root != dir || in.Exe != exe {
+		t.Fatalf("desktop: %+v %v", in, err)
+	}
+	if got := (&Installer{Install: in}).stagedExe("/staged"); got != filepath.Join("/staged", "masseuse-camlink") {
+		t.Fatalf("staged exe %s", got)
+	}
+	// The macOS bundle, by its .app root, wherever the connector lies in it.
+	app := filepath.Join(dir, "Masseuse.app")
+	if err := os.MkdirAll(filepath.Join(app, "Contents", "MacOS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in, err = DetectRoot(filepath.Join(app, "Contents", "MacOS", "masseuse-camlink"), app, "darwin", "arm64")
+	if err != nil || in.Layout != LayoutBundle || in.Root != app {
+		t.Fatalf("bundle: %+v %v", in, err)
+	}
+	// The Windows package, by the window's executable: that file is what
+	// is swapped and whose --version is checked, so it becomes Exe.
+	pkg := filepath.Join(dir, "Masseuse.exe")
+	if err := os.WriteFile(pkg, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in, err = DetectRoot(filepath.Join(dir, "bin", "abc", "masseuse-camlink.exe"), pkg, "windows", "amd64")
+	if err != nil || in.Layout != LayoutPackage || in.Root != dir || in.Exe != pkg {
+		t.Fatalf("package: %+v %v", in, err)
+	}
+	// Anything else is refused: a missing root, a plain file on Linux.
+	if _, err := DetectRoot(exe, filepath.Join(dir, "gone"), "linux", "amd64"); err == nil {
+		t.Fatal("a missing root was taken")
+	}
+	if _, err := DetectRoot(exe, exe, "linux", "amd64"); err == nil {
+		t.Fatal("a plain file was taken as the root")
+	}
+}
+
+func TestStagedExeFollowsTheBundleAcrossTheWindow(t *testing.T) {
+	// A staged bundle from before the window: the connector is the
+	// executable, under the running program's name.
+	old := filepath.Join(t.TempDir(), "Masseuse.app")
+	if err := os.MkdirAll(filepath.Join(old, "Contents", "MacOS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(old, "Contents", "MacOS", "Masseuse"), []byte("x"), 0o755)
+	// A staged bundle with the window: the connector beside it.
+	newer := filepath.Join(t.TempDir(), "Masseuse.app")
+	if err := os.MkdirAll(filepath.Join(newer, "Contents", "MacOS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(newer, "Contents", "MacOS", "Masseuse"), []byte("w"), 0o755)
+	_ = os.WriteFile(filepath.Join(newer, "Contents", "MacOS", "masseuse-camlink"), []byte("c"), 0o755)
+	// Running as the connector beside the window: the new bundle's
+	// connector is checked; an older bundle's executable stands in.
+	in := Install{Exe: "/Applications/Masseuse.app/Contents/MacOS/masseuse-camlink", Layout: LayoutBundle, GOOS: "darwin", GOARCH: "arm64"}
+	if got := (&Installer{Install: in}).stagedExe(newer); got != filepath.Join(newer, "Contents", "MacOS", "masseuse-camlink") {
+		t.Fatalf("new from new: %s", got)
+	}
+	if got := (&Installer{Install: in}).stagedExe(old); got != filepath.Join(old, "Contents", "MacOS", "Masseuse") {
+		t.Fatalf("old from new: %s", got)
+	}
+	// Running as the bundle's executable before the window: the new
+	// bundle's executable, the window, is what is checked.
+	in.Exe = "/Applications/Masseuse.app/Contents/MacOS/Masseuse"
+	if got := (&Installer{Install: in}).stagedExe(newer); got != filepath.Join(newer, "Contents", "MacOS", "Masseuse") {
+		t.Fatalf("new from old: %s", got)
+	}
+}
+
+func TestRestartAnswersTheShellOnEverySystem(t *testing.T) {
+	// The desktop window starts the connector with RelaunchEnv set and
+	// starts the new version itself on RelaunchExitCode: Restart must not
+	// exec or spawn anything, whatever the system and the layout.
+	t.Setenv(RelaunchEnv, "1")
+	for _, layout := range []Layout{LayoutArchive, LayoutBundle, LayoutPackage, LayoutDesktop} {
+		in := Install{Exe: filepath.Join(t.TempDir(), "nothing-here"), Layout: layout, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+		if err := (&Installer{Install: in}).Restart(nil, nil); !errors.Is(err, ErrRelaunch) {
+			t.Fatalf("%s: Restart = %v, want ErrRelaunch", layout, err)
 		}
 	}
 }

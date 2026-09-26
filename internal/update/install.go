@@ -109,11 +109,21 @@ func (i *Installer) Stage(ctx context.Context, s *Staged, dir string) (string, e
 	return root, nil
 }
 
-// stagedExe is the new program inside a staged root.
+// stagedExe is the new program inside a staged root: for a bundle, the
+// program under the running one's name, or the connector by its own name
+// when the bundle's executable changed hands (the desktop window became
+// the bundle's executable and the connector moved beside it; either
+// answers --version with the tag).
 func (i *Installer) stagedExe(root string) string {
 	switch i.Install.Layout {
 	case LayoutBundle:
-		return filepath.Join(root, "Contents", "MacOS", filepath.Base(i.Install.Exe))
+		macos := filepath.Join(root, "Contents", "MacOS")
+		for _, name := range []string{filepath.Base(i.Install.Exe), "masseuse-camlink", "Masseuse"} {
+			if _, err := os.Stat(filepath.Join(macos, name)); err == nil {
+				return filepath.Join(macos, name)
+			}
+		}
+		return filepath.Join(macos, filepath.Base(i.Install.Exe))
 	case LayoutPackage:
 		return filepath.Join(root, PackageExe)
 	}
@@ -275,3 +285,18 @@ func Cleanup(dir string) { _ = os.RemoveAll(dir) }
 // ErrRestart says the new program could not be started; the caller keeps
 // running the old one, which is still whole on disk as the previous install.
 var ErrRestart = errors.New("update: the new program could not be started")
+
+// Restart hands the process over to the new program, now in place. Started
+// by a shell that will start it again on RelaunchExitCode (RelaunchEnv is
+// "1": the desktop window, or the .command file the macOS bundle wrote for
+// Terminal), it answers ErrRelaunch on every system and the caller ends
+// with that code, the shell starting the new version at the same path with
+// the same arguments. Otherwise each system does what it can (restart):
+// an execve on Linux, a new process on Windows, LaunchServices for a
+// bundle on a Mac.
+func (i *Installer) Restart(args []string, env []string) error {
+	if os.Getenv(RelaunchEnv) == "1" {
+		return ErrRelaunch
+	}
+	return i.restart(args, env)
+}

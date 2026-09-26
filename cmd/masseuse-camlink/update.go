@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/attest"
@@ -53,14 +54,24 @@ const (
 	updateHandoffTimeout = 20 * time.Second
 )
 
+// installRoot is what the desktop window was started from, when the window
+// runs this program (-ipc): Masseuse.app, Masseuse.exe, or the directory
+// of the Linux desktop archive. An update then replaces that, the window
+// included, rather than the connector's own file (update.DetectRoot).
+var installRoot = flag.String("install-root", "", "the application an update replaces, when the desktop window runs this program: its .app, its .exe, or its directory")
+
 // updater runs the update loop beside the manager.
 type updater struct {
 	client *update.Client
 	inst   *update.Installer
 	state  *update.State
 	log    *slog.Logger
-	// out is the console.
-	out func(format string, args ...any)
+	// ui is where the update lines go.
+	ui reporter
+	// wake asks the loop for a check now (checkNow); asked says the check
+	// under way was asked for, so its outcome is told either way.
+	wake  chan struct{}
+	asked atomic.Bool
 	// idle says whether an update may be applied now: no session is
 	// using this computer.
 	idle func() bool
@@ -86,7 +97,10 @@ type updater struct {
 
 // newUpdater is the updater for this run, or nil with the reason it is
 // off, printed by the caller.
-func newUpdater(stateDir string, log *slog.Logger, out func(string, ...any)) (*updater, string) {
+func newUpdater(stateDir string, log *slog.Logger, ui reporter) (*updater, string) {
+	if ui == nil {
+		ui = stdConsole
+	}
 	if *noUpdate {
 		return nil, "Updates are off (-no-update)."
 	}
@@ -107,7 +121,15 @@ func newUpdater(stateDir string, log *slog.Logger, out func(string, ...any)) (*u
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	in := update.Detect(exe, runtime.GOOS, runtime.GOARCH)
+	var in update.Install
+	if *installRoot != "" {
+		var err error
+		if in, err = update.DetectRoot(exe, *installRoot, runtime.GOOS, runtime.GOARCH); err != nil {
+			return nil, "Updates are off: " + err.Error() + "."
+		}
+	} else {
+		in = update.Detect(exe, runtime.GOOS, runtime.GOARCH)
+	}
 	if in.GOARCH == "arm" {
 		if arm := update.CurrentGOARM(); arm != "" {
 			in.GOARM = arm
@@ -134,7 +156,8 @@ func newUpdater(stateDir string, log *slog.Logger, out func(string, ...any)) (*u
 		inst:           &update.Installer{Install: in, Logger: log, Aside: filepath.Join(stateDir, "previous")},
 		state:          update.LoadState(stateDir),
 		log:            log,
-		out:            out,
+		ui:             ui,
+		wake:           make(chan struct{}, 1),
 		idle:           func() bool { return true },
 		handoff:        func() {},
 		args:           os.Args[1:],
@@ -191,7 +214,7 @@ func (u *updater) warn(kind, format string, args ...any) {
 		}
 		u.warnedAt[kind] = u.now()
 	}
-	u.out(format+"\n", args...)
+	u.ui.Update(updateFailed, "", fmt.Sprintf(format, args...))
 }
 
 // announce says what the last update did: the new program prints it once.
@@ -200,7 +223,7 @@ func (u *updater) announce() {
 		return
 	}
 	if u.state.Installed == u.client.Current {
-		u.out("Updated to %s.\n", u.state.Installed)
+		u.ui.Update(updateCurrent, u.state.Installed, fmt.Sprintf("Updated to %s.", u.state.Installed))
 	} else {
 		// The update was put in place but this is not it: the person
 		// started the previous, or the swap did not take.
@@ -284,6 +307,7 @@ func (u *updater) run(ctx context.Context) {
 	case <-ctx.Done():
 		return
 	case <-time.After(u.firstAfter):
+	case <-u.wake:
 	}
 	for {
 		if restarted := u.once(ctx); restarted {
@@ -294,7 +318,18 @@ func (u *updater) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(u.every + jitter):
+		case <-u.wake:
 		}
+	}
+}
+
+// checkNow has the loop look for a newer release at once (the window's
+// "Check for updates"); a check already under way stands.
+func (u *updater) checkNow() {
+	u.asked.Store(true)
+	select {
+	case u.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -307,7 +342,7 @@ func (u *updater) once(ctx context.Context) bool {
 		return false
 	}
 	if !u.idle() {
-		u.out("Update: %s %s downloaded and verified; installing when the session ends.\n", appName, staged.Tag)
+		u.ui.Update(updateStaged, staged.Tag, fmt.Sprintf("Update: %s %s downloaded and verified; installing when the session ends.", appName, staged.Tag))
 		for !u.idle() {
 			select {
 			case <-ctx.Done():
@@ -323,6 +358,8 @@ func (u *updater) once(ctx context.Context) bool {
 // installable: downloaded, verified, staged, the new program's --version
 // answered. False when there is nothing to do or something refused.
 func (u *updater) prepare(ctx context.Context) (*update.Staged, string, bool) {
+	asked := u.asked.Swap(false)
+	u.ui.UpdateQuiet(updateChecking, "", "Checking for a newer release…")
 	u.state.LastCheck = u.now()
 	rel, err := u.client.Check(ctx)
 	switch {
@@ -331,12 +368,18 @@ func (u *updater) prepare(ctx context.Context) (*update.Staged, string, bool) {
 		u.client.Prune("")
 		u.state.Staged = nil
 		u.save()
+		u.ui.UpdateQuiet(updateCurrent, u.client.Current, fmt.Sprintf("Up to date: %s is the latest release.", u.client.Current))
 		return nil, "", false
 	case err != nil:
 		if strings.Contains(err.Error(), "do not verify") {
 			u.warn("verify", "Update check: the latest release did not verify; staying on %s.", u.client.Current)
 		} else {
 			u.log.Debug("update: could not check for a newer version", "err", err)
+			if asked {
+				u.ui.UpdateQuiet(updateFailed, "", fmt.Sprintf("Could not check for a newer release (%s); staying on %s.", firstLine(err), u.client.Current))
+			} else {
+				u.ui.UpdateQuiet(updateCurrent, u.client.Current, fmt.Sprintf("Running %s; the release could not be checked just now.", u.client.Current))
+			}
 		}
 		u.save()
 		return nil, "", false
@@ -346,6 +389,7 @@ func (u *updater) prepare(ctx context.Context) (*update.Staged, string, bool) {
 		return nil, "", false
 	}
 	u.log.Info("update: a newer release", "tag", rel.Tag, "current", u.client.Current, "signedBy", rel.Signature.Identity)
+	u.ui.UpdateQuiet(updateChecking, rel.Tag, fmt.Sprintf("Downloading and verifying %s %s…", appName, rel.Tag))
 	u.client.Prune(rel.Tag)
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	staged, err := u.client.Download(dctx, rel)
@@ -409,7 +453,7 @@ func firstLine(err error) string {
 // If it will not start, the swap is undone and this program ends, saying
 // so: what it held is gone by then.
 func (u *updater) apply(ctx context.Context, staged *update.Staged, root string) bool {
-	u.out("Updating to %s; back in a moment.\n", staged.Tag)
+	u.ui.Update(updateInstalling, staged.Tag, fmt.Sprintf("Updating to %s; back in a moment.", staged.Tag))
 	previous, err := u.inst.Swap(root)
 	if err != nil {
 		u.refused(staged.Tag, err)
@@ -422,18 +466,19 @@ func (u *updater) apply(ctx context.Context, staged *update.Staged, root string)
 	u.save()
 	update.Cleanup(filepath.Join(u.client.UpdatesDir(), staged.Tag))
 	u.log.Info("update: installed; restarting", "tag", staged.Tag, "previous", previous)
-	u.out("Handing over: camera off, unit released, restarting.\n")
+	u.ui.Update(updateInstalling, staged.Tag, "Handing over: camera off, unit released, restarting.")
 	u.handOver()
 	err = u.restart(u.args, u.env)
 	switch {
 	case errors.Is(err, update.ErrRelaunch):
-		// The shell that started this program starts the new one in the
-		// same window on this exit code (desktop.go commandScript).
+		// The shell that started this program starts the new one on this
+		// exit code: the desktop window (docs/DESKTOP.md), or the
+		// .command file's loop (desktop.go commandScript).
 		u.log.Info("update: ending for the shell to start the new program", "code", update.RelaunchExitCode)
 		u.exit(update.RelaunchExitCode)
 		return true
 	case errors.Is(err, update.ErrStartedApart):
-		u.out("%s %s is starting in a window of its own; this one is done.\n", appName, staged.Tag)
+		u.ui.Update(updateInstalling, staged.Tag, fmt.Sprintf("%s %s is starting in a window of its own; this one is done.", appName, staged.Tag))
 		u.exit(0)
 		return true
 	case err != nil:
@@ -442,7 +487,7 @@ func (u *updater) apply(ctx context.Context, staged *update.Staged, root string)
 		u.undo(previous)
 		u.state.MarkFailed(staged.Tag, u.now())
 		u.save()
-		u.out("The new version could not be started (%v); the previous one is back. Open %s again.\n", firstLine(err), appName)
+		u.ui.Update(updateFailed, staged.Tag, fmt.Sprintf("The new version could not be started (%v); the previous one is back. Open %s again.", firstLine(err), appName))
 		u.exit(1)
 		return true
 	}
@@ -492,7 +537,6 @@ func (u *updater) undo(previous string) {
 // program not started (the caller does). Exit code 0 when up to date or
 // updated, 1 on a failure, 2 when updates are off for this install.
 func updateNow(ctx context.Context, stateDir string, log *slog.Logger) int {
-	out := func(format string, args ...any) { fmt.Printf(format, args...) }
 	release, err := lockInstance(stateDir)
 	if err != nil {
 		if errors.Is(err, errAlreadyRunning) {
@@ -503,7 +547,7 @@ func updateNow(ctx context.Context, stateDir string, log *slog.Logger) int {
 		return 1
 	}
 	defer release()
-	u, why := newUpdater(stateDir, log, out)
+	u, why := newUpdater(stateDir, log, stdConsole)
 	if u == nil {
 		if why == "" {
 			why = "Updates are off: this is not a release build."

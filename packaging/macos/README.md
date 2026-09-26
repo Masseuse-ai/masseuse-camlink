@@ -9,7 +9,7 @@ bare executable, however well signed and notarized, is refused as "not an
 app". That is why the bundle exists.
 
 Masseuse.ai is the name a person sees: the disk image and its volume, the
-Terminal window's title, the first line the program prints, the permission
+window's title, the first line the connector prints, the permission
 prompts. The bundle alone is `Masseuse.app`, shown as **Masseuse** in the
 Finder, Launchpad and the Dock. It cannot be `Masseuse.ai.app`: the Finder
 and Launchpad refuse to hide `.app` when the rest of the name ends in a
@@ -27,17 +27,20 @@ directory (`~/Library/Application Support/masseuse-camlink`) and the
 archives. Releases before v0.8.0 named the app and the image
 masseuse-camlink too.
 
-The bundle's executable is the connector itself (`cmd/masseuse-camlink`),
-the universal binary made from the two signed release binaries with
-`lipo`, under the name `Masseuse`. Opened from the Finder, it has no
-terminal to print the pairing code to, so it writes a small
-`Masseuse.ai.command` file into its state directory and asks the system to
-open it; Terminal runs it, and it runs the connector in that window in
-console mode, in a loop that runs it again when it ends with exit code 75,
-which is how an update restarts it as the new version at the same path
-(`cmd/masseuse-camlink/desktop.go`, `internal/update` `ErrRelaunch`). If a
-connector is already running on that state directory, opening the app
-again only brings Terminal forward. The bundle is `LSUIElement`, so nothing bounces in the Dock.
+The bundle's executable is the desktop window (`desktop/`, docs/DESKTOP.md),
+the universal binary made from two builds of the Wails shell with `lipo`,
+under the name `Masseuse`. Opened from the Finder, it shows the pairing
+code, the cameras, the unit; behind it runs the connector itself
+(`cmd/masseuse-camlink`, `Contents/MacOS/masseuse-camlink`, the universal
+binary made from the two signed release binaries with `lipo`), started by
+the window with `-ipc` and ended with it. An update the connector installs
+replaces the whole bundle, and the connector ends with exit code 75 for the
+window to quit and open the new bundle (`desktop/relaunch.go`,
+`internal/update` `ErrRelaunch`). Opening the app again while it runs
+brings its window forward. The connector alone still runs in a terminal:
+`Masseuse.app/Contents/MacOS/masseuse-camlink -console` (or the `-app`
+flag, which opens Terminal for it as the bundle did before the window
+existed).
 `ffmpeg` ships inside (`Contents/Helpers/ffmpeg`, built by
 `packaging/ffmpeg/build.sh`), and the connector looks there before it looks
 at `PATH`, so there is no Homebrew step. The unit driver helpers ship
@@ -49,7 +52,8 @@ there for them; a bundle without that directory serves the Mastago alone.
 Masseuse.app/Contents/
   Info.plist                     from Info.plist here, version filled in
   PkgInfo
-  MacOS/Masseuse                 the connector, universal, Developer ID + hardened runtime
+  MacOS/Masseuse                 the desktop window (desktop/), universal, Developer ID + hardened runtime
+  MacOS/masseuse-camlink         the connector, universal, Developer ID + hardened runtime, identifier ai.masseuse.camlink.connector
   Helpers/ffmpeg                 universal, Developer ID + hardened runtime + ffmpeg.entitlements
   Helpers/units/camlink-unit-*   unit driver helpers (docs/UNITS.md), universal, Developer ID + hardened runtime; from packaging/units/fetch.sh, absent in a build without them
   Resources/masseuse-camlink.icns  the icon for macOS 13 to 15 (CFBundleIconFile)
@@ -63,10 +67,10 @@ Masseuse.app/Contents/
 
 | File | What |
 | --- | --- |
-| `Info.plist` | the bundle's property list, `@VERSION@` filled in by `build-app.sh`; `CFBundleName`, `CFBundleDisplayName` and `CFBundleExecutable` all `Masseuse`, the bundle's name (above); `LSMinimumSystemVersion` 13.0 (Go's floor for macOS binaries), `LSUIElement`, the camera, microphone and Bluetooth usage strings |
+| `Info.plist` | the bundle's property list, `@VERSION@` filled in by `build-app.sh`; `CFBundleName`, `CFBundleDisplayName` and `CFBundleExecutable` all `Masseuse`, the bundle's name (above); `LSMinimumSystemVersion` 13.0 (Go's floor for macOS binaries), the camera, microphone and Bluetooth usage strings, which the system shows in the application's name when the connector inside opens them |
 | `ffmpeg.entitlements` | camera and microphone, which a hardened-runtime process may open only with these |
-| `build-app.sh` | assembles the bundle from a connector binary, `packaging/ffmpeg/build.sh`'s output, the unit driver helpers (`-u`, `packaging/units/fetch.sh`'s darwin/all output, each checked universal) and the files here, and compiles the macOS 26 icon with `actool` (Xcode 26 or later, on macOS 26; `DEVELOPER_DIR` picks an Xcode when the selected one is older); `sh` otherwise, runs unsigned in `ci.yml` on every pull request |
-| `sign-notarize.sh` | temporary keychain from the release secrets, `codesign` (ffmpeg and each `Helpers/units/camlink-unit-*` first, the latter as `ai.masseuse.camlink.unit.<name>` without entitlements, then the bundle, `--options runtime --timestamp`), `notarytool submit --wait`, `stapler staple`; the same for the disk image. The identity is picked by the certificate's SHA-1 from VERIFY.md, never by its subject, and the subject is never printed |
+| `build-app.sh` | assembles the bundle from the desktop window (`-s`, `cd desktop && wails3 task build`), a connector binary (`-b`), `packaging/ffmpeg/build.sh`'s output, the unit driver helpers (`-u`, `packaging/units/fetch.sh`'s darwin/all output, each checked universal) and the files here, and compiles the macOS 26 icon with `actool` (Xcode 26 or later, on macOS 26; `DEVELOPER_DIR` picks an Xcode when the selected one is older); `sh` otherwise, runs unsigned in `ci.yml` on every pull request |
+| `sign-notarize.sh` | temporary keychain from the release secrets, `codesign` (ffmpeg, each `Helpers/units/camlink-unit-*` as `ai.masseuse.camlink.unit.<name>` without entitlements, and the connector as `ai.masseuse.camlink.connector` without entitlements, then the bundle, `--options runtime --timestamp`), `notarytool submit --wait`, `stapler staple`; the same for the disk image. The identity is picked by the certificate's SHA-1 from VERIFY.md, never by its subject, and the subject is never printed |
 | `assess.sh` | the gates: `codesign --verify --deep --strict`, `spctl --assess --type execute` (bundle) and `--type open --context context:primary-signature` (image) answering `accepted` with `source=Notarized Developer ID`, `stapler validate`; the release fails if any is false |
 | `build-dmg.sh` | the app and an `Applications` shortcut on an HFS+ image named `Masseuse.ai` with the volume icon set, compressed read-only (`hdiutil`); file name `Masseuse.ai-<version>.dmg` |
 | `masseuse-camlink.icns` | the icon (below) as a bitmap, for macOS 13 to 15; the file keeps its name, `CFBundleIconFile` points at it |
@@ -76,11 +80,15 @@ Masseuse.app/Contents/
 The release workflow (`.github/workflows/release.yml`, job `macos-app`) runs
 them in this order on a macOS 26 runner, after goreleaser has published the
 archives: verify the two darwin archives against the signed
-`checksums.txt`, `lipo -create` the connectors, build or restore ffmpeg,
-`build-app.sh`, `sign-notarize.sh app`, `assess.sh app`, `build-dmg.sh`,
+`checksums.txt`, `lipo -create` the connectors, build the desktop window
+for each architecture (`cd desktop && wails3 task build ARCH=…`) and
+`lipo -create` it, build or restore ffmpeg, `build-app.sh`,
+`sign-notarize.sh app`, `assess.sh app`, `build-dmg.sh`,
 `sign-notarize.sh dmg`, `assess.sh dmg`, then the reproducibility check
-(`cmd/machostrip -sha256` of the bundle's executable, one hash per
-architecture, equals that of the archives' binaries) and the upload with
+(`cmd/machostrip -sha256` of the bundle's connector,
+`Contents/MacOS/masseuse-camlink`, one hash per architecture, equals that
+of the archives' binaries; the window is not rebuilt byte for byte, its
+signature and the provenance vouch for it) and the upload with
 `checksums-darwin.txt`, its cosign bundle and the SLSA provenance
 `darwin.intoto.jsonl`. VERIFY.md, "The macOS app", says how to check all of
 it from the outside.
@@ -91,9 +99,10 @@ release secrets; the icon needs macOS 26 with Xcode 26 or later selected,
 
 ```sh
 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o dist/masseuse-camlink ./cmd/masseuse-camlink
+(cd desktop && wails3 task build)                                # desktop/bin/Masseuse, this architecture
 sh packaging/ffmpeg/build.sh -t darwin -o dist/ffmpeg -a "$(uname -m)"  # a few minutes; one architecture
-sh packaging/macos/build-app.sh -v 0.0.0 -b dist/masseuse-camlink -f dist/ffmpeg -o dist
-open dist/Masseuse.app                                          # Terminal opens with the connector
+sh packaging/macos/build-app.sh -v 0.0.0 -s desktop/bin/Masseuse -b dist/masseuse-camlink -f dist/ffmpeg -o dist
+open dist/Masseuse.app                                          # the window opens around the connector
 ```
 
 ## The icon

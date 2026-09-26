@@ -78,6 +78,11 @@ jobs:
           go-version-file: go.mod
           cache: true
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
       - name: go test on macOS
         run: go test -count=1 ./cmd/... ./internal/capture/ ./internal/machosig/ ./internal/ble/ ./internal/awake/ ./internal/estim/helper/ ./internal/update/
       - name: Unsigned bundle and disk image
@@ -88,13 +93,21 @@ jobs:
               -o "dist/masseuse-camlink_${arch}" ./cmd/masseuse-camlink
           done
           lipo -create -output dist/masseuse-camlink dist/masseuse-camlink_arm64 dist/masseuse-camlink_amd64
+          # The desktop window, the bundle's executable, as release.yml builds it.
+          (cd desktop/frontend && npm ci && npm run build)
+          for arch in arm64 amd64; do
+            (cd desktop && CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" MACOSX_DEPLOYMENT_TARGET=13.0 \
+              CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 \
+              go build -tags production -trimpath -buildvcs=false -ldflags="-w -s -X main.version=v0.0.0" -o "../dist/shell_${arch}" .)
+          done
+          lipo -create -output dist/Masseuse dist/shell_arm64 dist/shell_amd64
           cp /usr/bin/true dist/ffmpeg/ffmpeg # a Mach-O stand-in, so codesign has nested code to seal
           printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg/licenses/README
           sh packaging/units/fetch.sh "$(tr -d '[:space:]' < packaging/units/VERSION)" darwin all dist/units
-          sh packaging/macos/build-app.sh -v 0.0.0 -b dist/masseuse-camlink -f dist/ffmpeg -u dist/units -o dist
+          sh packaging/macos/build-app.sh -v 0.0.0 -s dist/Masseuse -b dist/masseuse-camlink -f dist/ffmpeg -u dist/units -o dist
           ls dist/Masseuse.app/Contents/Helpers/units/camlink-unit-* >/dev/null
           # The bundle's connector finds the helpers where the bundle puts them.
-          dist/Masseuse.app/Contents/MacOS/Masseuse -state-dir "${RUNNER_TEMP}/probe-state" -estim-ble off estim probe > probe.txt 2>&1 || true
+          dist/Masseuse.app/Contents/MacOS/masseuse-camlink -state-dir "${RUNNER_TEMP}/probe-state" -estim-ble off estim probe > probe.txt 2>&1 || true
           grep -F 'Unit drivers: Mastago (built in) + 1 helper(s)' probe.txt || { cat probe.txt; exit 1; }
           plutil -lint dist/Masseuse.app/Contents/Info.plist
           test "$(plutil -extract CFBundleExecutable raw -o - dist/Masseuse.app/Contents/Info.plist)" = Masseuse
@@ -104,9 +117,11 @@ jobs:
           test "$(plutil -extract CFBundleIconName raw -o - dist/Masseuse.app/Contents/Info.plist)" = masseuse-camlink
           assetutil --info dist/Masseuse.app/Contents/Resources/Assets.car | grep -q '"masseuse-camlink.iconstack"'
           test "$(lipo -archs dist/Masseuse.app/Contents/MacOS/Masseuse)" = "x86_64 arm64"
-          go run ./cmd/machostrip -sha256 dist/Masseuse.app/Contents/MacOS/Masseuse
-          # The bundle's own program, run from a shell, is the console program.
-          dist/Masseuse.app/Contents/MacOS/Masseuse --version
+          test "$(lipo -archs dist/Masseuse.app/Contents/MacOS/masseuse-camlink)" = "x86_64 arm64"
+          go run ./cmd/machostrip -sha256 dist/Masseuse.app/Contents/MacOS/masseuse-camlink
+          # The window answers --version without opening; the connector beside it is the console program.
+          test "$(dist/Masseuse.app/Contents/MacOS/Masseuse --version | cut -d' ' -f1)" = v0.0.0
+          dist/Masseuse.app/Contents/MacOS/masseuse-camlink --version
           codesign --force --deep --sign - dist/Masseuse.app
           codesign --verify --deep --strict --verbose=2 dist/Masseuse.app
           sh packaging/macos/build-dmg.sh -a dist/Masseuse.app -v 0.0.0 -o dist
@@ -139,48 +154,63 @@ jobs:
           go-version-file: go.mod
           cache: true
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
       - name: go test on Windows
         run: go test -count=1 -v -run 'TestOpenWithoutBluetooth|TestScanEndsOnDeadline' ./internal/ble/ && go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/ ./internal/awake/ ./internal/ble/ ./internal/estim/... ./internal/update/ ./internal/payload/ ./internal/pesig/... ./packaging/windows/pack/
       - name: The committed resource objects are current
         run: |
           sh packaging/windows/make-syso.sh
-          git status --porcelain -- cmd/masseuse-camlink/*.syso
-          test -z "$(git status --porcelain -- cmd/masseuse-camlink/*.syso)" ||
-            { echo "cmd/masseuse-camlink/rsrc_windows_*.syso differ from what packaging/windows/make-syso.sh produces; run it and commit" >&2; exit 1; }
-      - name: Build the connector
+          git status --porcelain -- cmd/masseuse-camlink/*.syso desktop/*.syso
+          test -z "$(git status --porcelain -- cmd/masseuse-camlink/*.syso desktop/*.syso)" ||
+            { echo "the rsrc_windows_*.syso files differ from what packaging/windows/make-syso.sh produces; run it and commit" >&2; exit 1; }
+      - name: Build the connector and the window
+        # The window as release.yml builds it: the page, then the Go
+        # program for the GUI subsystem (no console of its own; the
+        # connector's runs hidden behind it) with the resource object above.
         run: |
           mkdir -p dist/ffmpeg-windows/licenses
           CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o dist/masseuse-camlink.exe ./cmd/masseuse-camlink
           dist/masseuse-camlink.exe --version
-      - name: Explorer's view of the program
+          (cd desktop/frontend && npm ci && npm run build)
+          (cd desktop && CGO_ENABLED=0 go build -tags production -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X main.version=v0.0.0" -o ../dist/shell/Masseuse.exe .)
+          test "$(dist/shell/Masseuse.exe --version | cut -d' ' -f1)" = v0.0.0
+      - name: Explorer's view of the programs
         # packaging/windows/verinfo reads the strings the way Explorer does;
         # PowerShell's VersionInfo would report them empty, since the
-        # resource carries no FileVersion string on purpose.
+        # resource carries no FileVersion string on purpose. Both programs
+        # carry the same strings.
         run: |
-          go run ./packaging/windows/verinfo dist/masseuse-camlink.exe | tee dist/verinfo.txt
-          grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
-          grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
-          grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
+          for exe in dist/masseuse-camlink.exe dist/shell/Masseuse.exe; do
+            go run ./packaging/windows/verinfo "$exe" | tee dist/verinfo.txt
+            grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
+            grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
+            grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
+          done
       - name: The package, with a stand-in ffmpeg
-        # packaging/windows/pack appends the payload; cmd/pestrip takes it
-        # off again and must give the connector's hash back. Copied to a
-        # directory of its own, the package unpacks its payload under the
-        # state directory and finds the helper there.
+        # packaging/windows/pack appends the payload to the window;
+        # cmd/pestrip takes it off again and must give the window's hash
+        # back, and the connector inside is the one packed. Unpacked as the
+        # window unpacks it, the connector finds the helper beside itself.
         run: |
           cp dist/masseuse-camlink.exe dist/ffmpeg-windows/ffmpeg.exe
           printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg-windows/licenses/README
           sh packaging/units/fetch.sh "$(tr -d '[:space:]' < packaging/units/VERSION)" windows amd64 dist/units
-          go run ./packaging/windows/pack -v 0.0.0 -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -u dist/units -o dist/Masseuse.exe | tee pack.txt
+          go run ./packaging/windows/pack -v 0.0.0 -s dist/shell/Masseuse.exe -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -u dist/units -o dist/Masseuse.exe | tee pack.txt
+          grep -q ' masseuse-camlink.exe$' pack.txt
           grep -q ' units/camlink-unit-.*\.exe$' pack.txt
           grep -q ' README.txt$' pack.txt
-          test "$(go run ./cmd/pestrip -sha256 dist/Masseuse.exe)" = "$(sha256sum dist/masseuse-camlink.exe | cut -d' ' -f1)"
+          test "$(go run ./cmd/pestrip -sha256 dist/Masseuse.exe)" = "$(sha256sum dist/shell/Masseuse.exe | cut -d' ' -f1)"
           go run ./cmd/pestrip -payload dist/payload-check dist/Masseuse.exe > /dev/null
+          cmp dist/masseuse-camlink.exe dist/payload-check/masseuse-camlink.exe
           cmp dist/ffmpeg-windows/ffmpeg.exe dist/payload-check/ffmpeg.exe
           alone="${RUNNER_TEMP}/alone"; mkdir -p "$alone" && cp dist/Masseuse.exe "$alone/"
           "$alone/Masseuse.exe" --version
-          "$alone/Masseuse.exe" -state-dir "$(cygpath -w "${RUNNER_TEMP}/probe-state")" -estim-ble off estim probe > probe.txt 2>&1 || true
+          dist/payload-check/masseuse-camlink.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/probe-state")" -estim-ble off estim probe > probe.txt 2>&1 || true
           grep -F 'Unit drivers: Mastago (built in) + 1 helper(s)' probe.txt || { cat probe.txt; exit 1; }
-          ls "${RUNNER_TEMP}/probe-state/bin/"*/units/camlink-unit-*.exe
 
   vulncheck:
     runs-on: ubuntu-latest
@@ -192,3 +222,63 @@ jobs:
         with:
           go-version-file: go.mod
           go-package: ./...
+
+  desktop:
+    # The desktop shell (desktop/, docs/DESKTOP.md): its own Go module, so
+    # the connector's `go vet ./...` above never sees it. The page must
+    # typecheck and build, the Go shell must vet, build and pass its tests
+    # on each of the three systems it ships for (cgo: the window toolkit is
+    # native), and the generated bindings committed under frontend/bindings
+    # must be what the Go services say.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: desktop/go.mod
+          cache: true
+          cache-dependency-path: |
+            desktop/go.sum
+            go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: Linux toolkit
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
+      - name: frontend
+        working-directory: desktop/frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+      - name: bindings are current
+        if: runner.os == 'macOS'
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.23
+          wails3 generate bindings -ts -i
+          git diff --exit-code -- frontend/bindings
+      - name: go vet, build and test
+        run: |
+          # gofmt on the two systems whose checkout keeps LF (Git on the
+          # Windows runner writes CRLF, which gofmt reports on every file).
+          if [ "$RUNNER_OS" != Windows ]; then gofmt -l . && test -z "$(gofmt -l .)"; fi
+          go vet ./...
+          go build -trimpath -buildvcs=false -o /dev/null .
+          # The race detector needs a C toolchain the Windows runner does
+          # not pair with this build; the other two run under it.
+          if [ "$RUNNER_OS" = Windows ]; then go test -count=1 ./...; else go test -count=1 -race ./...; fi

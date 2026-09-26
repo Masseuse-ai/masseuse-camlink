@@ -1,0 +1,55 @@
+# Wails project configuration for the desktop shell (../main.go).
+# `wails3 task common:update:build-assets` regenerates the platform assets
+# under build/ from the `info` block; it overwrites edits made to them.
+#
+# The shipped downloads are not this Taskfile's: the release assembles
+# Masseuse.app and Masseuse.exe around the shell, the connector, ffmpeg and
+# the unit driver helpers (packaging/macos, packaging/windows). These assets
+# are for local builds and `wails3 dev`.
+version: '3'
+
+info:
+  companyName: "FemLed"
+  productName: "Masseuse.ai"
+  # The bundle identifier the shipped application already has
+  # (packaging/macos/Info.plist), so permissions and the update path stay
+  # the same application.
+  productIdentifier: "ai.masseuse.camlink"
+  description: "Masseuse.ai for your computer"
+  copyright: "Copyright 2026 FemLed. Apache License 2.0."
+  comments: "The window around masseuse-camlink (docs/DESKTOP.md)."
+  version: "0.1.0"
+  # The layered macOS 26 icon compiled from appicon.icon (the same layers as
+  # packaging/macos/masseuse-camlink.icon).
+  cfBundleIconName: "appicon"
+
+# Dev mode configuration
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - bin
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary
+
+fileAssociations:
+
+other:

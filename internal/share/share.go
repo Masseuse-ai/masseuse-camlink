@@ -110,6 +110,14 @@ func New(cfg Config) (*Server, error) {
 // URL is the address a program on this computer opens.
 func (s *Server) URL() string { return s.url }
 
+// Port is the loopback port the server listens on.
+func (s *Server) Port() int {
+	if addr, ok := s.srv.NetListener().Addr().(*net.TCPAddr); ok {
+		return addr.Port
+	}
+	return 0
+}
+
 // Arriving reports whether the phone's picture is arriving now.
 func (s *Server) Arriving() bool {
 	s.mu.Lock()

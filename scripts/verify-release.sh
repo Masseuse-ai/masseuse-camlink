@@ -233,11 +233,17 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
     [ -n "$mount" ] || { echo "    the disk image did not mount" >&2; exit 1; }
     app=$(find "$mount" -maxdepth 1 -name '*.app' | head -n 1)
     [ -n "$app" ] || { echo "    no application bundle in $dmg" >&2; hdiutil detach "$mount" -quiet; exit 1; }
-    exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
-    echo "    $(basename "$app"), volume $(basename "$mount")"
+    # The connector inside the bundle: beside the desktop window, which is
+    # the bundle's executable, from the release that brought the window;
+    # the executable itself before that.
+    exe="$app/Contents/MacOS/masseuse-camlink"
+    [ -f "$exe" ] || exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
+    echo "    $(basename "$app"), volume $(basename "$mount"), connector $(basename "$exe")"
     if command -v go >/dev/null 2>&1; then
-      # The bundle's executable, stripped, is the archives' binaries stripped,
-      # architecture by architecture (and so the rebuild of step 7).
+      # The bundle's connector, stripped, is the archives' binaries stripped,
+      # architecture by architecture (and so the rebuild of step 7). The
+      # window beside it (Contents/MacOS/Masseuse) is not rebuilt byte for
+      # byte; its signature is checked below.
       appwork="$(mktemp -d)"
       go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$exe" > "$appwork/bundle.txt"
       for arch in arm64 amd64; do
@@ -246,15 +252,15 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
         tar -xzOf "$archive" masseuse-camlink > "$appwork/thin_$arch"
         thin=$(go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$appwork/thin_$arch" | cut -d' ' -f1)
         grep -q "^$thin  .* ($arch)\$" "$appwork/bundle.txt" \
-          || { echo "    MISMATCH: the app's $arch slice is not the published darwin/$arch binary" >&2; cat "$appwork/bundle.txt" >&2; hdiutil detach "$mount" -quiet; exit 1; }
-        echo "    ok  the app's $arch slice is the published darwin/$arch binary: $thin"
+          || { echo "    MISMATCH: the app's connector's $arch slice is not the published darwin/$arch binary" >&2; cat "$appwork/bundle.txt" >&2; hdiutil detach "$mount" -quiet; exit 1; }
+        echo "    ok  the app's connector's $arch slice is the published darwin/$arch binary: $thin"
       done
       rm -rf "$appwork"
     fi
     # Gatekeeper's verdict, as at a double-click; the certificate's subject
     # (spctl's origin line) is left out of the output.
     codesign --verify --deep --strict "$app"
-    for f in "$app" "$app/Contents/Helpers/ffmpeg"; do
+    for f in "$app" "$exe" "$app/Contents/Helpers/ffmpeg"; do
       info=$(codesign -dvv "$f" 2>&1)
       echo "$info" | grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" \
         || { echo "    $f: signed by another team" >&2; hdiutil detach "$mount" -quiet; exit 1; }
@@ -308,16 +314,28 @@ if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/ch
   zipfile=$(winfiles | grep -E '\.zip$' | head -n 1)
   if [ -s Masseuse.exe ]; then
     # v0.13.0 and later: the one-file package. pestrip takes the signature
-    # and the payload off; what remains is the archive's executable.
+    # and the payload off, and writes the payload out. From the release
+    # that brought the desktop window, the file is the window and the
+    # published connector is in the payload as masseuse-camlink.exe (its
+    # own signature stripped, it is the archive's executable); before, the
+    # file itself minus signature and payload was the archive's executable.
     if [ -s "$archive" ] && command -v go >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
-      stripped=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 Masseuse.exe | cut -d' ' -f1)
       published=$(unzip -p "$archive" masseuse-camlink.exe | $SHA | cut -d' ' -f1)
-      [ "$stripped" = "$published" ] \
-        || { echo "    MISMATCH: Masseuse.exe minus signature and payload ($stripped) is not the published windows/amd64 connector ($published)" >&2; exit 1; }
-      echo "    ok  Masseuse.exe minus its signature and payload is the published windows/amd64 connector: $stripped"
       rm -rf winpayload
       go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -payload winpayload Masseuse.exe > winpayload.txt
       grep -q '  ffmpeg.exe$' winpayload.txt || { echo "    no ffmpeg.exe in the payload" >&2; exit 1; }
+      if [ -s winpayload/masseuse-camlink.exe ]; then
+        inside=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 winpayload/masseuse-camlink.exe | cut -d' ' -f1)
+        [ "$inside" = "$published" ] \
+          || { echo "    MISMATCH: the connector in Masseuse.exe's payload, minus its signature ($inside), is not the published windows/amd64 connector ($published)" >&2; exit 1; }
+        echo "    ok  the connector in Masseuse.exe's payload minus its signature is the published windows/amd64 connector: $published"
+        echo "    ok  Masseuse.exe itself is the desktop window: signed, covered by the checksum file and the provenance, not rebuilt byte for byte (VERIFY.md, \"The desktop window\")"
+      else
+        stripped=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 Masseuse.exe | cut -d' ' -f1)
+        [ "$stripped" = "$published" ] \
+          || { echo "    MISMATCH: Masseuse.exe minus signature and payload ($stripped) is not the published windows/amd64 connector ($published)" >&2; exit 1; }
+        echo "    ok  Masseuse.exe minus its signature and payload is the published windows/amd64 connector: $stripped"
+      fi
       echo "    ok  the payload carries $(wc -l < winpayload.txt | tr -d ' ') files, ffmpeg.exe among them"
     else
       echo "    skipped the executable comparison (needs go and unzip, and $archive)"
@@ -343,6 +361,48 @@ if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/ch
 else
   rm -f checksums-windows.txt
   echo "==> 9. the Windows package: none in this release (no checksums-windows.txt)"
+fi
+
+# The Linux desktop archive (VERIFY.md, "The Linux desktop archive"): the
+# window with the connector beside it, from the release that brought the
+# window; releases before it have no such file.
+if [ -s checksums-linux.txt ] || curl -fsSL -o checksums-linux.txt "$base/checksums-linux.txt" 2>/dev/null; then
+  echo "==> 9b. the Linux desktop archive: checksum signature, hash and provenance"
+  fetch checksums-linux.txt.sigstore.json
+  fetch linux.intoto.jsonl
+  cosign verify-blob \
+    --bundle checksums-linux.txt.sigstore.json \
+    --certificate-identity-regexp "$WORKFLOW_RE" \
+    --certificate-oidc-issuer "$ISSUER" \
+    checksums-linux.txt
+  awk '{print $2}' checksums-linux.txt | while read -r f; do fetch "$f"; done
+  $SHA -c checksums-linux.txt
+  awk '{print $2}' checksums-linux.txt | while read -r f; do
+    slsa-verifier verify-artifact "$f" \
+      --provenance-path linux.intoto.jsonl \
+      --source-uri "github.com/$REPO" \
+      --source-tag "$tag" >/dev/null
+    echo "    ok  $f"
+  done
+  desktop=$(awk '{print $2}' checksums-linux.txt | grep -E '^Masseuse\.ai-.*-linux-amd64\.tar\.gz$' | head -n 1)
+  archive="masseuse-camlink_${version}_linux_amd64.tar.gz"
+  if [ -n "$desktop" ] && [ -s "$desktop" ] && [ -s "$archive" ]; then
+    # The connector inside the desktop archive is the published one, byte
+    # for byte; the window beside it is covered by the checksum file and
+    # the provenance, not rebuilt.
+    inside=$(tar -xzOf "$desktop" masseuse-camlink | $SHA | cut -d' ' -f1)
+    published=$(tar -xzOf "$archive" masseuse-camlink | $SHA | cut -d' ' -f1)
+    [ "$inside" = "$published" ] \
+      || { echo "    MISMATCH: the connector in $desktop ($inside) is not the published linux/amd64 connector ($published)" >&2; exit 1; }
+    echo "    ok  the connector in $desktop is the published linux/amd64 connector: $published"
+    tar -tzf "$desktop" | grep -qx 'Masseuse' || { echo "    no window (Masseuse) in $desktop" >&2; exit 1; }
+    echo "    ok  $desktop carries the window, the connector and $(tar -tzf "$desktop" | grep -c '^units/') helper(s)"
+  else
+    echo "    skipped the connector comparison (needs $archive)"
+  fi
+else
+  rm -f checksums-linux.txt
+  echo "==> 9b. the Linux desktop archive: none in this release (no checksums-linux.txt)"
 fi
 
 # Unit driver helpers (VERIFY.md 3, "Unit driver helpers"): programs the

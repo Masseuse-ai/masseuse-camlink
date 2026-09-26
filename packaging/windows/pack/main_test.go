@@ -12,9 +12,10 @@ import (
 	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
 )
 
-// A stand-in for everything the release hands the packer: a connector, an
-// ffmpeg with its licence texts, one helper, and the repository's notices.
-func fixture(t *testing.T) (options, []byte) {
+// A stand-in for everything the release hands the packer: the window, a
+// connector, an ffmpeg with its licence texts, one helper, and the
+// repository's notices.
+func fixture(t *testing.T) (options, []byte, []byte) {
 	t.Helper()
 	root := t.TempDir()
 	write := func(rel string, data []byte) {
@@ -26,7 +27,10 @@ func fixture(t *testing.T) (options, []byte) {
 			t.Fatal(err)
 		}
 	}
-	connector := petest.Image(bytes.Repeat([]byte("C"), 1234))
+	shell := petest.Image(bytes.Repeat([]byte("W"), 4321))
+	write("dist/shell/Masseuse.exe", shell)
+	// The connector comes signed, as the release signs it before packing.
+	connector := petest.Sign(petest.Image(bytes.Repeat([]byte("C"), 1234)), 300, 0x2222)
 	write("dist/masseuse-camlink.exe", connector)
 	write("dist/ffmpeg-windows/ffmpeg.exe", petest.Image(bytes.Repeat([]byte("F"), 777)))
 	write("dist/ffmpeg-windows/licenses/ffmpeg-LICENSE.md", []byte("ffmpeg licence\n"))
@@ -38,16 +42,17 @@ func fixture(t *testing.T) (options, []byte) {
 	write("repo/packaging/ffmpeg/THIRD_PARTY.md", []byte("# ffmpeg\n"))
 	return options{
 		version:   "0.13.0",
+		shell:     filepath.Join(root, "dist", "shell", "Masseuse.exe"),
 		connector: filepath.Join(root, "dist", "masseuse-camlink.exe"),
 		ffmpegDir: filepath.Join(root, "dist", "ffmpeg-windows"),
 		unitsDir:  filepath.Join(root, "dist", "units"),
 		out:       filepath.Join(root, "dist", "Masseuse.exe"),
 		repo:      filepath.Join(root, "repo"),
-	}, connector
+	}, shell, connector
 }
 
-func TestBuildPacksEverythingAndProvesTheConnector(t *testing.T) {
-	o, connector := fixture(t)
+func TestBuildPacksEverythingAndProvesTheWindow(t *testing.T) {
+	o, shell, connector := fixture(t)
 	rep, err := build(o)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +61,7 @@ func TestBuildPacksEverythingAndProvesTheConnector(t *testing.T) {
 	for _, f := range rep.files {
 		names = append(names, f.Name)
 	}
-	want := "ffmpeg.exe units/camlink-unit-mk312.exe README.txt LICENSE NOTICE THIRD_PARTY.md licenses/ffmpeg-LICENSE.md licenses/opus-COPYING"
+	want := "masseuse-camlink.exe ffmpeg.exe units/camlink-unit-mk312.exe README.txt LICENSE NOTICE THIRD_PARTY.md licenses/ffmpeg-LICENSE.md licenses/opus-COPYING"
 	if got := strings.Join(names, " "); got != want {
 		t.Fatalf("files:\n got %s\nwant %s", got, want)
 	}
@@ -74,10 +79,11 @@ func TestBuildPacksEverythingAndProvesTheConnector(t *testing.T) {
 	if in.Manifest.Version != "0.13.0" || in.ID() != rep.id {
 		t.Fatalf("manifest %+v, id %s", in.Manifest, rep.id)
 	}
-	// The connector is inside byte for byte, and cmd/pestrip's way back
-	// (signature, then payload) gives it, signed or not.
-	if !bytes.HasPrefix(packed, connector) {
-		t.Fatal("the package does not start with the connector")
+	// The window is the file byte for byte, and cmd/pestrip's way back
+	// (signature, then payload) gives it, signed or not; the connector is
+	// in the payload as it came, signature and all.
+	if !bytes.HasPrefix(packed, shell) {
+		t.Fatal("the package does not start with the window")
 	}
 	signed := petest.Sign(packed, 300, 0x1111)
 	unsigned, err := pesig.Strip(signed)
@@ -88,8 +94,14 @@ func TestBuildPacksEverythingAndProvesTheConnector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(bare, connector) {
-		t.Fatal("stripping the signed package does not give the connector back")
+	if !bytes.Equal(bare, shell) {
+		t.Fatal("stripping the signed package does not give the window back")
+	}
+	inside, _ := in.Open(bytes.NewReader(packed), "masseuse-camlink.exe")
+	var c bytes.Buffer
+	_, _ = c.ReadFrom(inside)
+	if !bytes.Equal(c.Bytes(), connector) {
+		t.Fatal("the connector inside is not the one packed")
 	}
 	// Text files carry Windows line endings, once; binaries are untouched.
 	readme, _ := in.Open(bytes.NewReader(packed), "README.txt")
@@ -113,7 +125,7 @@ func TestBuildPacksEverythingAndProvesTheConnector(t *testing.T) {
 }
 
 func TestBuildRefusals(t *testing.T) {
-	o, _ := fixture(t)
+	o, _, _ := fixture(t)
 	bad := o
 	bad.version = "v0.13.0"
 	if _, err := build(bad); err == nil {
@@ -129,14 +141,22 @@ func TestBuildRefusals(t *testing.T) {
 	if _, err := build(bad); err == nil || !strings.Contains(err.Error(), "ffmpeg.exe") {
 		t.Fatalf("no ffmpeg: %v", err)
 	}
-	// A connector already signed is refused: the signature would end up
+	// A window already signed is refused: the signature would end up
 	// inside the payload's idea of the image.
-	signedConnector := filepath.Join(t.TempDir(), "signed.exe")
-	_ = os.WriteFile(signedConnector, petest.Sign(petest.Image([]byte("x")), 64, 1), 0o644)
+	signedShell := filepath.Join(t.TempDir(), "signed.exe")
+	_ = os.WriteFile(signedShell, petest.Sign(petest.Image([]byte("x")), 64, 1), 0o644)
 	bad = o
-	bad.connector = signedConnector
+	bad.shell = signedShell
 	if _, err := build(bad); err == nil || !strings.Contains(err.Error(), "signed") {
-		t.Fatalf("a signed connector: %v", err)
+		t.Fatalf("a signed window: %v", err)
+	}
+	// A connector that is no program at all is refused.
+	notPE := filepath.Join(t.TempDir(), "text.exe")
+	_ = os.WriteFile(notPE, []byte("not a program"), 0o644)
+	bad = o
+	bad.connector = notPE
+	if _, err := build(bad); err == nil {
+		t.Fatal("a connector that is not a PE image was taken")
 	}
 	// Without -u the package has no helpers and says nothing about it.
 	noUnits := o

@@ -39,6 +39,7 @@ case "$kind" in
     echo "==> $target"
     codesign --verify --deep --strict --verbose=2 "$target"
     signature "$target" runtime
+    signature "$target/Contents/MacOS/masseuse-camlink" runtime >/dev/null
     signature "$target/Contents/Helpers/ffmpeg" runtime >/dev/null
     verdict "$target" --type execute
     xcrun stapler validate "$target"

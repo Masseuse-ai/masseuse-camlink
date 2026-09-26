@@ -38,15 +38,14 @@
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
-	<!-- The app has no window of its own: opened, it hands the connector to
-	     a Terminal window and exits, so it must not appear in the Dock. -->
-	<key>LSUIElement</key>
-	<true/>
+	<!-- The window draws in the dark; the system's appearance is not followed. -->
+	<key>NSRequiresAquaSystemAppearance</key>
+	<false/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright 2026 FemLed. Apache License 2.0; bundled ffmpeg LGPL 2.1 (see THIRD_PARTY.md).</string>
-	<!-- Today the camera, microphone and Bluetooth are used by the connector
-	     running under Terminal, which asks in its own name; these are here
-	     for the day the app runs it itself. -->
+	<!-- The camera, the microphone and Bluetooth are used by the connector
+	     the window runs as its child (Contents/MacOS/masseuse-camlink), so
+	     the system asks in the application's name with these words. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Masseuse.ai sends this camera's picture to your masseuse during a session.</string>
 	<key>NSMicrophoneUsageDescription</key>

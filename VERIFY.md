@@ -191,18 +191,50 @@ first release it signs, before it is used. The signature says who published
 the binary and that Apple's notary service scanned it; what the binary does
 is established by the rebuild above, not by the signature.
 
+### The desktop window
+
+From the release that brought it, every download opens a window: the
+desktop application in `desktop/` (docs/DESKTOP.md), a Go program built
+with the platform's own window toolkit (Wails; WebKit on a Mac, WebView2
+on Windows, WebKitGTK on Linux) that runs the connector as a child and
+shows what it says. The window is built by the release workflow on each
+platform's runner (`macos-app`, `windows-app`, `linux-app` in
+`.github/workflows/release.yml`), from the same commit as everything else,
+and it is **not** rebuilt byte for byte: it links against the toolkit and
+the system's libraries with cgo, which no proxy rebuild reproduces. What
+covers it is the same as what covers ffmpeg: the checksum file for its
+platform (`checksums-darwin.txt`, `checksums-windows.txt`,
+`checksums-linux.txt`), signed keyless by the release workflow at the tag,
+the SLSA provenance for that file's subjects (`darwin.intoto.jsonl`,
+`windows.intoto.jsonl`, `linux.intoto.jsonl`), which names the workflow
+run and the commit, and on a Mac and on Windows the platform's signature
+(the Developer ID and the notarization; Authenticode). The window has no
+credentials and no network code of its own: it starts the connector,
+relays its lines to the page and its requests back, opens the Help pages
+in the browser, and starts the program again after an update
+(`desktop/connector.go`, `desktop/relaunch.go`).
+
+The connector inside each download is the published binary, byte for
+byte, and so the rebuild of section 3; the sections below say where it
+sits and how to compare it. Run from a terminal it is the same program as
+the archives' (`-console` on a Mac), and `--version` on the window and on
+the connector both answer the tag.
+
 ### The macOS app
 
 The Mac download, `Masseuse.ai-X.Y.Z.dmg`, holds `Masseuse.app`: the
-connector under the name people see (`CFBundleIdentifier` stays
+window under the name people see (`CFBundleIdentifier` stays
 `ai.masseuse.camlink`; v0.8.0 and v0.8.1 shipped it as `Masseuse.ai.app`
 with `Contents/MacOS/Masseuse.ai`, which the Finder showed extension and
 all; `packaging/macos/README.md` says why). Its executable,
-`Contents/MacOS/Masseuse`, is the
-two darwin binaries above joined into one universal binary with `lipo`, and
-beside it, in `Contents/Helpers/ffmpeg`, an ffmpeg built from pinned
+`Contents/MacOS/Masseuse`, is the desktop window (above), universal;
+beside it, `Contents/MacOS/masseuse-camlink` is the two darwin binaries
+above joined into one universal binary with `lipo`, the connector the
+window runs; and in `Contents/Helpers/ffmpeg` an ffmpeg built from pinned
 upstream sources so that the app needs no install step
-(`packaging/ffmpeg/THIRD_PARTY.md`). The release workflow's `macos-app` job
+(`packaging/ffmpeg/THIRD_PARTY.md`). Until the window, the connector was
+the bundle's executable itself, and the comparison below applied to
+`Contents/MacOS/Masseuse`. The release workflow's `macos-app` job
 (`.github/workflows/release.yml`) builds the bundle on a macOS runner from
 the archives it has just published, after verifying them against the signed
 `checksums.txt`, and signs, notarizes and staples the app and then the image
@@ -223,7 +255,7 @@ slsa-verifier verify-artifact Masseuse.ai-X.Y.Z.dmg \
   --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
 ```
 
-The app's executable is the published binaries, and so the rebuild: strip
+The app's connector is the published binaries, and so the rebuild: strip
 the universal binary and each architecture's hash is the hash of the
 stripped archive binary for that architecture (and of the rebuild).
 `machostrip` takes a universal binary apart by itself and prints one line
@@ -232,21 +264,22 @@ per architecture, named as the archives are:
 ```sh
 hdiutil attach -readonly -nobrowse Masseuse.ai-X.Y.Z.dmg
 go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 \
-  /Volumes/Masseuse.ai/Masseuse.app/Contents/MacOS/Masseuse
+  /Volumes/Masseuse.ai/Masseuse.app/Contents/MacOS/masseuse-camlink
 # two lines, "(arm64)" and "(amd64)": compare each with the stripped
 # archive binary or the rebuild of the previous section
 hdiutil detach /Volumes/Masseuse.ai
 ```
 
 The `macos-app` job makes this comparison itself before it uploads
-anything, so a release whose bundle were not the published binaries would
-not have a bundle. ffmpeg is the one component of the bundle that is not
-rebuilt byte for byte: `packaging/ffmpeg/build.sh` at the tag is its
+anything, so a release whose bundle did not carry the published binaries
+would not have a bundle. The window and ffmpeg are the two components of
+the bundle that are not rebuilt byte for byte: the window as "The desktop
+window" says; for ffmpeg, `packaging/ffmpeg/build.sh` at the tag is its
 recipe (pinned tarballs, hashes checked, LGPL configuration, the components
 listed in the script), the tarballs are attached to the release, and the
-provenance `darwin.intoto.jsonl` says which workflow run built the image it
-sits in. Anyone can rebuild ffmpeg with the script and put their own in the
-bundle's `Contents/Helpers/`; the connector runs the one it finds there.
+provenance `darwin.intoto.jsonl` says which workflow run built the image
+they sit in. Anyone can rebuild ffmpeg with the script and put their own in
+the bundle's `Contents/Helpers/`; the connector runs the one it finds there.
 
 On a Mac, the signatures and the notarization tickets are checked the way
 the system checks them at a double-click; the release fails if any of these
@@ -262,29 +295,34 @@ xcrun stapler validate Masseuse.ai-X.Y.Z.dmg
 ```
 
 Both `spctl` verdicts are `accepted` with `source=Notarized Developer ID`;
-`codesign -dvv` on the app and on `Contents/Helpers/ffmpeg` shows the same
-`TeamIdentifier=B8Z4RP3846` and `flags=0x10000(runtime)` as the bare
-binaries, signed by the certificate listed above. `scripts/verify-release.sh`
-runs all of this as step 8 when the release carries `checksums-darwin.txt`.
+`codesign -dvv` on the app, on `Contents/MacOS/masseuse-camlink`
+(identifier `ai.masseuse.camlink.connector`) and on
+`Contents/Helpers/ffmpeg` shows the same `TeamIdentifier=B8Z4RP3846` and
+`flags=0x10000(runtime)` as the bare binaries, signed by the certificate
+listed above. `scripts/verify-release.sh` runs all of this as step 8 when
+the release carries `checksums-darwin.txt`.
 
 ### The Windows package
 
-The Windows download, `Masseuse.exe`, is one file: the connector from
-the `windows_amd64` archive, byte for byte, then a *payload* appended
-after the executable's image (`internal/payload`), then the Authenticode
-signature. The payload holds `ffmpeg.exe`, the unit driver helpers
-(`units/camlink-unit-*.exe`), the licence texts and a `README.txt`, with a
-manifest naming each file's SHA-256; the program unpacks it under its
-state directory when it runs. `ffmpeg.exe` is built from the same pinned
+The Windows download, `Masseuse.exe`, is one file: the desktop window
+(above), then a *payload* appended after the executable's image
+(`internal/payload`), then the Authenticode signature. The payload holds
+the connector from the `windows_amd64` archive as `masseuse-camlink.exe`,
+`ffmpeg.exe`, the unit driver helpers (`units/camlink-unit-*.exe`), the
+licence texts and a `README.txt`, with a manifest naming each file's
+SHA-256; the window unpacks it under the state directory when it runs and
+starts the connector from there, which finds `ffmpeg.exe` and the helpers
+beside itself. Until the window, the file itself was the connector and the
+payload had no connector in it. `ffmpeg.exe` is built from the same pinned
 tarballs as the Mac's ffmpeg by `packaging/ffmpeg/build.sh -t windows`
 (cross-compiled with mingw-w64 on a Linux runner, LGPL configuration, the
 DirectShow input and the Media Foundation H.264 encoder in place of
 AVFoundation and VideoToolbox; `packaging/ffmpeg/THIRD_PARTY.md`). The
-release workflow's `windows-app` job assembles the package on a Windows
-runner after verifying the archive against the signed `checksums.txt`,
-verifying the helpers against their signed manifest and running the
-connector's own encoding chain through the `ffmpeg.exe` it packs
-(`packaging/windows/`). The zip beside it on the release,
+release workflow's `windows-app` job builds the window and assembles the
+package on a Windows runner after verifying the archive against the signed
+`checksums.txt`, verifying the helpers against their signed manifest and
+running the connector's own encoding chain through the `ffmpeg.exe` it
+packs (`packaging/windows/`). The zip beside it on the release,
 `Masseuse.ai-X.Y.Z-windows.zip`, holds the same file as `Masseuse.ai.exe`,
 the name releases before 0.13 gave it, for the installs of those releases,
 whose updater looks for that name inside the zip.
@@ -307,37 +345,40 @@ slsa-verifier verify-artifact Masseuse.exe \
   --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
 ```
 
-The signature and the payload are the two things the package carries that
-a rebuild does not: `cmd/pestrip` (`internal/pesig`) removes both, the way
+The signature and the payload are the two things the package carries
+beyond the window: `cmd/pestrip` (`internal/pesig`) removes both, the way
 `machostrip` removes a Mac signature, on any operating system. It cuts the
 attribute certificate table off the end of the file with the zero bytes
 that padded the file to its alignment, zeroes the security entry of the
 data directory and the header's checksum, then cuts the payload off where
-its footer says it begins. What remains is the archive's executable, and
-so the rebuild of "The connector" above with `GOOS=windows GOARCH=amd64`:
-
-```sh
-go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 Masseuse.exe
-unzip -p masseuse-camlink_X.Y.Z_windows_amd64.zip masseuse-camlink.exe | sha256sum
-```
-
-The two hashes match; `scripts/verify-release.sh` checks this as step 9 when
-the release carries `checksums-windows.txt`. A Go-built executable has the
-security entry and the checksum at zero to begin with, so `pestrip
--sha256` of an unsigned one is its plain hash; ffmpeg's linker writes a
-checksum, so ffmpeg is compared `pestrip -sha256` against `pestrip
--sha256`, never against a plain hash. The payload's files come out with
-their hashes listed:
+its footer says it begins, and writes the payload's files out with their
+hashes listed. The connector among them, its own signature stripped the
+same way, is the archive's executable, and so the rebuild of "The
+connector" above with `GOOS=windows GOARCH=amd64`:
 
 ```sh
 go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -payload payload Masseuse.exe
+go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 payload/masseuse-camlink.exe
+unzip -p masseuse-camlink_X.Y.Z_windows_amd64.zip masseuse-camlink.exe | sha256sum
+```
+
+The two hashes match; `scripts/verify-release.sh` checks this as step 9
+when the release carries `checksums-windows.txt` (for releases before the
+window it compares `pestrip -sha256 Masseuse.exe` itself with the archive's
+executable). A Go-built executable has the security entry and the checksum
+at zero to begin with, so `pestrip -sha256` of an unsigned one is its plain
+hash; ffmpeg's linker writes a checksum, so ffmpeg is compared `pestrip
+-sha256` against `pestrip -sha256`, never against a plain hash:
+
+```sh
 go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 payload/ffmpeg.exe   # against your own build of ffmpeg, stripped the same way
+go run github.com/FemLed/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 Masseuse.exe         # the window, signature and payload off: what the windows-app job built
 ```
 
 On Windows, the signatures themselves are checked with Windows' own tools:
 
 ```powershell
-Get-AuthenticodeSignature Masseuse.exe, payload\ffmpeg.exe, payload\units\*.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
+Get-AuthenticodeSignature Masseuse.exe, payload\masseuse-camlink.exe, payload\ffmpeg.exe, payload\units\*.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
 ```
 
 Every `Status` is `Valid`; the signer's subject names Principled Labs,
@@ -347,17 +388,49 @@ timestamped by `timestamp.acs.microsoft.com`; the certificates are
 short-lived by design and the timestamp is what keeps the signature valid.
 A release published without the signing credentials carries no signature,
 and the checks above are what stand in for it. The signature says who
-published the file; what the file does is established by the rebuild, not
-by the signature.
+published the file; what the connector does is established by the rebuild,
+not by the signature.
 
-The icon and the file description Explorer shows come from a resource
-object committed in the source (`cmd/masseuse-camlink/rsrc_windows_amd64.syso`,
-generated by `packaging/windows/make-syso.sh`), so they are part of the
-rebuild, not added afterwards. On Windows, `go run ./packaging/windows/verinfo
-Masseuse.exe` prints those strings as Explorer reads them (ProductName
-`Masseuse.ai`, CompanyName `FemLed, Inc.`, FileDescription `Masseuse.ai for
-your computer`); the resource carries no version number, the version being
-what `Masseuse.exe --version` and the build information say.
+The icon and the file description Explorer shows come from resource
+objects committed in the source (`cmd/masseuse-camlink/rsrc_windows_amd64.syso`
+for the connector, `desktop/rsrc_windows_amd64.syso` for the window,
+generated by `packaging/windows/make-syso.sh`), so the connector's are part
+of the rebuild, not added afterwards. On Windows, `go run
+./packaging/windows/verinfo Masseuse.exe` prints those strings as Explorer
+reads them (ProductName `Masseuse.ai`, CompanyName `FemLed, Inc.`,
+FileDescription `Masseuse.ai for your computer`); the resources carry no
+version number, the version being what `--version` and the build
+information say.
+
+### The Linux desktop archive
+
+The Linux desktop download, `Masseuse.ai-X.Y.Z-linux-amd64.tar.gz`, is the
+window (`Masseuse`), the connector from the `linux_amd64` archive
+(`masseuse-camlink`, byte for byte), the unit driver helpers (`units/`), a
+desktop entry with its installer, the icon and the notices, flat at the
+archive's root (`packaging/linux/`); the updater unpacks the same archive
+over the install. It has its own checksum file, signed and attested like
+the others:
+
+```sh
+cosign verify-blob \
+  --bundle checksums-linux.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums-linux.txt
+sha256sum -c checksums-linux.txt
+slsa-verifier verify-artifact Masseuse.ai-X.Y.Z-linux-amd64.tar.gz \
+  --provenance-path linux.intoto.jsonl \
+  --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
+tar -xzOf Masseuse.ai-X.Y.Z-linux-amd64.tar.gz masseuse-camlink | sha256sum
+tar -xzOf masseuse-camlink_X.Y.Z_linux_amd64.tar.gz masseuse-camlink | sha256sum
+```
+
+The two hashes match, and so the rebuild of "The connector" above;
+`scripts/verify-release.sh` checks this as step 9b when the release
+carries `checksums-linux.txt`. The window is covered as "The desktop
+window" says. The other Linux downloads are the terminal connector's
+archives, unchanged.
 
 ### Unit driver helpers
 
@@ -574,11 +647,12 @@ enclave image) before any file is moved:
    string on the page, and only a tag newer than the running program's own
    goes further; pre-releases never do.
 2. The checksum file the artifact is listed in (`checksums-darwin.txt` for
-   the disk image, `checksums-windows.txt` for the Windows package, both with
-   their own bundles verified the same way at that exact tag), and the
-   download's SHA-256 against it: step 2.
+   the disk image, `checksums-windows.txt` for the Windows package,
+   `checksums-linux.txt` for the Linux desktop archive, each with its own
+   bundle verified the same way at that exact tag), and the download's
+   SHA-256 against it: step 2.
 3. The SLSA provenance for the artifact (`multiple.intoto.jsonl`,
-   `darwin.intoto.jsonl` or `windows.intoto.jsonl`), a Sigstore bundle
+   `darwin.intoto.jsonl`, `windows.intoto.jsonl` or `linux.intoto.jsonl`), a Sigstore bundle
    signed by the SLSA generic generator for a build configured by this
    repository's release workflow at that tag, whose statement names the
    downloaded file and its digest among its subjects: step 3, as
@@ -588,13 +662,16 @@ enclave image) before any file is moved:
    `TeamIdentifier=B8Z4RP3846` and the hardened runtime flag, on the image's
    copy and again on the copy taken with `ditto`: "The macOS app" above.
 5. The new program's own `--version`, run from where it was staged, must
-   print the tag.
+   print the tag: the connector's inside the bundle and the desktop
+   archive, the window's for the Windows package (it is the file replaced).
 
 Only then is the running install renamed aside (a Mac bundle under the
 state directory's `previous/`, the files of the other layouts in
 `.previous/`) and the new one renamed in; the new program is started with
-the same arguments (on a Mac by the Terminal window's shell, never by an
-exec of the running program: README.md, "Updates"), and removes the
+the same arguments (by the shell that started the running one when there
+is one, the desktop window or the Terminal window's `.command` loop, on its
+exit code 75; on a Mac never by an exec of the running program: README.md,
+"Updates"), and removes the
 previous install after its first connection to the service. A refusal at any step leaves the running program
 as it is. The service at masseuse.ai plays no part: it names no version and
 serves no file. `masseuse-camlink update` runs the same steps from a

@@ -29,47 +29,66 @@ app's icon says **Masseuse**: macOS shows the extension of a bundle called
 (this repository, the command, the archives, the state directory) and the
 same binary.
 
+Every download is the same two programs: the **window**, which shows the
+pairing code, the cameras and microphone and the stimulation unit and
+walks you through them, and behind it the **connector**, `masseuse-camlink`,
+which does the work and can also run alone in a terminal (docs/DESKTOP.md).
+
 **Mac.** The download is a disk image, `Masseuse.ai-X.Y.Z.dmg`, for Apple
 silicon and Intel alike. Open it, drag `Masseuse` into `Applications`, and
 open it from there (a `Masseuse.ai` left there by 0.8.0 or 0.8.1 is the
-same program and can go). A Terminal window titled Masseuse.ai opens with the
-program running in it: it names the camera and microphone it will use and
-shows the pairing code. ffmpeg is included in the app, so there is nothing
-else to install. Leave the window open while you use it; closing it stops
-the program, and opening the app again while it runs only brings that
-window back. (The `darwin_*` archives still carry the bare binary for
-people who run it from Terminal; run from anywhere but Terminal, macOS
-refuses a bare binary however it is signed, which is what the app is for.)
+same program and can go). The window opens with the pairing code; ffmpeg
+and the unit drivers are included in the app, so there is nothing else to
+install. Leave the window open while you use it; closing it stops the
+program, and opening the app again while it runs only brings the window
+forward. The system asks for the camera, the microphone and Bluetooth in
+the application's name the first time each is used. The connector alone
+runs in Terminal as `Masseuse.app/Contents/MacOS/masseuse-camlink -console`
+(the `darwin_*` archives carry the same bare binary; run from anywhere but
+Terminal, macOS refuses a bare binary however it is signed, which is what
+the app is for).
 
 **Windows.** The download is one file, `Masseuse.exe` (the Mac's bundle is
 `Masseuse.app` for the same reason: the program is Masseuse.ai, the file
-shows as Masseuse): save it anywhere and open it. It carries ffmpeg and
-the unit drivers inside itself and
-unpacks them under `%LOCALAPPDATA%\masseuse-camlink` the first time it
-runs, so there is nothing to extract and nothing else to install (releases
-before 0.13 were a zip, and opening the program from inside Explorer's zip
-preview left ffmpeg and the drivers behind in the zip; the one file has
-nothing to lose that way). A console window titled Masseuse.ai opens with
-the program running in it, as on a Mac. The package is signed by
-Principled Labs, Inc. with Azure Artifact Signing; while a release is
-still new to Microsoft, Windows may ask before the first start whether to
-run it: *More info*, then *Run anyway* (a release published without the
-signing credentials is unsigned and always asks). Video is encoded by
-Windows' own Media Foundation H.264 encoder (the graphics chip's, or the
-software one every Windows edition carries except the N editions, which
-need Microsoft's *Media Feature Pack* from Settings, *Optional features*).
-The program serves the camera and microphone and a stimulation unit: over
-the computer's Bluetooth (Windows 10 version 1703 or newer), or over a USB
-serial cable through a unit driver helper (see "Your stimulation device").
-The `windows_*` archives carry the bare `masseuse-camlink.exe` for people
-who run it from a terminal with their own ffmpeg.
+shows as Masseuse): save it anywhere and open it. The window opens with
+the pairing code. The file carries the connector, ffmpeg and the unit
+drivers inside itself and unpacks them under
+`%LOCALAPPDATA%\masseuse-camlink` the first time it runs, so there is
+nothing to extract and nothing else to install (releases before 0.13 were
+a zip, and opening the program from inside Explorer's zip preview left
+ffmpeg and the drivers behind in the zip; the one file has nothing to lose
+that way). The package is signed by Principled Labs, Inc. with Azure
+Artifact Signing; while a release is still new to Microsoft, Windows may
+ask before the first start whether to run it: *More info*, then *Run
+anyway* (a release published without the signing credentials is unsigned
+and always asks). Video is encoded by Windows' own Media Foundation H.264
+encoder (the graphics chip's, or the software one every Windows edition
+carries except the N editions, which need Microsoft's *Media Feature Pack*
+from Settings, *Optional features*). The program serves the camera and
+microphone and a stimulation unit: over the computer's Bluetooth (Windows
+10 version 1703 or newer), or over a USB serial cable through a unit driver
+helper (see "Your stimulation device"). The `windows_*` archives carry the
+bare `masseuse-camlink.exe` for people who run it from a terminal with
+their own ffmpeg.
 
-**Linux, and the bare binaries.** Unpack the archive anywhere and run
-`masseuse-camlink` from a terminal. To send the computer's camera it needs
+**Linux.** The download is `Masseuse.ai-X.Y.Z-linux-amd64.tar.gz`: unpack
+it anywhere and run `./Masseuse` for the window (`sh install.sh` puts
+Masseuse.ai in the applications menu; the program stays where it was
+unpacked and updates itself there), or `./masseuse-camlink` alone in a
+terminal. The window needs GTK 4 and WebKitGTK 6.0 (`sudo apt install
+libgtk-4-1 libwebkitgtk-6.0-4`; `sudo dnf install gtk4 webkitgtk6.0`), and
+to send the computer's camera the connector needs
 [ffmpeg](https://ffmpeg.org), which does the capturing and encoding:
+`sudo apt install ffmpeg` (or your distribution's package). The unit
+drivers are in `units/` beside it.
+
+**The bare binaries.** The `masseuse-camlink_*` archives for every
+platform (Linux on arm64 and armv7 among them) carry the connector alone,
+for a terminal: unpack anywhere and run `masseuse-camlink`. It needs
+ffmpeg the same way:
 
 - Linux: `sudo apt install ffmpeg` (or your distribution's package)
-- Windows, with the bare binary rather than the zip: `winget install Gyan.FFmpeg`, then open a new terminal
+- Windows, with the bare binary rather than the one file: `winget install Gyan.FFmpeg`, then open a new terminal
 - macOS, with the bare binary rather than the app: `brew install ffmpeg`
 
 Without ffmpeg the program still runs and can send a home network camera.
@@ -86,18 +105,20 @@ With Go installed, `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-c
 builds the same code from the module proxy.
 
 Every release is reproducible and signed; see [VERIFY.md](VERIFY.md). The
-macOS app, its disk image and the bare macOS binaries are also signed with
-an Apple Developer ID and notarized: the app and the image open from the
-Finder without a Gatekeeper refusal, and the bare binaries run from
-Terminal. VERIFY.md, "The macOS binaries" and "The macOS app", show how to
-check the signer and how to compare them with a rebuild all the same
-(everything in the app but ffmpeg is byte for byte the published binaries;
-ffmpeg is built from pinned upstream sources by the same public workflow,
-`packaging/ffmpeg/THIRD_PARTY.md`). The Windows `Masseuse.exe` is the
-published `windows_amd64` binary, byte for byte, followed by an ffmpeg
-built the same way and the helpers as its payload, then signed;
-`cmd/pestrip` takes the signature and the payload off and gives the
-published binary's hash (VERIFY.md, "The Windows package").
+connector in every download is the published binary, byte for byte, and
+so a rebuild; the window and ffmpeg are the two parts that are not rebuilt
+byte for byte, each built by the same public workflow from the same commit
+and covered by the release's signed checksums and provenance (VERIFY.md,
+"The desktop window"). The macOS app, its disk image and the bare macOS
+binaries are also signed with an Apple Developer ID and notarized: the app
+and the image open from the Finder without a Gatekeeper refusal, and the
+bare binaries run from Terminal. VERIFY.md, "The macOS binaries" and "The
+macOS app", show how to check the signer and how to compare the connector
+inside with a rebuild. The Windows `Masseuse.exe` is the window followed by
+the published `windows_amd64` connector, an ffmpeg built the same way and
+the helpers as its payload, then signed; `cmd/pestrip` takes the signature
+and the payload off and gives the connector back for comparison
+(VERIFY.md, "The Windows package").
 
 ### Updates
 
@@ -112,19 +133,21 @@ on a Mac the application inside the disk image must carry the same
 Developer ID and pass Gatekeeper. Then the new version is put in place and
 started, but only when nothing is using the computer: no session has the
 camera, and the unit is neither attached to one nor armed. During a session
-the window says
+the program says (in the window's application menu, under *Check for
+updates*; on the console as a line)
 
 ```
 Update: Masseuse.ai v0.11.1 downloaded and verified; installing when the session ends.
 ```
 
-and afterwards `Updating to v0.11.1; back in a moment.` followed by the
-new version's own first lines, `Updated to v0.11.1.` among them, in the
-same window, with the same pairing. An update downloaded but not yet
-installed when the program was closed is installed the next time it opens.
-Nothing is asked; nothing is run, moved or removed before it has verified.
+and afterwards `Updating to v0.11.1; back in a moment.`; the window closes
+and the new version's opens, with the same pairing, `Updated to v0.11.1.`
+among its first words (in a terminal, the new version's first lines follow
+in the same window). An update downloaded but not yet installed when the
+program was closed is installed the next time it opens. Nothing is asked;
+nothing is run, moved or removed before it has verified.
 
-What goes wrong stays on the console in one line and changes nothing:
+What goes wrong is said in one line and changes nothing:
 no network means no check until the next one; a release that does not
 verify, or does not fit on the disk, is said so once and left alone for a
 day (`Update v0.11.1 did not verify; staying on v0.11.0.`); a copy of the
@@ -135,15 +158,18 @@ out of sight (a Mac bundle under the state directory, `previous/`; the
 files of the other layouts in `.previous/` inside the install) until the
 new one has connected to the service once, then removed; if a new version
 would not start, the previous one is put back and the window says so.
-The restart itself is the window's shell's on a Mac: the `.command` file
-the bundle writes runs the program in a loop, and an update ends the
-program with exit code 75 for it to run the new version at the same path;
-a Mac program started some other way opens the new bundle through
+The restart itself is the shell's that started the program, when there is
+one: the desktop window, or the `.command` file the Mac bundle writes for
+Terminal, which runs the program in a loop. Either sets
+`MASSEUSE_CAMLINK_RELAUNCH=1`, and an update ends the program with exit
+code 75 for the shell to run the new version at the same path, on every
+system. A Mac program started some other way opens the new bundle through
 LaunchServices (a window of its own) and ends. The program never replaces
 itself by `execve` there: Go's runtime, before an exec on Darwin, waits for
 every preemption signal it has sent to be received, and a program that runs
 Go code on CoreBluetooth's threads can wait forever (`update.ErrRelaunch`).
-Linux keeps the exec; Windows starts the new program and ends.
+Without a shell, Linux keeps the exec and Windows starts the new program
+and ends.
 
 `-no-update` (or `MASSEUSE_CAMLINK_UPDATE=off`) turns it off, for people
 who manage their installs; `masseuse-camlink update` installs the latest
@@ -152,6 +178,23 @@ working tree and the container image do not update themselves (the image
 is updated by its tag). Whatever the update did is what an install by
 hand would have done: the same release files, the same checks
 (VERIFY.md, "What the updater verifies").
+
+### The desktop window
+
+The connector has no window of its own; the desktop application
+(`desktop/`, docs/DESKTOP.md) is a separate program that runs it as a
+child with `-ipc` and shows what it says. In that mode everything the
+console would print goes out on standard output as one JSON object per
+line (`hello`, `code`, `source`, `link`, `camera`, `units`, `device`,
+`update`, `notice`, `blocked`, ...), the window's requests come in on
+standard input the same way (`list_devices`, `set_source`, `select_unit`,
+`update_now`, `quit`), and the log stays on standard error. Standard input
+ending is a shutdown, so a window that was killed never leaves a connector
+behind. `-install-root` names what the window was started from
+(`Masseuse.app`, `Masseuse.exe`, or the directory of the Linux desktop
+archive), which is what an update then replaces, the window included. The
+flags are the window's to pass; from a terminal, `masseuse-camlink` alone
+is the program as described above.
 
 ## Use your computer's camera
 

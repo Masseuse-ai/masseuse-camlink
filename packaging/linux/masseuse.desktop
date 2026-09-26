@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Masseuse.ai
+Comment=Masseuse.ai for your computer
+# install.sh writes the directory the archive was unpacked to in place of
+# @DIR@ and puts this file where the desktop looks for it.
+Exec=@DIR@/Masseuse
+Icon=@DIR@/masseuse.png
+Terminal=false
+Categories=Utility;
+StartupWMClass=Masseuse

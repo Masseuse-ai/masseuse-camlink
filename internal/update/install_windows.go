@@ -24,10 +24,10 @@ func (i *Installer) swapBundle(string, string) error {
 // sameVolume is for bundles, which this system has none of.
 func sameVolume(string, string) bool { return false }
 
-// Restart starts the new program at the install's path with args, sharing
+// restart starts the new program at the install's path with args, sharing
 // this process's console (the window stays while the child lives), and
 // returns; the caller exits. Windows has no exec.
-func (i *Installer) Restart(args []string, env []string) error {
+func (i *Installer) restart(args []string, env []string) error {
 	cmd := exec.Command(i.Install.Exe, args...)
 	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

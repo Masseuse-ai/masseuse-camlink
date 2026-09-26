@@ -95,8 +95,8 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(sink.Close)
 	h.mgr = &manager{
-		id: id, log: logger, out: h.out,
-		cam: &camControl{sink: sink, log: logger, out: h.out},
+		id: id, log: logger, ui: newConsole(h.out),
+		cam: &camControl{sink: sink, log: logger, ui: newConsole(h.out)},
 		dialer: &tunnel.Dialer{
 			Identity: id, Attester: &pinAttester{spki: spki}, RootCAs: roots, Logger: logger,
 		},

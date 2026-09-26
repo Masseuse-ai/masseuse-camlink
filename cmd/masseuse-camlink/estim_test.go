@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -127,7 +126,7 @@ func TestEstimLinkSendMapsRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	link := newEstimLink(t.TempDir(), log, func(string, ...any) {})
+	link := newEstimLink(t.TempDir(), log, newConsole(io.Discard))
 	link.client = &rendezvous.Client{Service: srv.URL, Identity: id, Version: "test", HTTP: srv.Client(), Logger: log}
 	msgs := []json.RawMessage{json.RawMessage(`{"type":"device"}`)}
 	for _, tc := range []struct {
@@ -167,7 +166,7 @@ func TestEstimLinkBluetoothUnit(t *testing.T) {
 	unit.PushLevel(9)
 	central := &fakeunit.Central{Units: []*fakeunit.Unit{unit}}
 	var out console
-	link := newEstimLink(t.TempDir(), log, func(format string, args ...any) { _, _ = out.Write([]byte(strings.TrimSpace(format))) })
+	link := newEstimLink(t.TempDir(), log, newConsole(&out))
 	finder := mastago.NewFinder("", log)
 	finder.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return central, nil }
 	finder.ScanWindow = 50 * time.Millisecond
@@ -324,7 +323,7 @@ func twoUnitLink(t *testing.T, svc *estimService, stateDir string) (*estimLink, 
 	b := fakeunit.New("unit-b", "MASTOGO G-34CD")
 	central := &fakeunit.Central{Units: []*fakeunit.Unit{a, b}}
 	var out console
-	link := newEstimLink(stateDir, log, func(format string, args ...any) { _, _ = fmt.Fprintf(&out, format, args...) })
+	link := newEstimLink(stateDir, log, newConsole(&out))
 	finder := mastago.NewFinder(link.selection, log)
 	finder.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return central, nil }
 	finder.ScanWindow = 50 * time.Millisecond
@@ -455,7 +454,7 @@ func TestEstimLinkTwoUnits(t *testing.T) {
 func TestEstimLinkRemembersTheUnit(t *testing.T) {
 	stateDir := t.TempDir()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	quiet := func(string, ...any) {}
+	quiet := newConsole(io.Discard)
 	t.Cleanup(func() { *estimUnit, *estimBLE = "", "" })
 
 	*estimUnit = "G-34CD"
@@ -521,7 +520,7 @@ func TestEstimLinkHeldUnitLine(t *testing.T) {
 	held := fakeunit.New("held-1", "MASTOGO G-12AB")
 	central := &fakeunit.Central{Held: []*fakeunit.Unit{held}}
 	var out console
-	link := newEstimLink(t.TempDir(), log, func(format string, args ...any) { _, _ = fmt.Fprintf(&out, format, args...) })
+	link := newEstimLink(t.TempDir(), log, newConsole(&out))
 	finder := mastago.NewFinder("", log)
 	finder.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return central, nil }
 	finder.ScanWindow = 50 * time.Millisecond

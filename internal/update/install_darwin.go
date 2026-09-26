@@ -136,19 +136,14 @@ func sameVolume(a, b string) bool {
 	return sa.Dev == sb.Dev
 }
 
-// Restart starts the new program at the install's path, never by an
-// execve of this process (ErrRelaunch says why). Started by the shell the
-// bundle wrote for Terminal (RelaunchEnv is set), it answers ErrRelaunch:
-// the caller ends with RelaunchExitCode and that shell starts the new
-// program in the same window, with the same arguments. Started some other
-// way, a bundle is opened through LaunchServices (`open`), which gives the
-// new program a Terminal window of its own, and the caller ends
-// (ErrStartedApart). A program that is no bundle, run from a shell by
-// hand, is replaced in place as on Linux; that is a developer's run.
-func (i *Installer) Restart(args []string, env []string) error {
-	if os.Getenv(RelaunchEnv) == "1" {
-		return ErrRelaunch
-	}
+// restart starts the new program at the install's path, never by an
+// execve of this process (ErrRelaunch says why); Restart has already
+// answered ErrRelaunch when a shell will start it (RelaunchEnv). A bundle
+// is opened through LaunchServices (`open`), which gives the new program a
+// Terminal window of its own, and the caller ends (ErrStartedApart). A
+// program that is no bundle, run from a shell by hand, is replaced in
+// place as on Linux; that is a developer's run.
+func (i *Installer) restart(args []string, env []string) error {
 	if i.Install.Layout == LayoutBundle {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

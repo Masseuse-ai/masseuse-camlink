@@ -38,7 +38,7 @@ type estimLink struct {
 	session  *estim.Session
 	client   *rendezvous.Client
 	log      *slog.Logger
-	out      func(format string, args ...any)
+	ui       reporter
 	stateDir string
 	// stdin is where the console picker reads a number from; nil for no
 	// picker (not a terminal).
@@ -56,8 +56,11 @@ type estimLink struct {
 
 // newEstimLink prepares the link over the device families the flags leave
 // on, restricted to the remembered unit when there is one.
-func newEstimLink(stateDir string, log *slog.Logger, out func(string, ...any)) *estimLink {
-	l := &estimLink{log: log, out: out, stateDir: stateDir}
+func newEstimLink(stateDir string, log *slog.Logger, ui reporter) *estimLink {
+	if ui == nil {
+		ui = stdConsole
+	}
+	l := &estimLink{log: log, ui: ui, stateDir: stateDir}
 	l.finders = deviceFinders(finderConfig{stateDir: stateDir, log: log})
 	selection, err := resolveEstimSelection(stateDir, *estimUnit)
 	if err != nil {
@@ -139,10 +142,8 @@ func (l *estimLink) unitsChanged(ctx context.Context, units []estim.Unit) {
 		l.pickerOn = true
 	}
 	l.mu.Unlock()
-	if len(units) > 1 {
-		desc := l.rt.Descriptor()
-		l.out("%s", unitListing(units, &desc, l.stdin != nil))
-	}
+	desc := l.rt.Descriptor()
+	l.ui.Units(units, &desc, l.stdin != nil)
 	if startPicker {
 		go l.readPicks(l.context(), l.stdin)
 	}
@@ -196,19 +197,25 @@ func (l *estimLink) pick(ctx context.Context, n int) {
 	units := append([]estim.Unit(nil), l.units...)
 	l.mu.Unlock()
 	if n < 1 || n > len(units) {
-		l.out("There is no unit %d in the list; the numbers are 1 to %d.\n", n, len(units))
+		l.ui.Notice(noticeWarn, fmt.Sprintf("There is no unit %d in the list; the numbers are 1 to %d.", n, len(units)))
 		return
 	}
 	u := units[n-1]
-	l.out("Switching to %s.\n", u.Label)
-	if err := l.selectUnit(ctx, u.ID); err != nil {
+	l.choose(ctx, u.ID, u.Label)
+}
+
+// choose serves the unit id (label is its name for the person) and says
+// how it went: the console picker's and the window's one path.
+func (l *estimLink) choose(ctx context.Context, id, label string) {
+	l.ui.Notice(noticeInfo, fmt.Sprintf("Switching to %s.", label))
+	if err := l.selectUnit(ctx, id); err != nil {
 		switch {
 		case errors.Is(err, estim.ErrArmed):
-			l.out("Not now: a session on your phone is using the unit. Stop the unit on the phone first.\n")
+			l.ui.Notice(noticeWarn, "Not now: a session on your phone is using the unit. Stop the unit on the phone first.")
 		case errors.Is(err, estim.ErrNoDevice):
-			l.out("%s did not answer; it is served as soon as it does.\n", u.Label)
+			l.ui.Notice(noticeWarn, fmt.Sprintf("%s did not answer; it is served as soon as it does.", label))
 		default:
-			l.out("Could not switch to %s: %v\n", u.Label, err)
+			l.ui.Notice(noticeError, fmt.Sprintf("Could not switch to %s: %v", label, err))
 		}
 	}
 }
@@ -229,18 +236,7 @@ func (l *estimLink) deviceChanged(ctx context.Context, d estim.Descriptor) {
 	l.mu.Lock()
 	l.lastDesc = &d
 	l.mu.Unlock()
-	switch {
-	case d.Connected:
-		l.out("Stimulation device connected: %s. It is held at zero until a session on your phone uses this computer.\n", d.Label)
-		if d.Held {
-			l.out("%s\n", heldByAnotherLine)
-		}
-	case l.context().Err() != nil:
-		// The connector is exiting and let go of the device on purpose;
-		// the service is told, the person is not.
-	default:
-		l.out("%s\n", disconnectedLine(d.Reason))
-	}
+	l.ui.Device(d, l.context().Err() != nil)
 	l.session.DeviceChanged(ctx, d)
 }
 

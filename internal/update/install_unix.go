@@ -30,9 +30,9 @@ func sameVolume(a, b string) bool {
 	return sa.Dev == sb.Dev
 }
 
-// Restart replaces this process with the new program at the install's
+// restart replaces this process with the new program at the install's
 // path, with args; the pid and the terminal are kept.
-func (i *Installer) Restart(args []string, env []string) error {
+func (i *Installer) restart(args []string, env []string) error {
 	argv := append([]string{i.Install.Exe}, args...)
 	if err := syscall.Exec(i.Install.Exe, argv, env); err != nil {
 		return fmt.Errorf("%w: %v", ErrRestart, err)

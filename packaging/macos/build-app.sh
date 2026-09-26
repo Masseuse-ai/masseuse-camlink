@@ -1,14 +1,19 @@
 #!/bin/sh
-# Assemble Masseuse.app: the connector (universal or thin) as the
-# bundle's executable, ffmpeg as a helper, the icon, the notices. Nothing is
-# signed here (sign-notarize.sh does that); the script needs sh and Xcode 26's
-# actool (for the icon, below), so ci.yml builds the bundle unsigned on every
-# pull request.
+# Assemble Masseuse.app: the desktop window (universal or thin) as the
+# bundle's executable, the connector beside it, ffmpeg as a helper, the
+# icon, the notices. Nothing is signed here (sign-notarize.sh does that);
+# the script needs sh and Xcode 26's actool (for the icon, below), so
+# ci.yml builds the bundle unsigned on every pull request.
 #
-# usage: sh packaging/macos/build-app.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR
+# usage: sh packaging/macos/build-app.sh -v VERSION -s SHELL -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR
 #   VERSION     the release version without the v (CFBundleShortVersionString)
-#   CONNECTOR   the masseuse-camlink binary to bundle (lipo -create'd for a
-#               universal app); it becomes Contents/MacOS/Masseuse
+#   SHELL       the desktop window (desktop/, built by `wails3 task build`,
+#               lipo -create'd for a universal app); it becomes
+#               Contents/MacOS/Masseuse, the bundle's executable
+#   CONNECTOR   the masseuse-camlink binary (lipo -create'd likewise); it
+#               becomes Contents/MacOS/masseuse-camlink, which the window
+#               runs (docs/DESKTOP.md) and which `-console` runs in a
+#               terminal
 #   FFMPEG_DIR  packaging/ffmpeg/build.sh's output directory: ffmpeg and
 #               licenses/ (their absence is an error: the bundle promises
 #               a camera without an install step)
@@ -21,24 +26,26 @@ set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-version="" connector="" ffmpegdir="" unitsdir="" outdir=""
+version="" shell="" connector="" ffmpegdir="" unitsdir="" outdir=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -v) version="$2"; shift 2 ;;
+    -s) shell="$2"; shift 2 ;;
     -b) connector="$2"; shift 2 ;;
     -f) ffmpegdir="$2"; shift 2 ;;
     -u) unitsdir="$2"; shift 2 ;;
     -o) outdir="$2"; shift 2 ;;
-    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[ -n "$version" ] && [ -n "$connector" ] && [ -n "$ffmpegdir" ] && [ -n "$outdir" ] ||
-  { echo "usage: $0 -v VERSION -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR" >&2; exit 2; }
+[ -n "$version" ] && [ -n "$shell" ] && [ -n "$connector" ] && [ -n "$ffmpegdir" ] && [ -n "$outdir" ] ||
+  { echo "usage: $0 -v VERSION -s SHELL -b CONNECTOR -f FFMPEG_DIR [-u UNITS_DIR] -o OUTDIR" >&2; exit 2; }
 case "$version" in
   [0-9]*.[0-9]*.[0-9]*) ;;
   *) echo "version $version is not X.Y.Z" >&2; exit 2 ;;
 esac
+[ -f "$shell" ] || { echo "no desktop window at $shell (cd desktop && wails3 task build)" >&2; exit 2; }
 [ -f "$connector" ] || { echo "no connector at $connector" >&2; exit 2; }
 [ -f "$ffmpegdir/ffmpeg" ] || { echo "no ffmpeg at $ffmpegdir/ffmpeg (packaging/ffmpeg/build.sh)" >&2; exit 2; }
 [ -d "$ffmpegdir/licenses" ] || { echo "no $ffmpegdir/licenses (packaging/ffmpeg/build.sh)" >&2; exit 2; }
@@ -59,9 +66,10 @@ app="$outdir/$name.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources/licenses"
 
-cp "$connector" "$app/Contents/MacOS/$name"
+cp "$shell" "$app/Contents/MacOS/$name"
+cp "$connector" "$app/Contents/MacOS/masseuse-camlink"
 cp "$ffmpegdir/ffmpeg" "$app/Contents/Helpers/ffmpeg"
-chmod 755 "$app/Contents/MacOS/$name" "$app/Contents/Helpers/ffmpeg"
+chmod 755 "$app/Contents/MacOS/$name" "$app/Contents/MacOS/masseuse-camlink" "$app/Contents/Helpers/ffmpeg"
 # The unit driver helpers, where the connector looks for them
 # (cmd/masseuse-camlink/helpers.go: Contents/Helpers/units in a bundle).
 # Each must be universal like the app, or one architecture would run the

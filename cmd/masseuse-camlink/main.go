@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -119,8 +118,10 @@ func main() {
 
 	// Opened from the macOS application bundle there is no terminal to
 	// print the code to: hand the program to one (desktop.go) and end. The
-	// subcommands above print to whatever they were given and never do.
-	if *appMode || (!*console && launchedFromBundle()) {
+	// subcommands above print to whatever they were given and never do,
+	// nor does the desktop window's connector (-ipc), whose standard
+	// streams are the window's.
+	if *appMode || (!*console && !*ipcMode && launchedFromBundle()) {
 		if err := handToTerminal(*stateDir); err != nil {
 			reportHandoffFailure(err)
 			exit(1)
@@ -128,32 +129,37 @@ func main() {
 		return
 	}
 
+	// What the program says goes to the console, or, for the desktop
+	// window, out as JSON events (report.go, ipc.go).
+	var ui reporter = stdConsole
+	var ipc *ipcReporter
+	if *ipcMode {
+		ipc = newIPCReporter(os.Stdout, logger)
+		ui = ipc
+	}
 	release, err := lockInstance(*stateDir)
 	if err != nil {
 		if errors.Is(err, errAlreadyRunning) {
-			fmt.Fprintln(os.Stderr, appName+" is already running, in another window. Close that one first, or give this one its own -state-dir.")
+			ui.Blocked(blockedAlreadyRunning, err.Error())
 		} else {
-			fmt.Fprintln(os.Stderr, err)
+			ui.Blocked(blockedStateDir, err.Error())
 		}
 		exit(1)
 	}
 	defer release()
 	id, err := identity.Load(*stateDir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "identity:", err)
+		ui.Blocked(blockedStateDir, "identity: "+err.Error())
 		exit(1)
 	}
-	// The window's first line: the name on the download, and the program's
-	// own name and version for anyone comparing with a release.
-	fmt.Printf("%s for your computer  (masseuse-camlink %s)\n", appName, buildinfo.Version())
-	fmt.Printf("Identity %s… (state in %s)\n", id.PublicKeyString()[:8], *stateDir)
+	ui.Banner(buildinfo.Version(), id.PublicKeyString()[:8], *stateDir)
 	// The program keeps itself current (update.go). What the last update
 	// did is said now; an update downloaded and verified on an earlier run
 	// is put in place before anything else starts, the person having just
 	// opened the program.
-	upd, updatesOff := newUpdater(*stateDir, logger, func(format string, args ...any) { fmt.Printf(format, args...) })
+	upd, updatesOff := newUpdater(*stateDir, logger, ui)
 	if updatesOff != "" {
-		fmt.Println(updatesOff)
+		ui.Update(updateOff, "", updatesOff)
 	}
 	if upd != nil {
 		upd.announce()
@@ -175,7 +181,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		exit(2)
 	}
-	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger, !sf.bodyAny())
+	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger, ui, !sf.bodyAny())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, capture.ErrNoDevice) {
@@ -183,89 +189,66 @@ func main() {
 		}
 		exit(2)
 	}
-	off.describe()
 	// The front-facing camera, when one is configured: served as the
 	// person's face in place of the phone's camera, on the enclave's asking.
-	faceOff, err := buildFaceOffer(ctx, cfg, sink.Face(), sink.Face().Stats, logger, !sf.faceAny())
+	faceOff, err := buildFaceOffer(ctx, cfg, sink.Face(), sink.Face().Stats, logger, ui, !sf.faceAny())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, capture.ErrNoDevice) {
 			fmt.Fprintln(os.Stderr, "Run `masseuse-camlink devices` to see what is connected.")
 		}
 		exit(2)
-	}
-	if faceOff != nil {
-		faceOff.describeFace()
 	}
 	// The phone's picture on this computer, when asked for: a loopback
 	// RTSP address programs here may open (internal/share), fed by the
 	// enclave through the tunnel (internal/serve, the phone path).
-	var shared *share.Server
-	if cfg.SharePhone {
-		if cfg.ShareSecret == "" {
-			secret, err := share.NewSecret()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "phone picture:", err)
-				exit(1)
-			}
-			cfg.ShareSecret = secret
-		}
-		shared, err = share.New(share.Config{
-			Port: cfg.SharePort, Secret: cfg.ShareSecret, Logger: logger,
-			OnChange: func(arriving bool) {
-				if arriving {
-					fmt.Printf("Your phone's picture is arriving. Programs on this computer can open it at %s\n", shared.URL())
-				} else {
-					fmt.Println("Your phone's picture stopped.")
-				}
-			},
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "phone picture:", err)
-			exit(1)
-		}
+	shared, err := startShare(&cfg, logger, ui)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "phone picture:", err)
+		exit(1)
+	}
+	if shared != nil {
 		defer shared.Close()
 		sink.SetReceiver(shared)
-		fmt.Printf("Your phone's picture: sessions are asked to send it here, and programs on this computer can open it at\n  %s\n  (OBS: a Media Source with Local File unticked, that address as the Input, Network Buffering 0 MB.)\n", shared.URL())
 	}
-	saveCfg := off.save
-	if faceOff != nil {
-		saveCfg.FaceCamera, saveCfg.FaceVideoSize, saveCfg.FaceFPS, saveCfg.FaceBitrate = faceOff.save.FaceCamera, cfg.FaceVideoSize, cfg.FaceFPS, cfg.FaceBitrate
-	}
-	saveCfg.SharePhone, saveCfg.SharePort, saveCfg.ShareSecret = cfg.SharePhone, cfg.SharePort, cfg.ShareSecret
+	saveCfg := rememberedConfig(cfg, off, faceOff)
 	if sf.any() || (cfg.SharePhone && cfg.ShareSecret != "") {
 		if err := saveSourceConfig(*stateDir, saveCfg); err != nil {
 			logger.Warn("could not remember the camera choice", "err", err)
 		}
 	}
-	cam := &camControl{sink: sink, offer: off, face: faceOff, log: logger}
+	cam := &camControl{sink: sink, offer: off, face: faceOff, log: logger, ui: ui}
 	sink.Face().SetOnDemand(cam.startFace)
+	ui.Source(sourceReportOf(off, faceOff, shared))
 	// Unit driver helpers in the units directory join the device families
 	// (helpers.go); the header says which, or why none.
-	fmt.Println(registerHelpers(ctx, *stateDir, logger))
-	if n := len(id.PairedHashes()); n > 0 {
-		fmt.Printf("Paired with %d phone(s). Sessions that use this camera connect automatically.\n", n)
-	}
+	ui.Drivers(registerHelpers(ctx, *stateDir, logger))
+	ui.PairedCount(len(id.PairedHashes()))
 	// The computer stays awake for as long as this runs (awake.go): a
 	// laptop left at the foot of the bed would otherwise idle-sleep while
 	// the enclave boots, taking the camera, the microphone and the unit's
 	// Bluetooth link with it.
-	stopAwake := keepAwake(*allowSleep, logger)
+	stopAwake := keepAwake(*allowSleep, logger, ui)
 	defer stopAwake()
 
 	httpClient := &http.Client{}
 	mgr := &manager{
-		id:      id,
-		log:     logger,
-		cam:     cam,
-		sharing: shared != nil,
-		estim:   newEstimLink(*stateDir, logger, func(format string, args ...any) { fmt.Printf(format, args...) }),
+		id:       id,
+		log:      logger,
+		ui:       ui,
+		cam:      cam,
+		stateDir: *stateDir,
+		sink:     sink,
+		cfg:      saveCfg,
+		shared:   shared,
+		estim:    newEstimLink(*stateDir, logger, ui),
 		dialer: &tunnel.Dialer{
 			Identity: id,
 			Attester: &policyAttester{
 				service: *service,
 				client:  httpClient,
 				log:     logger,
+				ui:      ui,
 				floors:  attest.Production,
 				provenance: &provenance.Verifier{
 					Registry: &oci.Client{HTTP: &http.Client{Timeout: 30 * time.Second}},
@@ -279,6 +262,7 @@ func main() {
 		tunnels: map[string]*active{},
 	}
 	client := &rendezvous.Client{Service: *service, Identity: id, Version: buildinfo.Version(), HTTP: httpClient, Logger: logger}
+	mgr.client = client
 	mgr.estim.client = client
 	// The device link runs beside the rendezvous client and outlives its
 	// context slightly: on the way out it releases the device and tells the
@@ -301,6 +285,18 @@ func main() {
 		mgr.onFirstOnline = upd.proven
 		go upd.run(ctx)
 	}
+	// A camera change asked for while a session had the camera is applied
+	// once the camera goes off (applySource).
+	cam.onOff = func() { go mgr.applyPending() }
+	// Startup is over: the window gets its hello, and from here on its
+	// commands are read (ipc.go); the console reads nothing but the unit
+	// picker's numbers (estim.go).
+	ui.Ready()
+	if ipc != nil {
+		cmds := &ipcCommands{ui: ipc, mgr: mgr, upd: upd, ffmpeg: sf.ffmpeg, stop: stop, log: logger}
+		go cmds.run(ctx, os.Stdin)
+		go cmds.watchDevice(ctx)
+	}
 	err = client.Run(ctx, mgr)
 	mgr.closeAll("shutting down")
 	cam.off(false)
@@ -310,7 +306,7 @@ func main() {
 		logger.Error("rendezvous stopped", "err", err)
 		exit(1)
 	}
-	fmt.Println("\nStopped.")
+	ui.Stopped()
 }
 
 func usage() {
@@ -329,11 +325,12 @@ on your network, to the enclave of a masseuse.ai session.
                                       hand your phone's picture to OBS on this computer, and show OBS's
                                       virtual camera as your face; -face-camera none puts your phone back
 
-The downloads at masseuse.ai/app are this same program under the name
-Masseuse.ai: on a Mac the application bundle (Masseuse.app) runs it in a
-Terminal window when opened (-console and -app choose either way by hand); on
-Windows, Masseuse.exe opens its own console window, with ffmpeg and the unit
-drivers carried inside it and unpacked under the state directory.
+The downloads at masseuse.ai/app are a window around this same program, under
+the name Masseuse.ai: the window runs it with -ipc and shows what it says
+(docs/DESKTOP.md). On a Mac the program is Masseuse.app/Contents/MacOS/
+masseuse-camlink (-console runs it in a terminal; -app opens Terminal for
+it); on Windows it is unpacked from Masseuse.exe under the state directory
+with ffmpeg and the unit drivers; on Linux it lies beside the window.
 
 Flags:
 `)
@@ -348,6 +345,8 @@ type policyAttester struct {
 	service string
 	client  *http.Client
 	log     *slog.Logger
+	// ui is told of each enclave's provenance; nil is the console.
+	ui reporter
 	// floors is what the served policy may only tighten (internal/attest,
 	// Floors); the served policy is refused when it contradicts them.
 	floors attest.Floors
@@ -433,10 +432,12 @@ func (a *policyAttester) checkProvenance(ctx context.Context, res *attest.Result
 		"signed_by", p.SignatureIdentity, "signature_log_index", p.SignatureLogIndex,
 		"builder", p.Builder, "provenance_log_index", p.ProvenanceLogIndex,
 		"cached", p.Cached)
-	if !p.Cached {
-		fmt.Printf("Enclave image %s… is %s %s (commit %.7s): signature and build provenance verified in the public registry and the Sigstore log.\n",
-			strings.TrimPrefix(p.Digest, "sha256:")[:12], p.SourceURI, p.Release, p.Commit)
+	ui := a.ui
+	if ui == nil {
+		ui = stdConsole
 	}
+	ui.Enclave(enclaveProof{Image: p.Digest, Release: p.Release, Commit: p.Commit, Source: p.SourceURI,
+		Registry: res.Source.Repo, SignedBy: p.SignatureIdentity, Cached: p.Cached})
 	return nil
 }
 
@@ -465,13 +466,21 @@ type manager struct {
 	cam    *camControl
 	// estim serves the stimulation device, if one is plugged in.
 	estim *estimLink
-	// out is the console; nil means standard output.
-	out io.Writer
+	// ui is where what happens is said; nil is the console.
+	ui reporter
 
-	// sharing says the person asked for the phone's picture on this
-	// computer (-share-phone): reported to the service, so the phone has
-	// the enclave send it.
-	sharing bool
+	// The sources (apply.go): the configuration in force and the phone's
+	// picture server, when the person asked for it (-share-phone), which
+	// is reported to the service so the phone has the enclave send it.
+	// Guarded by srcMu; a set_source from the window changes them.
+	stateDir string
+	sink     *serve.Server
+	client   *rendezvous.Client
+	srcMu    sync.Mutex
+	cfg      sourceConfig
+	shared   *share.Server
+	// pending is a set_source that waits for the camera to be let go.
+	pending *pendingSource
 
 	mu       sync.Mutex
 	tunnels  map[string]*active // by session id
@@ -500,25 +509,34 @@ func (m *manager) idle() bool {
 	return true
 }
 
-func (m *manager) printf(format string, args ...any) {
-	w := m.out
-	if w == nil {
-		w = os.Stdout
+func (m *manager) reporter() reporter {
+	if m.ui == nil {
+		return stdConsole
 	}
-	fmt.Fprintf(w, format, args...)
+	return m.ui
 }
 
 // CurrentSource tells the service which camera this connector offers, and
 // what else: whether it asks for the phone's picture, and the front-facing
 // camera it serves, when one is configured.
 func (m *manager) CurrentSource() (rendezvous.Source, bool) {
-	if m.cam == nil || m.cam.offer == nil {
+	m.srcMu.Lock()
+	defer m.srcMu.Unlock()
+	return m.currentSourceLocked()
+}
+
+func (m *manager) currentSourceLocked() (rendezvous.Source, bool) {
+	if m.cam == nil {
 		return rendezvous.Source{}, false
 	}
-	src := m.cam.offer.source()
-	src.Share = rendezvous.ShareOffer{Wanted: m.sharing}
-	if f := m.cam.face; f != nil {
-		src.Face = &rendezvous.FaceOffer{Kind: f.kind, Label: f.label, Ready: f.ready}
+	body, face := m.cam.current()
+	if body == nil {
+		return rendezvous.Source{}, false
+	}
+	src := body.source()
+	src.Share = rendezvous.ShareOffer{Wanted: m.shared != nil}
+	if face != nil {
+		src.Face = &rendezvous.FaceOffer{Kind: face.kind, Label: face.label, Ready: face.ready}
 	}
 	return src, true
 }
@@ -571,11 +589,7 @@ func (m *manager) OnCode(code string, expiresAt time.Time) {
 	if same {
 		return
 	}
-	m.printf("\nPairing code: %s\n", code)
-	m.printf("Type it into the masseuse.ai app on your phone when it asks for the code from your computer; the dash is added for you.\n")
-	if !expiresAt.IsZero() && expiresAt.Year() > 2000 {
-		m.printf("(valid until %s; a new one appears here when it expires)\n\n", expiresAt.Local().Format("15:04"))
-	}
+	m.reporter().Code(code, expiresAt)
 }
 
 func (m *manager) OnPaired(hash string) {
@@ -583,10 +597,11 @@ func (m *manager) OnPaired(hash string) {
 		m.log.Error("could not save pairing", "err", err)
 		return
 	}
-	m.printf("Paired with a phone. Sessions that use this camera connect automatically.\n")
+	m.reporter().Paired(len(m.id.PairedHashes()))
 }
 
 func (m *manager) OnOnline(online bool) {
+	m.reporter().Online(online)
 	if online {
 		m.log.Info("connected to the service")
 		if m.estim != nil {
@@ -656,7 +671,7 @@ func (m *manager) OnClear(sessionID, reason string) {
 		cur.ended.Store(true)
 		cur.cancel()
 		m.log.Info("session ended", "session", sessionID, "reason", reason)
-		m.printf("Camera link closed.\n")
+		m.reporter().Link(linkClosed, "")
 	}
 	if m.estim != nil {
 		m.estim.sessionCleared(sessionID)
@@ -706,7 +721,7 @@ func (m *manager) run(ctx context.Context, a *active) {
 			var se *tunnel.StatusError
 			if errors.As(err, &se) && se.Refused() {
 				m.log.Warn("the enclave is not expecting this connector; waiting for the service", "status", se.Status, "session", d.SessionID)
-				m.printf("Camera link on hold: the enclave is not expecting this connector; waiting for the service.\n")
+				m.reporter().Link(linkOnHold, "")
 				return
 			}
 			m.log.Warn("could not reach the enclave", "err", err, "retryIn", backoff.String())
@@ -719,7 +734,7 @@ func (m *manager) run(ctx context.Context, a *active) {
 			continue
 		}
 		backoff = time.Second
-		m.printf("Camera link active: connected to the verified enclave.\n")
+		m.reporter().Link(linkActive, "")
 		m.cam.attach(t.Backlog)
 		err = t.Serve(ctx)
 		m.cam.attach(nil)
@@ -730,7 +745,7 @@ func (m *manager) run(ctx context.Context, a *active) {
 		var re *mux.ResetError
 		if errors.As(err, &re) {
 			m.log.Info("the enclave closed the camera link; waiting for the service", "reason", re.Reason, "session", d.SessionID)
-			m.printf("The enclave closed the camera link (%s); waiting for the service.\n", re.Reason)
+			m.reporter().Link(linkReset, re.Reason)
 			return
 		}
 		m.log.Warn("tunnel ended; reconnecting", "err", err)

@@ -2,18 +2,21 @@ Masseuse.ai for your computer (Windows)
 =======================================
 
 Masseuse.exe is the whole program, one file. Nothing is installed:
-open it from wherever you saved it, and a window opens with the camera
-and microphone it will use and a code of eight letters and numbers to
-type into the masseuse.ai app on your phone. Leave the window open while
-you use it; closing it stops the program.
+open it from wherever you saved it, and a window opens with a code of
+eight letters and numbers to type into the masseuse.ai app on your phone,
+then the camera and microphone it will use and the stimulation unit.
+Leave the window open while you use it; closing it stops the program.
 
-This folder is where the program unpacked the files it carries inside
-itself, the first time it ran. The program checks them against itself
-every time it starts and writes them again if anything is missing or
-changed; a new version unpacks its own set and removes this one. You
-can delete this folder; it comes back.
+This folder is where the window unpacked the files it carries inside
+itself, the first time it ran. It checks them every time it starts and
+writes them again if anything is missing or changed; a new version
+unpacks its own set and removes this one. You can delete this folder; it
+comes back.
 
-  ffmpeg.exe        captures and encodes the camera for the program; it
+  masseuse-camlink.exe  the connector: the program behind the window that
+                    sends the camera and drives the unit; the window runs
+                    it, and it runs alone from a terminal too
+  ffmpeg.exe        captures and encodes the camera for the connector; it
                     is never started on its own
   units\            the unit driver helpers: programs the connector runs
                     to serve stimulation units whose drivers are not in
@@ -40,13 +43,14 @@ within reach: a TENS unit over this computer's Bluetooth (Windows 10
 version 1703 or newer; Bluetooth on in Settings > Bluetooth & devices),
 or an ErosTek MK-312BT plugged in over its USB serial cable. Nothing to
 set up: the unit switched on, and the window says when it has found it.
-To check the unit without a session, from a terminal:
-Masseuse.exe estim probe
+To check the unit without a session, from a terminal in this folder:
+masseuse-camlink.exe estim probe
 
 The program remembers its pairing and camera choice in
 %LOCALAPPDATA%\masseuse-camlink, where this folder is too. To uninstall,
 delete Masseuse.exe and that folder.
 
-Masseuse.exe is the same program engineers know as masseuse-camlink,
-under the name you see everywhere else, Masseuse.ai; run from a terminal
-it takes the same commands and flags (Masseuse.exe -h).
+The connector is the program engineers know as masseuse-camlink, under
+the name you see everywhere else, Masseuse.ai; run from a terminal it
+takes the same commands and flags (masseuse-camlink.exe -h). Its log is
+desktop.log in %LOCALAPPDATA%\masseuse-camlink.

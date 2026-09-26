@@ -121,7 +121,8 @@ func testUpdater(t *testing.T, srv *httptest.Server, in update.Install, out *str
 		}},
 		state:          update.LoadState(stateDir),
 		log:            log,
-		out:            func(format string, args ...any) { fmt.Fprintf(out, format, args...) },
+		ui:             newConsole(out),
+		wake:           make(chan struct{}, 1),
 		idle:           func() bool { return true },
 		handoff:        func() {},
 		args:           []string{"-console", "-state-dir", stateDir},
@@ -385,6 +386,83 @@ func TestUpdaterRestartsEvenWhenTheHandoffHangs(t *testing.T) {
 	}
 }
 
+// eventsOf is a reporter that keeps the update events, for the window's
+// side of the updater.
+type eventsOf struct {
+	consoleReporter
+	mu     sync.Mutex
+	states []updateState
+	texts  []string
+}
+
+func (e *eventsOf) Update(state updateState, tag, text string) {
+	e.mu.Lock()
+	e.states = append(e.states, state)
+	e.texts = append(e.texts, text)
+	e.mu.Unlock()
+	e.consoleReporter.Update(state, tag, text)
+}
+
+func (e *eventsOf) UpdateQuiet(state updateState, tag, text string) {
+	e.mu.Lock()
+	e.states = append(e.states, state)
+	e.texts = append(e.texts, text)
+	e.mu.Unlock()
+}
+
+func (e *eventsOf) has(state updateState) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, s := range e.states {
+		if s == state {
+			return true
+		}
+	}
+	return false
+}
+
+func TestUpdaterChecksNowWhenAsked(t *testing.T) {
+	in, _ := fakeInstall(t)
+	var hits atomic.Int32
+	srv := fakeRelease(t, in, tarOf(t, map[string]string{"x": "y"}), true, &hits)
+	var out strings.Builder
+	u := testUpdater(t, srv, in, &out)
+	u.client.Current = "v0.11.0" // the latest already
+	u.firstAfter = time.Hour     // the loop would not look for an hour
+	ev := &eventsOf{consoleReporter: consoleReporter{w: &out, err: io.Discard}}
+	u.ui = ev
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go u.run(ctx)
+	u.checkNow()
+	waitUntil(t, "the check asked for", func() bool { return ev.has(updateCurrent) })
+	if !ev.has(updateChecking) {
+		t.Fatalf("no checking state: %v", ev.states)
+	}
+	// The window is told, the console is not: up to date is silence there.
+	if out.Len() != 0 {
+		t.Fatalf("the console said: %q", out.String())
+	}
+	// Asked while offline, the window hears that the check failed.
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }))
+	t.Cleanup(down.Close)
+	u2 := testUpdater(t, down, in, &out)
+	ev2 := &eventsOf{consoleReporter: consoleReporter{w: &out, err: io.Discard}}
+	u2.ui = ev2
+	u2.checkNow()
+	u2.once(ctx)
+	if !ev2.has(updateFailed) || out.Len() != 0 {
+		t.Fatalf("offline, asked: states %v, console %q", ev2.states, out.String())
+	}
+	// Not asked, the same failure is a quiet "running vX".
+	ev3 := &eventsOf{consoleReporter: consoleReporter{w: &out, err: io.Discard}}
+	u2.ui = ev3
+	u2.once(ctx)
+	if ev3.has(updateFailed) || !ev3.has(updateCurrent) {
+		t.Fatalf("offline, unasked: states %v", ev3.states)
+	}
+}
+
 func TestUpdaterIsQuietWhenUpToDateOrOffline(t *testing.T) {
 	in, _ := fakeInstall(t)
 	var hits atomic.Int32
@@ -405,7 +483,7 @@ func TestUpdaterIsQuietWhenUpToDateOrOffline(t *testing.T) {
 
 func TestManagerIsIdleWithoutTunnelsOrAnArmedUnit(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := &manager{log: log, tunnels: map[string]*active{}, estim: newEstimLink(t.TempDir(), log, func(string, ...any) {})}
+	mgr := &manager{log: log, tunnels: map[string]*active{}, estim: newEstimLink(t.TempDir(), log, newConsole(io.Discard))}
 	if !mgr.idle() {
 		t.Fatal("nothing running, not idle")
 	}

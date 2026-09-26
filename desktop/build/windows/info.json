@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "FemLed",
+			"FileDescription": "Masseuse.ai for your computer",
+			"LegalCopyright": "Copyright 2026 FemLed. Apache License 2.0.",
+			"ProductName": "Masseuse.ai",
+			"Comments": "The window around masseuse-camlink (docs/DESKTOP.md)."
+		}
+	}
+}

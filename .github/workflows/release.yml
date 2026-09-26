@@ -283,14 +283,18 @@ jobs:
 
   macos-app:
     # The Mac download (packaging/macos/README.md): Masseuse.app,
-    # universal, with ffmpeg inside, in Masseuse.ai-<version>.dmg; app and
-    # image signed with the Developer ID, notarized and stapled. The bundle's
-    # executable is the two darwin binaries goreleaser published, verified
-    # against the signed checksums.txt and joined with lipo, so the reproduce
-    # job's result carries over: this job checks that the bundle's slices
-    # strip to the very same bytes. ffmpeg is the one component not rebuilt
-    # byte for byte; it is built here from pinned upstream tarballs
-    # (packaging/ffmpeg/build.sh) and covered by darwin.intoto.jsonl. macOS
+    # universal, with the connector and ffmpeg inside, in
+    # Masseuse.ai-<version>.dmg; app and image signed with the Developer ID,
+    # notarized and stapled. The bundle's executable is the desktop window
+    # (desktop/, docs/DESKTOP.md), built here for both architectures and
+    # joined with lipo; the connector beside it is the two darwin binaries
+    # goreleaser published, verified against the signed checksums.txt and
+    # joined with lipo, so the reproduce job's result carries over: this job
+    # checks that the bundled connector's slices strip to the very same
+    # bytes. The window and ffmpeg are the two components not rebuilt byte
+    # for byte (the window is cgo against the system's toolkit; ffmpeg is
+    # built here from pinned upstream tarballs, packaging/ffmpeg/build.sh);
+    # both are covered by darwin.intoto.jsonl. macOS
     # 26, because actool compiles the layered icon (packaging/macos/README.md,
     # "The icon") only on the system whose asset runtime it uses; ffmpeg
     # still targets 13.0 (-mmacosx-version-min), and the cache key carries
@@ -375,8 +379,32 @@ jobs:
           units=$(tr -d '[:space:]' < packaging/units/VERSION)
           sh packaging/units/fetch.sh "$units" darwin all dist/units
           for f in dist/units/camlink-unit-*; do echo "$(basename "$f"): $(lipo -archs "$f")"; done
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: The desktop window, universal
+        # The Wails shell (desktop/): the page built once, the Go program
+        # built for each architecture against the system's toolkit (cgo,
+        # macOS 13 as the floor like the bundle's LSMinimumSystemVersion),
+        # stamped with the tag as its version (--version answers it), and
+        # joined with lipo.
+        run: |
+          (cd desktop/frontend && npm ci && npm run build)
+          cd desktop
+          for arch in arm64 amd64; do
+            CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" MACOSX_DEPLOYMENT_TARGET=13.0 \
+              CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 \
+              go build -tags production -trimpath -buildvcs=false \
+                -ldflags="-w -s -X main.version=${GITHUB_REF_NAME}" -o "../dist/shell-${arch}" .
+          done
+          cd ..
+          lipo -create -output dist/Masseuse dist/shell-arm64 dist/shell-amd64
+          echo "universal window: $(lipo -archs dist/Masseuse)"
+          test "$(dist/Masseuse --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}" || { echo "the window's --version is not the tag" >&2; exit 1; }
       - name: Assemble the bundle
-        run: sh packaging/macos/build-app.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink -f dist/ffmpeg -u dist/units -o dist
+        run: sh packaging/macos/build-app.sh -v "${GITHUB_REF_NAME#v}" -s dist/Masseuse -b dist/masseuse-camlink -f dist/ffmpeg -u dist/units -o dist
       - name: Sign, notarize and staple the bundle
         env:
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
@@ -417,21 +445,24 @@ jobs:
           done
           test "$n" -gt 0 || { echo "the bundle carries no helpers" >&2; exit 1; }
           echo "${n} helper(s) in the bundle, each the manifest's"
-          dist/Masseuse.app/Contents/MacOS/Masseuse -state-dir "${RUNNER_TEMP}/probe-state" -estim-ble off estim probe > probe.txt 2>&1 || true
+          dist/Masseuse.app/Contents/MacOS/masseuse-camlink -state-dir "${RUNNER_TEMP}/probe-state" -estim-ble off estim probe > probe.txt 2>&1 || true
           grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt ||
             { cat probe.txt; echo "the bundle's connector does not find its helpers" >&2; exit 1; }
-      - name: The bundle's executable is the archives' binaries
-        # Signature stripped, each slice of the universal binary is byte for
-        # byte the archive's binary for that architecture, which the
-        # reproduce job ties to the proxy rebuild.
+      - name: The bundle's connector is the archives' binaries
+        # Signature stripped, each slice of the universal connector inside
+        # the bundle is byte for byte the archive's binary for that
+        # architecture, which the reproduce job ties to the proxy rebuild.
+        # The window beside it is not rebuilt byte for byte; its Developer
+        # ID signature and darwin.intoto.jsonl vouch for it.
         run: |
-          go run ./cmd/machostrip -sha256 dist/Masseuse.app/Contents/MacOS/Masseuse | tee bundle.txt
+          go run ./cmd/machostrip -sha256 dist/Masseuse.app/Contents/MacOS/masseuse-camlink | tee bundle.txt
           for arch in arm64 amd64; do
             thin=$(go run ./cmd/machostrip -sha256 "published/${arch}/masseuse-camlink" | cut -d' ' -f1)
-            grep -qF "${thin}  dist/Masseuse.app/Contents/MacOS/Masseuse (${arch})" bundle.txt ||
-              { echo "the bundle's ${arch} slice is not the published darwin/${arch} binary" >&2; exit 1; }
-            echo "the bundle's ${arch} slice is the published darwin/${arch} binary (${thin})"
+            grep -qF "${thin}  dist/Masseuse.app/Contents/MacOS/masseuse-camlink (${arch})" bundle.txt ||
+              { echo "the bundle's ${arch} connector slice is not the published darwin/${arch} binary" >&2; exit 1; }
+            echo "the bundle's ${arch} connector slice is the published darwin/${arch} binary (${thin})"
           done
+          test "$(dist/Masseuse.app/Contents/MacOS/Masseuse --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
       - name: Disk image, signed, notarized and stapled
         env:
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
@@ -505,16 +536,19 @@ jobs:
           ditto mnt/Masseuse.app Applications/Masseuse.app
           hdiutil detach mnt
           Applications/Masseuse.app/Contents/MacOS/Masseuse --version
+          Applications/Masseuse.app/Contents/MacOS/masseuse-camlink --version
       - name: It knows it is the latest release
+        # The connector inside the bundle is what updates; run from its
+        # place in the bundle it knows the bundle is what it replaces.
         run: |
-          out=$(Applications/Masseuse.app/Contents/MacOS/Masseuse -state-dir "${RUNNER_TEMP}/state-1" update)
+          out=$(Applications/Masseuse.app/Contents/MacOS/masseuse-camlink -state-dir "${RUNNER_TEMP}/state-1" update)
           echo "$out"
           echo "$out" | grep -q "^Up to date: ${GITHUB_REF_NAME} is the latest release"
       - name: As an older release, it updates itself to this one
         env:
           MASSEUSE_CAMLINK_UPDATE_AS: v0.10.0
         run: |
-          out=$(Applications/Masseuse.app/Contents/MacOS/Masseuse -state-dir "${RUNNER_TEMP}/state-2" update)
+          out=$(Applications/Masseuse.app/Contents/MacOS/masseuse-camlink -state-dir "${RUNNER_TEMP}/state-2" -install-root "${PWD}/Applications/Masseuse.app" update)
           echo "$out"
           echo "$out" | grep -q "^Downloaded and verified Masseuse.ai-${GITHUB_REF_NAME#v}.dmg"
           echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
@@ -523,6 +557,7 @@ jobs:
           test -d "${RUNNER_TEMP}/state-2/previous/Masseuse.app"
           test "$(ls Applications | wc -l)" -eq 1
           test "$(Applications/Masseuse.app/Contents/MacOS/Masseuse --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
+          test "$(Applications/Masseuse.app/Contents/MacOS/masseuse-camlink --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
           codesign --verify --deep --strict Applications/Masseuse.app
           spctl --assess --type execute -vv Applications/Masseuse.app 2>&1 | grep -q accepted
           ls Applications/Masseuse.app/Contents/Helpers/units/
@@ -572,16 +607,18 @@ jobs:
   windows-app:
     # The Windows download (packaging/windows): one Masseuse.exe (the name
     # the Mac bundle has too, Masseuse.app; the program calls itself
-    # Masseuse.ai), the windows_amd64 connector goreleaser published, verified against the
-    # signed checksums.txt, with ffmpeg.exe from ffmpeg-windows, the unit
-    # driver helpers and the notices appended as a payload
+    # Masseuse.ai): the desktop window (desktop/, docs/DESKTOP.md) built
+    # here, with the windows_amd64 connector goreleaser published, verified
+    # against the signed checksums.txt, ffmpeg.exe from ffmpeg-windows, the
+    # unit driver helpers and the notices appended as a payload
     # (internal/payload; packaging/windows/pack), the files inside and the
     # whole signed with Azure Artifact Signing when the repository has the
     # credentials (the "Whether this run signs" step; without them the
     # package ships unsigned, as before v0.13). cmd/pestrip proves that
     # each signed file minus its signature is the file that was verified,
-    # and that the package minus its signature and payload is the published
-    # connector byte for byte. This runner is where the Windows ffmpeg
+    # that the package minus its signature and payload is the window built
+    # here, and that the connector in the payload minus its signature is
+    # the published connector byte for byte. This runner is where the Windows ffmpeg
     # first runs: the smoke test and the connector's real-ffmpeg test gate
     # the package. The zip of releases before 0.13,
     # Masseuse.ai-<version>-windows.zip, is still published with the same
@@ -657,17 +694,36 @@ jobs:
           7z e -y -o. "masseuse-camlink_${version}_windows_amd64.zip" masseuse-camlink.exe > /dev/null
           cp masseuse-camlink.exe ../dist/masseuse-camlink.exe
           ../dist/masseuse-camlink.exe --version
-      - name: The connector carries its Windows resources
-        # The icon and the strings Explorer shows come from the committed
-        # .syso (packaging/windows/make-syso.sh), linked by goreleaser's
-        # proxy build like any other. packaging/windows/verinfo reads them
-        # the way Explorer does (PowerShell's VersionInfo would report them
-        # empty: the resource carries no FileVersion string on purpose).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: The desktop window
+        # The Wails shell (desktop/): the page built, then the Go program
+        # for the GUI subsystem (no console; the connector's runs hidden
+        # behind it), with the committed resource object
+        # (desktop/rsrc_windows_amd64.syso, packaging/windows/make-syso.sh)
+        # and the tag as its version, which --version answers.
         run: |
-          go run ./packaging/windows/verinfo dist/masseuse-camlink.exe | tee dist/verinfo.txt
-          grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
-          grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
-          grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
+          (cd desktop/frontend && npm ci && npm run build)
+          (cd desktop && CGO_ENABLED=0 go build -tags production -trimpath -buildvcs=false \
+            -ldflags="-w -s -H windowsgui -X main.version=${GITHUB_REF_NAME}" -o ../dist/shell/Masseuse.exe .)
+          test "$(dist/shell/Masseuse.exe --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}" || { echo "the window's --version is not the tag" >&2; exit 1; }
+      - name: The programs carry their Windows resources
+        # The icon and the strings Explorer shows come from the committed
+        # .syso files (packaging/windows/make-syso.sh), the connector's
+        # linked by goreleaser's proxy build like any other.
+        # packaging/windows/verinfo reads them the way Explorer does
+        # (PowerShell's VersionInfo would report them empty: the resource
+        # carries no FileVersion string on purpose).
+        run: |
+          for exe in dist/masseuse-camlink.exe dist/shell/Masseuse.exe; do
+            go run ./packaging/windows/verinfo "$exe" | tee dist/verinfo.txt
+            grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
+            grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
+            grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
+          done
       - name: The unit driver helpers for Windows, verified
         run: |
           units=$(tr -d '[:space:]' < packaging/units/VERSION)
@@ -691,13 +747,16 @@ jobs:
           fi
       - name: What goes into the package
         # The payload's programs are signed one by one before packing (each
-        # runs as a program of its own once unpacked); unsigned copies are
-        # kept to compare the signed ones with.
+        # runs as a program of its own once unpacked: the connector,
+        # ffmpeg, the helpers); unsigned copies are kept to compare the
+        # signed ones with.
         run: |
           mkdir -p dist/pack/units dist/unsigned/units
+          cp dist/masseuse-camlink.exe dist/pack/masseuse-camlink.exe
           cp dist/ffmpeg-windows/ffmpeg.exe dist/pack/ffmpeg.exe
           cp -r dist/ffmpeg-windows/licenses dist/pack/licenses
           cp dist/units/camlink-unit-*.exe dist/pack/units/
+          cp dist/pack/masseuse-camlink.exe dist/unsigned/masseuse-camlink.exe
           cp dist/pack/ffmpeg.exe dist/unsigned/ffmpeg.exe
           cp dist/pack/units/*.exe dist/unsigned/units/
       - name: Azure login (OIDC)
@@ -707,7 +766,7 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Sign ffmpeg.exe and the helpers (Artifact Signing)
+      - name: Sign the connector, ffmpeg.exe and the helpers (Artifact Signing)
         if: steps.signing.outputs.enabled == 'true'
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
@@ -735,22 +794,23 @@ jobs:
       - name: The signed files are the verified files
         # cmd/pestrip takes the signature off and zeroes the checksum, on
         # both sides (ffmpeg's linker writes one): what remains must be
-        # what was verified a moment ago. For the Go-built helpers the
-        # stripped hash is the plain one, the manifest's.
+        # what was verified a moment ago. For the Go-built connector and
+        # helpers the stripped hash is the plain one: the published
+        # binary's, the manifest's.
         run: |
-          for g in dist/pack/ffmpeg.exe dist/pack/units/camlink-unit-*.exe; do
+          for g in dist/pack/masseuse-camlink.exe dist/pack/ffmpeg.exe dist/pack/units/camlink-unit-*.exe; do
             rel=${g#dist/pack/}
             a=$(go run ./cmd/pestrip -sha256 "$g")
             b=$(go run ./cmd/pestrip -sha256 "dist/unsigned/$rel")
             [ "$a" = "$b" ] || { echo "$rel: signed and stripped $a, unsigned $b" >&2; exit 1; }
             echo "ok  $rel  $a"
           done
-          for g in dist/unsigned/units/camlink-unit-*.exe; do
+          for g in dist/unsigned/masseuse-camlink.exe dist/unsigned/units/camlink-unit-*.exe; do
             [ "$(go run ./cmd/pestrip -sha256 "$g")" = "$(sha256sum "$g" | cut -d' ' -f1)" ] ||
               { echo "$g: a Go binary whose stripped hash is not its plain hash" >&2; exit 1; }
           done
       - name: Assemble the package
-        run: go run ./packaging/windows/pack -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink.exe -f dist/pack -u dist/pack/units -o dist/Masseuse.exe
+        run: go run ./packaging/windows/pack -v "${GITHUB_REF_NAME#v}" -s dist/shell/Masseuse.exe -b dist/pack/masseuse-camlink.exe -f dist/pack -u dist/pack/units -o dist/Masseuse.exe
       - name: Sign the package (Artifact Signing)
         if: steps.signing.outputs.enabled == 'true'
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
@@ -774,47 +834,53 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
-      - name: The package is the published connector, with the payload
-        # pestrip: signature off, payload off, and the hash is the published
-        # windows_amd64 binary's; the payload written out is the signed
-        # ffmpeg and helpers, byte for byte.
+      - name: The package is the window, with the published connector inside
+        # pestrip: signature off, payload off, and the hash is the window
+        # built above; the payload written out is the signed connector,
+        # ffmpeg and helpers, byte for byte, and the connector minus its
+        # signature is the published windows_amd64 binary.
         run: |
           got=$(go run ./cmd/pestrip -sha256 dist/Masseuse.exe)
-          want=$(sha256sum dist/masseuse-camlink.exe | cut -d' ' -f1)
-          [ "$got" = "$want" ] || { echo "Masseuse.exe stripped is $got, the connector $want" >&2; exit 1; }
-          echo "ok  Masseuse.exe minus its signature and payload is the published connector: $got"
+          want=$(sha256sum dist/shell/Masseuse.exe | cut -d' ' -f1)
+          [ "$got" = "$want" ] || { echo "Masseuse.exe stripped is $got, the window $want" >&2; exit 1; }
+          echo "ok  Masseuse.exe minus its signature and payload is the window built here: $got"
           go run ./cmd/pestrip -payload dist/payload-check dist/Masseuse.exe | tee dist/payload.txt
-          for g in dist/pack/ffmpeg.exe dist/pack/units/camlink-unit-*.exe; do
+          for g in dist/pack/masseuse-camlink.exe dist/pack/ffmpeg.exe dist/pack/units/camlink-unit-*.exe; do
             rel=${g#dist/pack/}
             cmp "$g" "dist/payload-check/$rel" || { echo "$rel in the payload is not the signed file" >&2; exit 1; }
           done
+          inside=$(go run ./cmd/pestrip -sha256 dist/payload-check/masseuse-camlink.exe)
+          published=$(sha256sum dist/masseuse-camlink.exe | cut -d' ' -f1)
+          [ "$inside" = "$published" ] || { echo "the connector in the payload, stripped, is $inside; the published one $published" >&2; exit 1; }
+          echo "ok  the connector in the payload minus its signature is the published windows_amd64 binary: $published"
           n=$(ls dist/pack/units/camlink-unit-*.exe | wc -l | tr -d ' ')
           [ "$(grep -c ' units/camlink-unit-.*\.exe$' dist/payload.txt)" = "$n" ] || { echo "the payload does not carry every helper" >&2; exit 1; }
       - name: Windows' verdict on the signatures
         if: steps.signing.outputs.enabled == 'true'
         shell: pwsh
         run: |
-          $files = @('dist/Masseuse.exe', 'dist/pack/ffmpeg.exe') + (Get-ChildItem dist/pack/units/*.exe | ForEach-Object FullName)
+          $files = @('dist/Masseuse.exe', 'dist/pack/masseuse-camlink.exe', 'dist/pack/ffmpeg.exe') + (Get-ChildItem dist/pack/units/*.exe | ForEach-Object FullName)
           foreach ($f in $files) {
             $s = Get-AuthenticodeSignature $f
             "$($s.Status)  $($s.SignerCertificate.Subject)  $f"
             if ($s.Status -ne 'Valid') { throw "$f is not validly signed: $($s.Status) $($s.StatusMessage)" }
           }
       - name: The package runs alone
-        # Copied to a directory of its own, as a download is: the payload
-        # unpacks under the state directory, the connector names the helpers
-        # on its first line and finds its ffmpeg (devices lists none on the
-        # runner but runs ffmpeg to say so).
+        # Copied to a directory of its own, as a download is, the window
+        # answers --version without opening. The payload, unpacked as the
+        # window unpacks it (bin\<id>\ under the state directory: the same
+        # files pestrip wrote out), has the connector name the helpers on
+        # its first line and find its ffmpeg beside itself (devices lists
+        # none on the runner but runs ffmpeg to say so).
         run: |
           alone="${RUNNER_TEMP}/alone"; mkdir -p "$alone" && cp dist/Masseuse.exe "$alone/"
           state="$(cygpath -w "${RUNNER_TEMP}/probe-state")"
           "$alone/Masseuse.exe" --version
           n=$(ls dist/pack/units/camlink-unit-*.exe | wc -l | tr -d ' ')
-          "$alone/Masseuse.exe" -state-dir "$state" -estim-ble off estim probe > probe.txt 2>&1 || true
+          dist/payload-check/masseuse-camlink.exe -state-dir "$state" -estim-ble off estim probe > probe.txt 2>&1 || true
           grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt ||
             { cat probe.txt; echo "the package's connector does not find its helpers" >&2; exit 1; }
-          "$alone/Masseuse.exe" -state-dir "$state" devices
-          ls "${RUNNER_TEMP}/probe-state/bin/"*/ffmpeg.exe
+          dist/payload-check/masseuse-camlink.exe -state-dir "$state" devices
       - name: The zip for installs before 0.13
         # Those update themselves from Masseuse.ai-<version>-windows.zip: their
         # updater runs `--version` on the zip's Masseuse.ai.exe, by that
@@ -862,11 +928,14 @@ jobs:
   update-check-windows:
     # The Windows package updates itself from the release's Masseuse.exe
     # (update-check above says why): the published package, downloaded to
-    # a directory of its own as a person would, told it is an older
-    # release, downloads this release's package, checks it and swaps it
-    # in; the running program may be renamed, never overwritten, and lands
-    # in .previous\. The zip for installs before 0.13 holds the same file
-    # under the name those installs know it by.
+    # a directory of its own as a person would, its connector unpacked as
+    # the window unpacks it and told the package is what it replaces
+    # (-install-root, as the window tells it) and that it is an older
+    # release, downloads this release's package, checks it (the new
+    # window's --version) and swaps it in; the running program may be
+    # renamed, never overwritten, and lands in .previous\. The zip for
+    # installs before 0.13 holds the same file under the name those
+    # installs know it by.
     needs: [windows-app, provenance-windows]
     runs-on: windows-2022
     permissions:
@@ -877,6 +946,13 @@ jobs:
       run:
         shell: bash
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: The published package, on its own
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -890,9 +966,12 @@ jobs:
           cmp install/Masseuse.exe fromzip/Masseuse.ai.exe
           rm -r fromzip "install/Masseuse.ai-${version}-windows.zip"
           install/Masseuse.exe --version
+          # The connector, out of the payload as the window takes it.
+          go run ./cmd/pestrip -payload payload install/Masseuse.exe
+          payload/masseuse-camlink.exe --version
       - name: It knows it is the latest release
         run: |
-          out=$(install/Masseuse.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-1")" update)
+          out=$(payload/masseuse-camlink.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-1")" -install-root "$(cygpath -w "${PWD}/install/Masseuse.exe")" update)
           echo "$out"
           echo "$out" | grep -q "^Up to date: ${GITHUB_REF_NAME} is the latest release"
       - name: As an older release, it updates itself to this one
@@ -900,7 +979,7 @@ jobs:
           MASSEUSE_CAMLINK_UPDATE_AS: v0.10.0
         run: |
           before=$(sha256sum install/Masseuse.exe | cut -d' ' -f1)
-          out=$(install/Masseuse.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-2")" update)
+          out=$(payload/masseuse-camlink.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-2")" -install-root "$(cygpath -w "${PWD}/install/Masseuse.exe")" update)
           echo "$out"
           echo "$out" | grep -q "^Downloaded and verified Masseuse.exe"
           echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
@@ -909,3 +988,165 @@ jobs:
           test "$(sha256sum install/Masseuse.exe | cut -d' ' -f1)" = "$before"
           test "$(ls -A install | wc -l | tr -d ' ')" = "2" # the package and .previous, nothing beside
           echo "the package took the release from GitHub, verified it and swapped it in"
+
+  linux-app:
+    # The Linux desktop download (packaging/linux): the desktop window
+    # (desktop/, docs/DESKTOP.md) built here against GTK 4 and WebKitGTK
+    # 6.0, with the linux_amd64 connector goreleaser published, verified
+    # against the signed checksums.txt, its unit driver helpers, the
+    # desktop entry and its installer, the icon and the notices, flat in
+    # Masseuse.ai-<version>-linux-amd64.tar.gz; the updater unpacks the
+    # same archive over the install (internal/update, LayoutDesktop). The
+    # window is the one component not rebuilt byte for byte (cgo against
+    # the system's toolkit); the connector inside is the published binary,
+    # which this job checks, and linux.intoto.jsonl covers the archive. One
+    # architecture: the other Linux downloads stay the terminal connector's
+    # archives.
+    needs: goreleaser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # the archive and checksums-linux.txt
+      id-token: write # keyless signing (Fulcio)
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: The toolkit
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
+      - name: The published linux_amd64 archive, verified
+        # Nothing from the release is used before checksums.txt's keyless
+        # signature and the archive's hash have been checked.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p published dist && cd published
+          for i in $(seq 1 20); do
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              --pattern checksums.txt --pattern checksums.txt.sigstore.json \
+              --pattern "masseuse-camlink_${version}_linux_amd64.tar.gz" && break
+            sleep 15
+          done
+          cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+          grep -E "_linux_amd64\.tar\.gz$" checksums.txt | sha256sum -c -
+          mkdir archive && tar -xzf "masseuse-camlink_${version}_linux_amd64.tar.gz" -C archive
+          cp archive/masseuse-camlink ../dist/masseuse-camlink
+          mkdir -p ../dist/units && cp archive/units/camlink-unit-* ../dist/units/
+          ../dist/masseuse-camlink --version
+      - name: The desktop window
+        # The Wails shell (desktop/): the page built, the Go program built
+        # against the toolkit (cgo), stamped with the tag as its version,
+        # which --version answers.
+        run: |
+          (cd desktop/frontend && npm ci && npm run build)
+          (cd desktop && CGO_ENABLED=1 go build -tags production -trimpath -buildvcs=false \
+            -ldflags="-w -s -X main.version=${GITHUB_REF_NAME}" -o ../dist/Masseuse .)
+          test "$(dist/Masseuse --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}" || { echo "the window's --version is not the tag" >&2; exit 1; }
+      - name: Assemble the archive
+        run: sh packaging/linux/build-archive.sh -v "${GITHUB_REF_NAME#v}" -a amd64 -s dist/Masseuse -b dist/masseuse-camlink -u dist/units -o dist
+      - name: The archive's connector is the published binary
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          inside=$(tar -xzOf "dist/Masseuse.ai-${version}-linux-amd64.tar.gz" masseuse-camlink | sha256sum | cut -d' ' -f1)
+          published=$(sha256sum published/archive/masseuse-camlink | cut -d' ' -f1)
+          [ "$inside" = "$published" ] || { echo "the archive's connector is $inside, the published one $published" >&2; exit 1; }
+          echo "ok  the archive's connector is the published linux/amd64 binary: $published"
+          tar -tzf "dist/Masseuse.ai-${version}-linux-amd64.tar.gz" | grep -qx 'units/camlink-unit-.*' || { echo "the archive carries no helpers" >&2; exit 1; }
+      - name: checksums-linux.txt, signed keyless
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cd dist
+          sha256sum "Masseuse.ai-${version}-linux-amd64.tar.gz" > checksums-linux.txt
+          cat checksums-linux.txt
+          cosign sign-blob --yes --bundle checksums-linux.txt.sigstore.json checksums-linux.txt
+      - name: Upload to the release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+            "dist/Masseuse.ai-${version}-linux-amd64.tar.gz" \
+            dist/checksums-linux.txt dist/checksums-linux.txt.sigstore.json
+      - name: Subjects for provenance
+        id: hashes
+        run: echo "hashes=$(base64 -w0 < dist/checksums-linux.txt)" >> "$GITHUB_OUTPUT"
+
+  provenance-linux:
+    needs: linux-app
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.linux-app.outputs.hashes }}
+      provenance-name: linux.intoto.jsonl
+      upload-assets: true
+
+  update-check-linux:
+    # The Linux desktop archive updates itself from the release's archive
+    # (update-check above says why): the published archive unpacked to a
+    # directory of its own, its connector told the directory is what it
+    # replaces (-install-root, as the window tells it) and that it is an
+    # older release, downloads this release's archive, checks it (the new
+    # connector's --version) and swaps every file in, the window among
+    # them; what was there lands in .previous/.
+    needs: [linux-app, provenance-linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: The toolkit's libraries, for the window's --version
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-1 libwebkitgtk-6.0-4
+      - name: The published archive, on its own
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 20); do
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              --pattern "Masseuse.ai-${version}-linux-amd64.tar.gz" && break
+            sleep 15
+          done
+          mkdir install && tar -xzf "Masseuse.ai-${version}-linux-amd64.tar.gz" -C install
+          install/Masseuse --version
+          install/masseuse-camlink --version
+          test -x install/install.sh && test -f install/masseuse.desktop
+      - name: It knows it is the latest release
+        run: |
+          out=$(install/masseuse-camlink -state-dir "${RUNNER_TEMP}/state-1" -install-root "${PWD}/install" update)
+          echo "$out"
+          echo "$out" | grep -q "^Up to date: ${GITHUB_REF_NAME} is the latest release"
+      - name: As an older release, it updates itself to this one
+        env:
+          MASSEUSE_CAMLINK_UPDATE_AS: v0.10.0
+        run: |
+          before=$(sha256sum install/Masseuse | cut -d' ' -f1)
+          out=$(install/masseuse-camlink -state-dir "${RUNNER_TEMP}/state-2" -install-root "${PWD}/install" update)
+          echo "$out"
+          echo "$out" | grep -q "^Downloaded and verified Masseuse.ai-${GITHUB_REF_NAME#v}-linux-amd64.tar.gz"
+          echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
+          test -f install/.previous/masseuse-camlink
+          test -f install/.previous/Masseuse
+          test "$(install/Masseuse --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
+          test "$(install/masseuse-camlink --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
+          test "$(sha256sum install/Masseuse | cut -d' ' -f1)" = "$before"
+          ls install/units/
+          echo "the archive took the release from GitHub, verified it and swapped it in"

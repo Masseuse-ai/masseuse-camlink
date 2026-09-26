@@ -50,9 +50,10 @@ func ownsConsole() bool {
 
 // exit ends the program with code. When the code is an error's and the
 // console window would vanish with the process, it first waits for Enter,
-// so the message above it can be read.
+// so the message above it can be read. Run by the desktop window (-ipc)
+// there is no one at a console to press it: the window says what happened.
 func exit(code int) {
-	if code != 0 && ownsConsole() {
+	if code != 0 && !*ipcMode && ownsConsole() {
 		fmt.Fprint(os.Stderr, "\nPress Enter to close this window.")
 		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	}
