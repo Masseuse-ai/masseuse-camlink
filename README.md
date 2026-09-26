@@ -47,7 +47,7 @@ how to check the signer and how to compare them with a rebuild all the same.
 
 ```
 $ masseuse-camlink
-masseuse-camlink v0.5.1
+masseuse-camlink v0.6.0
 Identity 3fK9pQ2m… (state in /Users/you/Library/Application Support/masseuse-camlink)
 Camera: Insta360 Link + Yeti Stereo Microphone (1280x720 30 fps, h264_videotoolbox). It is on only while a session reads it.
 
@@ -150,6 +150,48 @@ brings a new ticket. While attached, the program also tells the service
 every 30 s that it is still there, so if the computer sleeps or drops off
 the network the app shows the camera offline within about 90 s rather than
 whenever the dead connection is noticed.
+
+## Your stimulation device
+
+If an electrical stimulation device the connector supports is plugged into
+the same computer, the connector serves it too: the service that runs your
+session sees its status and can adjust it, within limits the connector
+holds to. Supported today: the ErosTek MK-312BT over its serial link cable
+(the FTDI USB adapter it ships with). Nothing to set up: plug the cable in,
+switch the device on, and start the connector. It says
+
+```
+Stimulation device connected: ErosTek MK-312BT. It is held at zero until a session on your phone uses this computer.
+```
+
+and holds the device at zero, with its front panel live and its power range
+at normal, until a session on your phone uses this connector. That session
+arms it; the arm lasts as long as the session keeps answering, and the
+connector puts the device back to zero when the session ends, when the
+service goes quiet for 15 s, when any command fails, when the device stops
+answering, and when you stop the connector (Ctrl-C). The connector never
+sets Channel A above 85 of the device's 99, never touches Channel B, moves
+the level one step at a time, and selects only patterns from a fixed list.
+The service can only ask for what the connector allows; those limits are in
+this program's source, not on the service.
+
+To check the device without a session:
+
+```sh
+masseuse-camlink estim probe
+```
+
+lists the USB serial adapters, finds the device, prints what it reports and
+leaves it released. If the connector picks the wrong adapter, name the right
+one with `-estim-port /dev/cu.usbserial-XXXX` (macOS), `/dev/ttyUSB0`
+(Linux) or `COM5` (Windows). A device that "holds the key of an earlier
+session" was left mid-conversation by a program that stopped without
+closing: switch it off for ten seconds and on again. On Linux your user
+needs access to the serial device (usually the `dialout` group).
+
+What travels between the connector and the service for this is described in
+[docs/PROTOCOL.md](docs/PROTOCOL.md), section 7. It does not go through the
+camera tunnel and the enclave never sees it.
 
 ## How it stays private
 

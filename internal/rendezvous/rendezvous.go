@@ -68,6 +68,23 @@ type SourceReporter interface {
 // such route: an older service, which shows no source card.
 var ErrNoSourceReports = errors.New("rendezvous: the service does not take source reports")
 
+// EstimReceiver is implemented by a Handler that serves a stimulation
+// device (docs/PROTOCOL.md, section 7); the client hands it every `estim`
+// event. A Handler without it ignores them.
+type EstimReceiver interface {
+	// OnEstim receives one message the service sent for the session
+	// ("" for a connector-level message).
+	OnEstim(sessionID string, message json.RawMessage)
+}
+
+// ErrNoEstim is returned by PostEstim when the service has no such route:
+// an older service, which links no devices.
+var ErrNoEstim = errors.New("rendezvous: the service does not take device link messages")
+
+// ErrEstimSessionGone is returned by PostEstim when the service no longer
+// has the session bound to this connector.
+var ErrEstimSessionGone = errors.New("rendezvous: the session is not bound to this connector")
+
 // Client talks to one service.
 type Client struct {
 	Service  string
@@ -268,6 +285,54 @@ func (c *Client) ReportSource(ctx context.Context, src Source) error {
 	return nil
 }
 
+// PostEstim sends device link messages for a session (docs/PROTOCOL.md,
+// section 2.5). It is signed like hello over the exact JSON text of the
+// messages, so only the connector can speak for its device.
+func (c *Client) PostEstim(ctx context.Context, sessionID string, messages []json.RawMessage) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	msgs, err := json.Marshal(messages)
+	if err != nil {
+		return err
+	}
+	ts := time.Now().Unix()
+	key := c.Identity.PublicKeyString()
+	body, _ := json.Marshal(map[string]any{
+		"key":       key,
+		"ts":        ts,
+		"sessionId": sessionID,
+		// The array travels as the text it was signed as, inside a JSON
+		// string: a string survives any decoder byte for byte, where a
+		// re-encoded array need not (escaping, number forms).
+		"messages": string(msgs),
+		"sig":      b64(c.Identity.Sign(identity.EstimMessage(ts, key, sessionID, string(msgs)))),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Service, "/")+"/api/camlink/estim", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "masseuse-camlink/"+c.Version)
+	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, err := c.http().Do(req.WithContext(hctx))
+	if err != nil {
+		return fmt.Errorf("estim: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return ErrNoEstim
+	case resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusGone:
+		return fmt.Errorf("%w: %s", ErrEstimSessionGone, strings.TrimSpace(truncate(string(raw), 200)))
+	case resp.StatusCode/100 != 2:
+		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
+	}
+	return nil
+}
+
 // Hello authenticates and returns a stream token.
 func (c *Client) Hello(ctx context.Context) (*helloResponse, error) {
 	ts := time.Now().Unix()
@@ -416,6 +481,20 @@ func (c *Client) dispatch(h Handler, event, data string) {
 		}
 		_ = json.Unmarshal([]byte(data), &v)
 		h.OnClear(v.SessionID, v.Reason)
+	case "estim":
+		er, ok := h.(EstimReceiver)
+		if !ok {
+			return
+		}
+		var v struct {
+			SessionID string          `json:"sessionId"`
+			Message   json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal([]byte(data), &v) != nil || len(v.Message) == 0 {
+			c.log().Warn("rendezvous: malformed estim event")
+			return
+		}
+		er.OnEstim(v.SessionID, v.Message)
 	default:
 		c.log().Debug("rendezvous: ignoring event", "event", event)
 	}

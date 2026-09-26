@@ -209,6 +209,14 @@ func SourceMessage(ts int64, key, kind string, ready bool, label string) []byte 
 	return []byte("camlink-source-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + kind + "|" + r + "|" + label)
 }
 
+// EstimMessage is what the connector signs to send device link messages
+// (POST /api/camlink/estim): the session the messages are for ("" for
+// connector-level ones) and the messages as the exact JSON text sent, which
+// comes last so that any character in it is unambiguous.
+func EstimMessage(ts int64, key, sessionID, messages string) []byte {
+	return []byte("camlink-estim-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + sessionID + "|" + messages)
+}
+
 // HeartbeatMessage is what the connector signs to say it is still there
 // (POST /api/camlink/heartbeat).
 func HeartbeatMessage(ts int64, key string) []byte {

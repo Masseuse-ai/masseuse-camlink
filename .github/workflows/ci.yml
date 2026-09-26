@@ -37,13 +37,24 @@ jobs:
       - name: go test -race
         run: go test -race -count=1 ./...
       - name: fuzz smoke
-        run: go test -run=^$ -fuzz=FuzzDecode -fuzztime=20s ./internal/frame/
+        run: |
+          go test -run=^$ -fuzz=FuzzDecode -fuzztime=20s ./internal/frame/
+          go test -run=^$ -fuzz=FuzzDecodeReply -fuzztime=10s ./internal/estim/mk312/
+          go test -run=^$ -fuzz=FuzzParseCommand -fuzztime=10s ./internal/estim/
       - name: build
         run: |
           mkdir -p bin
           go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o bin/ ./cmd/...
           ./bin/masseuse-camlink --version
           ./bin/masseuse-camlink-gateway --version
+      - name: cross-compile the connector without cgo
+        # The serial port and USB discovery code has a file per system; every
+        # release target must build with CGO_ENABLED=0 as the release does.
+        run: |
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 linux/arm windows/amd64 windows/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /dev/null ./cmd/masseuse-camlink
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go vet ./internal/serialport/ ./internal/estim/...
+          done
 
   vulncheck:
     runs-on: ubuntu-latest

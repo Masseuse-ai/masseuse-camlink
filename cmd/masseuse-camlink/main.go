@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,11 +36,12 @@ import (
 
 func main() {
 	var (
-		service  = flag.String("service", envOr("MASSEUSE_CAMLINK_SERVICE", "https://masseuse.ai"), "the masseuse.ai service")
-		stateDir = flag.String("state-dir", envOr("MASSEUSE_CAMLINK_STATE_DIR", defaultStateDir()), "where the identity key, pairings and camera choice live")
-		logLevel = flag.String("log-level", "info", "debug, info, warn or error")
-		version  = flag.Bool("version", false, "print the version and exit")
-		sf       sourceFlags
+		service   = flag.String("service", envOr("MASSEUSE_CAMLINK_SERVICE", "https://masseuse.ai"), "the masseuse.ai service")
+		stateDir  = flag.String("state-dir", envOr("MASSEUSE_CAMLINK_STATE_DIR", defaultStateDir()), "where the identity key, pairings and camera choice live")
+		logLevel  = flag.String("log-level", "info", "debug, info, warn or error")
+		version   = flag.Bool("version", false, "print the version and exit")
+		estimPort = flag.String("estim-port", envOr("MASSEUSE_CAMLINK_ESTIM_PORT", ""), "the serial port of the stimulation device, if the scan picks the wrong one (default: scan the USB serial adapters)")
+		sf        sourceFlags
 	)
 	flag.StringVar(&sf.camera, "camera", "", "the computer's camera to send: its number in the devices listing, or (part of) its name; default the first")
 	flag.StringVar(&sf.mic, "mic", "", "the microphone to send with it: number or name; none for video only; default the first")
@@ -74,8 +76,14 @@ func main() {
 	case "":
 	case "devices":
 		os.Exit(listDevices(ctx, sf.ffmpeg))
+	case "estim":
+		if flag.Arg(1) != "probe" {
+			fmt.Fprintf(os.Stderr, "unknown estim command %q (the one command is: estim probe)\n", flag.Arg(1))
+			os.Exit(2)
+		}
+		os.Exit(probeEstim(ctx, *stateDir, *estimPort, logger))
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (the one command is: devices)\n", flag.Arg(0))
+		fmt.Fprintf(os.Stderr, "unknown command %q (the commands are: devices, estim probe)\n", flag.Arg(0))
 		os.Exit(2)
 	}
 
@@ -120,9 +128,10 @@ func main() {
 
 	httpClient := &http.Client{}
 	mgr := &manager{
-		id:  id,
-		log: logger,
-		cam: cam,
+		id:    id,
+		log:   logger,
+		cam:   cam,
+		estim: newEstimLink(*stateDir, *estimPort, logger, func(format string, args ...any) { fmt.Printf(format, args...) }),
 		dialer: &tunnel.Dialer{
 			Identity: id,
 			Attester: &policyAttester{
@@ -142,12 +151,22 @@ func main() {
 		tunnels: map[string]*active{},
 	}
 	client := &rendezvous.Client{Service: *service, Identity: id, Version: buildinfo.Version(), HTTP: httpClient, Logger: logger}
-	if err := client.Run(ctx, mgr); err != nil && ctx.Err() == nil {
+	mgr.estim.client = client
+	// The device link runs beside the rendezvous client and outlives its
+	// context slightly: on the way out it releases the device and tells the
+	// service.
+	estimCtx, stopEstim := context.WithCancel(context.Background())
+	estimDone := make(chan struct{})
+	go func() { defer close(estimDone); mgr.estim.run(estimCtx) }()
+	err = client.Run(ctx, mgr)
+	mgr.closeAll("shutting down")
+	cam.off()
+	stopEstim()
+	<-estimDone
+	if err != nil && ctx.Err() == nil {
 		logger.Error("rendezvous stopped", "err", err)
 		os.Exit(1)
 	}
-	mgr.closeAll("shutting down")
-	cam.off()
 	fmt.Println("\nStopped.")
 }
 
@@ -158,6 +177,7 @@ on your network, to the enclave of a masseuse.ai session.
 
   masseuse-camlink                    run with the remembered (or first) camera and microphone
   masseuse-camlink devices            list cameras and microphones
+  masseuse-camlink estim probe        find the stimulation device on USB serial and print its status
   masseuse-camlink -camera 1 -mic 0   choose by number or by (part of) the name; remembered
   masseuse-camlink -camera-url rtsps://user:password@192.168.1.20:322/live
                                       send a camera on your network instead
@@ -290,6 +310,8 @@ type manager struct {
 	log    *slog.Logger
 	dialer *tunnel.Dialer
 	cam    *camControl
+	// estim serves the stimulation device, if one is plugged in.
+	estim *estimLink
 	// out is the console; nil means standard output.
 	out io.Writer
 
@@ -360,8 +382,18 @@ func (m *manager) OnPaired(hash string) {
 func (m *manager) OnOnline(online bool) {
 	if online {
 		m.log.Info("connected to the service")
+		if m.estim != nil {
+			m.estim.reportDevice()
+		}
 	} else {
 		m.log.Warn("disconnected from the service; reconnecting")
+	}
+}
+
+// OnEstim hands a device link message to the device session.
+func (m *manager) OnEstim(sessionID string, message json.RawMessage) {
+	if m.estim != nil {
+		m.estim.OnEstim(sessionID, message)
 	}
 }
 
@@ -399,6 +431,9 @@ func (m *manager) OnClear(sessionID, reason string) {
 		cur.cancel()
 		m.log.Info("session ended", "session", sessionID, "reason", reason)
 		m.printf("Camera link closed.\n")
+	}
+	if m.estim != nil {
+		m.estim.sessionCleared(sessionID)
 	}
 }
 

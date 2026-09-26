@@ -30,6 +30,21 @@ are acknowledged within three business days.
   and pins the enclave's TLS key to the one bound into that attestation.
 - Its identity is an Ed25519 key stored with mode 0600 in its state
   directory. Deleting the directory revokes every pairing.
+- If a supported electrical stimulation device is plugged into the same
+  computer (today the ErosTek MK-312BT over its serial cable), the connector
+  relays the service's commands to it and its status back, over the same
+  authenticated channel it uses for camera dials; the camera tunnel carries
+  none of it. The connector holds the device to fixed bounds the service
+  cannot change: Channel A only, level at most 85 of 99, one step per
+  quarter second with a read-back, patterns from a fixed allow-list, the
+  power range chosen by the connector. The device is armed only while a
+  session started on your phone is attached, for at most 30 minutes per
+  renewal, and is put back to zero (front panel live, normal power) when the
+  session ends, when the service goes 15 s without acknowledging a
+  heartbeat, when a command fails, when the device stops answering, and
+  when the connector exits. Ctrl-C and the device's own power switch stop it
+  at any time. The serial probe listens before it writes, so ports that
+  belong to other devices are not written to.
 
 ## Supply chain
 

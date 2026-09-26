@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -86,6 +87,16 @@ type fakeService struct {
 	noHeartbeat bool
 	heartbeats  int
 	badBeats    int
+	// noEstim makes the service an older one without /api/camlink/estim;
+	// estimGone makes it answer 409 (the session is not bound here).
+	noEstim   bool
+	estimGone bool
+	estim     []estimPost
+}
+
+type estimPost struct {
+	sessionID string
+	messages  []json.RawMessage
 }
 
 func (f *fakeService) beats() (int, int) {
@@ -199,6 +210,47 @@ func (f *fakeService) handler() http.Handler {
 		}
 		f.mu.Lock()
 		f.sources = append(f.sources, body.Source)
+		f.mu.Unlock()
+		w.WriteHeader(204)
+	})
+	m.HandleFunc("POST /api/camlink/estim", func(w http.ResponseWriter, r *http.Request) {
+		if f.noEstim {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Key       string `json:"key"`
+			Ts        int64  `json:"ts"`
+			SessionID string `json:"sessionId"`
+			Messages  string `json:"messages"`
+			Sig       string `json:"sig"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		pub, err := identity.ParsePublicKey(body.Key)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		sig, _ := base64.RawURLEncoding.DecodeString(body.Sig)
+		// The signature covers the messages as sent: the exact JSON text.
+		if !ed25519.Verify(pub, identity.EstimMessage(body.Ts, body.Key, body.SessionID, body.Messages), sig) {
+			http.Error(w, "bad signature", 401)
+			return
+		}
+		if f.estimGone {
+			http.Error(w, "session not bound", 409)
+			return
+		}
+		var msgs []json.RawMessage
+		if err := json.Unmarshal([]byte(body.Messages), &msgs); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		f.mu.Lock()
+		f.estim = append(f.estim, estimPost{body.SessionID, msgs})
 		f.mu.Unlock()
 		w.WriteHeader(204)
 	})
@@ -492,4 +544,83 @@ func TestIdleStreamIsDropped(t *testing.T) {
 	rec.wait(t, "online:true")
 	rec.wait(t, "online:false") // the silent stream was abandoned
 	rec.wait(t, "online:true")  // and re-established
+}
+
+// serving is a recorder that also serves a device.
+type serving struct {
+	*recorder
+}
+
+func (s *serving) OnEstim(sessionID string, message json.RawMessage) {
+	s.record("estim:" + sessionID + ":" + string(message))
+}
+
+func TestEstimEventAndPost(t *testing.T) {
+	f := &fakeService{t: t, tokens: map[string]bool{}, block: make(chan struct{})}
+	f.events = []string{
+		"event: estim\ndata: {\"sessionId\":\"s1\",\"message\":{\"type\":\"heartbeat_ack\"}}\n\n",
+		"event: estim\ndata: {\"sessionId\":\"s1\"}\n\n", // malformed: no message
+		"event: estim\ndata: {\"sessionId\":\"\",\"message\":{\"type\":\"detach\"}}\n\n",
+	}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+	c, id := newClient(t, srv)
+	rec := &serving{recorder: newRecorder()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx, rec) }()
+	rec.wait(t, "online:true")
+	rec.wait(t, "estim:s1:{\"type\":\"heartbeat_ack\"}")
+	rec.wait(t, "estim::{\"type\":\"detach\"}")
+	cancel()
+
+	// A handler that serves no device never sees the event.
+	plain := newRecorder()
+	c.dispatch(plain, "estim", "{\"sessionId\":\"s1\",\"message\":{\"type\":\"heartbeat_ack\"}}")
+	plain.mu.Lock()
+	n := len(plain.events)
+	plain.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("plain handler saw %v", plain.events)
+	}
+
+	msgs := []json.RawMessage{json.RawMessage("{\"type\":\"heartbeat\"}"), json.RawMessage("{\"type\":\"armed\",\"armed\":true}")}
+	if err := c.PostEstim(context.Background(), "s1", msgs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PostEstim(context.Background(), "", nil); err != nil {
+		t.Fatal("nothing to send should be fine")
+	}
+	f.mu.Lock()
+	posts := append([]estimPost(nil), f.estim...)
+	f.mu.Unlock()
+	if len(posts) != 1 || posts[0].sessionID != "s1" || len(posts[0].messages) != 2 || string(posts[0].messages[1]) != "{\"type\":\"armed\",\"armed\":true}" {
+		t.Fatalf("posts %+v", posts)
+	}
+
+	// A post signed by someone else is refused.
+	other, _ := identity.Load(t.TempDir())
+	raw, _ := json.Marshal(msgs)
+	ts := time.Now().Unix()
+	body, _ := json.Marshal(map[string]any{
+		"key": id.PublicKeyString(), "ts": ts, "sessionId": "s1", "messages": string(raw),
+		"sig": base64.RawURLEncoding.EncodeToString(other.Sign(identity.EstimMessage(ts, id.PublicKeyString(), "s1", string(raw)))),
+	})
+	resp, err := srv.Client().Post(srv.URL+"/api/camlink/estim", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("imposter post: %d", resp.StatusCode)
+	}
+
+	f.estimGone = true
+	if err := c.PostEstim(context.Background(), "s1", msgs); !errors.Is(err, ErrEstimSessionGone) {
+		t.Fatalf("unbound session: %v", err)
+	}
+	f.noEstim = true
+	if err := c.PostEstim(context.Background(), "s1", msgs); err != ErrNoEstim {
+		t.Fatalf("old service: %v", err)
+	}
 }
