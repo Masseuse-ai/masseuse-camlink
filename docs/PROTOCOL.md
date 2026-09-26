@@ -303,8 +303,10 @@ is called by the pose producer, which in turn is called by the service over
 the existing authenticated control plane.
 
 - `POST /expect` `{"connectorKey","ticketHash","expiresAt"}` -> `200`.
-  Replaces the current expectation; a connector already attached under a
-  different key is dropped.
+  Replaces the current expectation. A connector already attached under the
+  same key stays attached and keeps its target (the service re-expects on
+  every new lease, and the camera has not moved); one attached under a
+  different key is dropped, and the target with it.
 - `POST /target` `{"host","port"}` -> `200`; `409` when no connector is
   attached. The host:port the next relay connection is opened to.
 - `POST /clear` -> `200`: forget expectation and target, drop the connector.

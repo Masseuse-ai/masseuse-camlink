@@ -397,14 +397,19 @@ func (s *Server) handleExpect(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.expect = exp
-	s.target = ""
 	att := s.attached
 	if att != nil && att.keyStr == exp.keyStr {
-		// Same connector, new ticket: keep the live tunnel, treat the
-		// expectation as already attached so its ticket outlives expiresAt.
+		// Same connector, new ticket: keep the live tunnel and the target
+		// set for it (the camera the producer configured stays the same
+		// camera; the service re-expects on every new lease), and treat
+		// the expectation as already attached so its ticket outlives
+		// expiresAt.
 		exp.attachedOnce = true
 		att = nil
 	} else {
+		// Another connector, or none: a target reached through the old
+		// one means nothing through the new.
+		s.target = ""
 		s.attached = nil
 	}
 	s.mu.Unlock()
