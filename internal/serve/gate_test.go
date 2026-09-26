@@ -9,51 +9,58 @@ import (
 	"github.com/pion/rtp"
 )
 
-func TestH264KeyStart(t *testing.T) {
+func TestH264Kind(t *testing.T) {
 	cases := []struct {
 		name    string
 		payload []byte
-		want    bool
+		want    unitKind
 	}{
-		{"idr", []byte{0x65, 0x88}, true},
-		{"sps", []byte{0x67, 0x42}, true},
-		{"pps", []byte{0x68, 0xce}, true},
-		{"non-idr slice", []byte{0x41, 0x9a}, false},
-		{"sei", []byte{0x06, 0x05}, false},
-		{"stap-a with sps", []byte{0x78, 0x00, 0x02, 0x67, 0x42, 0x00, 0x02, 0x68, 0xce}, true},
-		{"stap-a without key", []byte{0x78, 0x00, 0x02, 0x41, 0x9a, 0x00, 0x01, 0x06}, false},
-		{"stap-a truncated", []byte{0x78, 0x00, 0x09, 0x41}, false},
-		{"fu-a start idr", []byte{0x7c, 0x85, 0x88}, true},
-		{"fu-a middle idr", []byte{0x7c, 0x05, 0x88}, false},
-		{"fu-a start non-idr", []byte{0x7c, 0x81, 0x9a}, false},
-		{"empty", nil, false},
+		{"idr", []byte{0x65, 0x88}, unitKey},
+		{"sps", []byte{0x67, 0x42}, unitKey},
+		{"pps", []byte{0x68, 0xce}, unitKey},
+		{"non-idr slice", []byte{0x41, 0x9a}, unitFrame},
+		{"sei", []byte{0x06, 0x05}, unitOther},
+		{"access unit delimiter", []byte{0x09, 0xf0}, unitOther},
+		{"stap-a with sps", []byte{0x78, 0x00, 0x02, 0x67, 0x42, 0x00, 0x02, 0x68, 0xce}, unitKey},
+		{"stap-a sei then idr", []byte{0x78, 0x00, 0x02, 0x06, 0x05, 0x00, 0x02, 0x65, 0x88}, unitKey},
+		{"stap-a sei then slice", []byte{0x78, 0x00, 0x02, 0x06, 0x05, 0x00, 0x02, 0x41, 0x9a}, unitFrame},
+		{"stap-a sei only", []byte{0x78, 0x00, 0x02, 0x06, 0x05}, unitOther},
+		{"stap-a truncated", []byte{0x78, 0x00, 0x09, 0x41}, unitOther},
+		{"fu-a start idr", []byte{0x7c, 0x85, 0x88}, unitKey},
+		{"fu-a middle idr", []byte{0x7c, 0x05, 0x88}, unitOther},
+		{"fu-a start non-idr", []byte{0x7c, 0x81, 0x9a}, unitFrame},
+		{"empty", nil, unitOther},
 	}
 	for _, tc := range cases {
-		if got := h264KeyStart(tc.payload); got != tc.want {
+		if got := h264Kind(tc.payload); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
 
-func TestH265KeyStart(t *testing.T) {
+func TestH265Kind(t *testing.T) {
 	nal := func(typ byte) []byte { return []byte{typ << 1, 0x01, 0xaf} }
 	cases := []struct {
 		name    string
 		payload []byte
-		want    bool
+		want    unitKind
 	}{
-		{"idr_w_radl", nal(19), true},
-		{"cra", nal(21), true},
-		{"vps", nal(32), true},
-		{"trail_r", nal(1), false},
-		{"ap with sps", append([]byte{48 << 1, 0x01, 0x00, 0x03}, nal(33)...), true},
-		{"ap without key", append([]byte{48 << 1, 0x01, 0x00, 0x03}, nal(1)...), false},
-		{"fu start idr", []byte{49 << 1, 0x01, 0x80 | 19, 0xaf}, true},
-		{"fu middle idr", []byte{49 << 1, 0x01, 19, 0xaf}, false},
-		{"short", []byte{0x26}, false},
+		{"idr_w_radl", nal(19), unitKey},
+		{"cra", nal(21), unitKey},
+		{"vps", nal(32), unitKey},
+		{"trail_r", nal(1), unitFrame},
+		{"prefix sei", nal(39), unitOther},
+		{"access unit delimiter", nal(35), unitOther},
+		{"ap with sps", append([]byte{48 << 1, 0x01, 0x00, 0x03}, nal(33)...), unitKey},
+		{"ap without key", append([]byte{48 << 1, 0x01, 0x00, 0x03}, nal(1)...), unitFrame},
+		{"ap sei only", append([]byte{48 << 1, 0x01, 0x00, 0x03}, nal(39)...), unitOther},
+		{"fu start idr", []byte{49 << 1, 0x01, 0x80 | 19, 0xaf}, unitKey},
+		{"fu start trail", []byte{49 << 1, 0x01, 0x80 | 1, 0xaf}, unitFrame},
+		{"fu middle idr", []byte{49 << 1, 0x01, 19, 0xaf}, unitOther},
+		{"short", []byte{0x26}, unitOther},
 	}
 	for _, tc := range cases {
-		if got := h265KeyStart(tc.payload); got != tc.want {
+		if got := h265Kind(tc.payload); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -112,6 +119,68 @@ func TestGateDropsWholeFramesAndResumesAtKeyframe(t *testing.T) {
 	}
 	if ok, _ := tr.admit(vpkt(12, 21000, 0x65), true, time.Second, now); ok {
 		t.Fatal("IDR admitted while still congested")
+	}
+}
+
+// A hardware encoder's keyframe, as ffmpeg's RTP muxer sends it with the
+// parameter sets in the SDP: a supplemental unit (SEI) as a packet of its
+// own, then the IDR slice in fragments. The gate must recognise the
+// keyframe by the slice, not give up at the SEI.
+func TestGateResumesAtAKeyframeThatBeginsWithAnSEI(t *testing.T) {
+	tr := videoTrack()
+	now := time.Now()
+	// Frame 1 begins while congested: dropping.
+	if ok, _ := tr.admit(vpkt(1, 3000, 0x06, 0x05), true, 2*time.Second, now); ok {
+		t.Fatal("SEI admitted while congested")
+	}
+	if ok, _ := tr.admit(vpkt(2, 3000, 0x41, 0x9a), true, 2*time.Second, now); ok {
+		t.Fatal("slice admitted while congested")
+	}
+	// Caught up. Frame 2 is a P-frame behind an SEI: neither packet passes.
+	if ok, _ := tr.admit(vpkt(3, 6000, 0x06, 0x05), false, 0, now); ok {
+		t.Fatal("resumed on an SEI")
+	}
+	if ok, _ := tr.admit(vpkt(4, 6000, 0x41, 0x9a), false, 0, now); ok {
+		t.Fatal("resumed on a non-keyframe behind an SEI")
+	}
+	// Frame 3 is the keyframe: SEI, then the IDR in two fragments. The SEI
+	// goes with the dropped frames; the slice resumes the stream.
+	if ok, _ := tr.admit(vpkt(5, 9000, 0x06, 0x05), false, 0, now.Add(time.Second)); ok {
+		t.Fatal("the keyframe's SEI was admitted ahead of the decision")
+	}
+	ok, ended := tr.admit(vpkt(6, 9000, 0x7c, 0x85, 0x88), false, 0, now.Add(time.Second))
+	if !ok || ended == nil {
+		t.Fatalf("resume at the IDR fragment: ok=%v ended=%v", ok, ended)
+	}
+	if ended.frames != 3 || ended.packets != 5 || ended.over != time.Second {
+		t.Fatalf("episode %+v", *ended)
+	}
+	if ok, ended := tr.admit(vpkt(7, 9000, 0x7c, 0x45, 0x88), false, 0, now); !ok || ended != nil {
+		t.Fatal("rest of the IDR")
+	}
+	if ok, _ := tr.admit(vpkt(8, 12000, 0x06, 0x05), false, 0, now); !ok {
+		t.Fatal("next frame's SEI dropped while open")
+	}
+}
+
+// A keyframe cut into several slices resumes the stream at its first slice
+// or not at all: a later slice would leave the decoder a frame with a piece
+// missing.
+func TestGateDoesNotResumeMidKeyframe(t *testing.T) {
+	tr := videoTrack()
+	now := time.Now()
+	tr.admit(vpkt(1, 3000, 0x41), true, 2*time.Second, now)
+	// The keyframe's first slice comes while still congested; the second
+	// once caught up.
+	if ok, _ := tr.admit(vpkt(2, 6000, 0x65, 0x88), true, time.Second, now); ok {
+		t.Fatal("IDR admitted while congested")
+	}
+	if ok, _ := tr.admit(vpkt(3, 6000, 0x65, 0x88), false, 0, now); ok {
+		t.Fatal("resumed at the keyframe's second slice")
+	}
+	// The next keyframe, whole, does.
+	if ok, ended := tr.admit(vpkt(4, 9000, 0x65, 0x88), false, 0, now); !ok || ended == nil {
+		t.Fatal("did not resume at the next keyframe")
 	}
 }
 
