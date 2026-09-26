@@ -1,0 +1,151 @@
+# Reproducible, signed releases. VERIFY.md explains how to check one.
+#
+# Two kinds of artifact, both rebuildable from the Go module proxy with a
+# pinned toolchain and no per-build inputs:
+#
+#   - the connector archives and the container image: goreleaser builds them
+#     in proxy mode (a scratch module named after the build id requiring
+#     github.com/FemLed/masseuse-camlink at the tag), so the binary embeds
+#     this module's version and sum.golang.org hash;
+#   - the raw gateway binaries: produced by the release workflow with the one
+#     command the enclave image and anyone else can repeat,
+#     `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@vX.Y.Z`,
+#     and handed to goreleaser as extra files so they are listed in
+#     checksums.txt, signed and covered by the provenance like everything
+#     else. (A goreleaser proxy build embeds a different main module and
+#     would not be byte-identical to `go install`; the `reproduce` job in
+#     .github/workflows/release.yml checks that these are.)
+version: 2
+project_name: masseuse-camlink
+
+gomod:
+  proxy: true
+  mod: mod
+  env:
+    - GOPROXY=https://proxy.golang.org,direct
+    - GOSUMDB=sum.golang.org
+    - GOFLAGS=-mod=mod
+
+env:
+  - CGO_ENABLED=0
+  - GOTOOLCHAIN=go1.27.1
+
+builds:
+  - id: connector
+    main: ./cmd/masseuse-camlink
+    binary: masseuse-camlink
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w -buildid=
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64, arm]
+    goarm: ["7"]
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+
+archives:
+  - id: connector
+    ids: [connector]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - VERIFY.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  extra_files:
+    # masseuse-camlink-gateway_<version>_linux_<arch>, written by the
+    # workflow's "go install the gateway" step (see the header).
+    - glob: ./gateway-bin/*
+
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    output: true
+
+dockers_v2:
+  - id: image
+    ids: [connector]
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/femled/masseuse-camlink
+    tags:
+      - "v{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+      - linux/arm/v7
+    sbom: true
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Home camera connector for masseuse.ai"
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: Apache-2.0
+    annotations:
+      org.opencontainers.image.description: "Home camera connector for masseuse.ai"
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: Apache-2.0
+
+docker_signs:
+  - id: image
+    cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+    output: true
+
+release:
+  github:
+    owner: FemLed
+    name: masseuse-camlink
+  prerelease: auto
+  extra_files:
+    - glob: ./gateway-bin/*
+  footer: |
+    ## Verify
+
+    ```sh
+    scripts/verify-release.sh {{ .Tag }}
+    ```
+
+    Every archive and the raw gateway binaries are listed in `checksums.txt`,
+    which is signed keyless by this repository's release workflow
+    (`checksums.txt.sigstore.json`). `multiple.intoto.jsonl` is SLSA
+    provenance for all of them. The container image
+    `ghcr.io/femled/masseuse-camlink:{{ .Tag }}` is signed by digest and
+    carries an SBOM and its own provenance. See VERIFY.md for the commands
+    and for rebuilding the binaries byte for byte.
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^ci:"

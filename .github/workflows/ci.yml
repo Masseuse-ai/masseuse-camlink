@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # The exact toolchain, not a minimum: go.mod's `go` line is a floor, and a
+  # newer local Go would otherwise be used silently. Releases pin the same.
+  GOTOOLCHAIN: go1.27.1
+  GOFLAGS: -mod=mod
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - name: go vet
+        run: go vet ./...
+      - name: go mod tidy is a no-op
+        run: |
+          cp go.mod /tmp/go.mod && cp go.sum /tmp/go.sum
+          go mod tidy
+          diff -u /tmp/go.mod go.mod && diff -u /tmp/go.sum go.sum
+      - name: go test -race
+        run: go test -race -count=1 ./...
+      - name: fuzz smoke
+        run: go test -run=^$ -fuzz=FuzzDecode -fuzztime=20s ./internal/frame/
+      - name: build
+        run: |
+          mkdir -p bin
+          go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o bin/ ./cmd/...
+          ./bin/masseuse-camlink --version
+          ./bin/masseuse-camlink-gateway --version
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod
+          go-package: ./...

@@ -1,0 +1,8 @@
+/dist/
+/bin/
+/gateway-bin/
+/release-v*/
+*.test
+*.out
+testdata/fuzz/
+.DS_Store

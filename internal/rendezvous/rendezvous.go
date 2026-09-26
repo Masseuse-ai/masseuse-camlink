@@ -1,0 +1,289 @@
+// Package rendezvous is the connector's client for the masseuse.ai service
+// (docs/PROTOCOL.md, section 2): POST /api/camlink/hello with a signed
+// identity, then hold GET /api/camlink/events open and dispatch its events.
+// It reconnects forever with jittered exponential backoff.
+package rendezvous
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math/rand/v2"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/FemLed/masseuse-camlink/internal/identity"
+)
+
+// Dial is the service's instruction to open a tunnel.
+type Dial struct {
+	SessionID  string
+	Origin     string
+	Ticket     string
+	TicketHash string
+	ExpiresAt  time.Time
+}
+
+// Handler receives events. Methods are called from the client's goroutine,
+// one at a time; they must not block for long.
+type Handler interface {
+	OnCode(code string, expiresAt time.Time)
+	OnPaired(phoneTokenHash string)
+	OnDial(d Dial)
+	OnClear(sessionID, reason string)
+	// OnOnline reports whether the event stream is attached.
+	OnOnline(online bool)
+}
+
+// Client talks to one service.
+type Client struct {
+	Service  string
+	Identity *identity.Identity
+	Version  string
+	HTTP     *http.Client
+	Logger   *slog.Logger
+	// MinBackoff and MaxBackoff bound the reconnect delay; 0 means 1 s / 60 s.
+	MinBackoff, MaxBackoff time.Duration
+	// IdleTimeout ends a stream that sends nothing (not even keepalives) for
+	// this long; 0 means 60 s.
+	IdleTimeout time.Duration
+}
+
+type helloResponse struct {
+	StreamToken     string `json:"streamToken"`
+	Code            string `json:"code"`
+	CodeExpiresAtMs int64  `json:"codeExpiresAtMs"`
+}
+
+// StatusError is a non-2xx answer from the service.
+type StatusError struct {
+	Status int
+	Body   string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("service answered %d: %s", e.Status, e.Body)
+}
+
+func (c *Client) log() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default()
+}
+
+func (c *Client) http() *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	return &http.Client{Timeout: 0}
+}
+
+// Run hellos, streams and reconnects until ctx ends.
+func (c *Client) Run(ctx context.Context, h Handler) error {
+	minB, maxB := c.MinBackoff, c.MaxBackoff
+	if minB == 0 {
+		minB = time.Second
+	}
+	if maxB == 0 {
+		maxB = 60 * time.Second
+	}
+	backoff := minB
+	for {
+		start := time.Now()
+		err := c.once(ctx, h)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Since(start) > time.Minute {
+			backoff = minB
+		}
+		delay := backoff/2 + time.Duration(rand.Int64N(int64(backoff/2)+1))
+		var se *StatusError
+		if errors.As(err, &se) && se.Status == http.StatusTooManyRequests {
+			delay = max(delay, 30*time.Second)
+		}
+		c.log().Warn("rendezvous: disconnected", "err", err, "retryIn", delay.Round(time.Second).String())
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		backoff = min(backoff*2, maxB)
+	}
+}
+
+func (c *Client) once(ctx context.Context, h Handler) error {
+	hello, err := c.Hello(ctx)
+	if err != nil {
+		return err
+	}
+	if hello.Code != "" {
+		h.OnCode(hello.Code, time.UnixMilli(hello.CodeExpiresAtMs))
+	}
+	return c.Stream(ctx, hello.StreamToken, h)
+}
+
+// Hello authenticates and returns a stream token.
+func (c *Client) Hello(ctx context.Context) (*helloResponse, error) {
+	ts := time.Now().Unix()
+	key := c.Identity.PublicKeyString()
+	paired := c.Identity.PairedHashes()
+	body, _ := json.Marshal(map[string]any{
+		"key":          key,
+		"ts":           ts,
+		"pairedPhones": paired,
+		"version":      c.Version,
+		"sig":          b64(c.Identity.Sign(identity.HelloMessage(ts, key, paired))),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Service, "/")+"/api/camlink/hello", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "masseuse-camlink/"+c.Version)
+	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, err := c.http().Do(req.WithContext(hctx))
+	if err != nil {
+		return nil, fmt.Errorf("hello: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != http.StatusOK {
+		return nil, &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
+	}
+	var out helloResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("hello: %w", err)
+	}
+	if out.StreamToken == "" {
+		return nil, errors.New("hello: no streamToken")
+	}
+	return &out, nil
+}
+
+// Stream attaches to the event stream and dispatches until it ends.
+func (c *Client) Stream(ctx context.Context, streamToken string, h Handler) error {
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(sctx, http.MethodGet, strings.TrimRight(c.Service, "/")+"/api/camlink/events", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+streamToken)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("User-Agent", "masseuse-camlink/"+c.Version)
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return fmt.Errorf("events: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
+	}
+	h.OnOnline(true)
+	defer h.OnOnline(false)
+
+	idle := c.IdleTimeout
+	if idle == 0 {
+		idle = 60 * time.Second
+	}
+	timer := time.AfterFunc(idle, cancel)
+	defer timer.Stop()
+
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	var event string
+	var data strings.Builder
+	for sc.Scan() {
+		timer.Reset(idle)
+		line := sc.Text()
+		switch {
+		case line == "":
+			if event != "" || data.Len() > 0 {
+				c.dispatch(h, event, data.String())
+			}
+			event = ""
+			data.Reset()
+		case strings.HasPrefix(line, ":"):
+			// keepalive comment
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(line[6:])
+		case strings.HasPrefix(line, "data:"):
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+	if err := sc.Err(); err != nil && ctx.Err() == nil {
+		if sctx.Err() != nil {
+			return errors.New("events: stream went silent")
+		}
+		return fmt.Errorf("events: %w", err)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return errors.New("events: stream ended")
+}
+
+func (c *Client) dispatch(h Handler, event, data string) {
+	switch event {
+	case "code":
+		var v struct {
+			Code        string `json:"code"`
+			ExpiresAtMs int64  `json:"expiresAtMs"`
+		}
+		if json.Unmarshal([]byte(data), &v) == nil && v.Code != "" {
+			h.OnCode(v.Code, time.UnixMilli(v.ExpiresAtMs))
+		}
+	case "paired":
+		var v struct {
+			Hash string `json:"phoneTokenHash"`
+		}
+		if json.Unmarshal([]byte(data), &v) == nil && v.Hash != "" {
+			h.OnPaired(v.Hash)
+		}
+	case "dial":
+		var v struct {
+			SessionID   string `json:"sessionId"`
+			Origin      string `json:"origin"`
+			Ticket      string `json:"ticket"`
+			TicketHash  string `json:"ticketHash"`
+			ExpiresAtMs int64  `json:"expiresAtMs"`
+		}
+		if json.Unmarshal([]byte(data), &v) != nil || v.Origin == "" || v.Ticket == "" || v.TicketHash == "" {
+			c.log().Warn("rendezvous: malformed dial event")
+			return
+		}
+		h.OnDial(Dial{SessionID: v.SessionID, Origin: v.Origin, Ticket: v.Ticket, TicketHash: v.TicketHash, ExpiresAt: time.UnixMilli(v.ExpiresAtMs)})
+	case "clear":
+		var v struct {
+			SessionID string `json:"sessionId"`
+			Reason    string `json:"reason"`
+		}
+		_ = json.Unmarshal([]byte(data), &v)
+		h.OnClear(v.SessionID, v.Reason)
+	default:
+		c.log().Debug("rendezvous: ignoring event", "event", event)
+	}
+}
+
+func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
