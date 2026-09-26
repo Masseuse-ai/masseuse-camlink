@@ -579,15 +579,24 @@ it changes:
 
 | type | fields | when |
 |---|---|---|
-| `device` | `kind`, `label`, `connected`, `capabilities`; `id` once a unit has been found; `held` when true; `units` once listed | the selected device is found or lost, or the units in reach change |
+| `device` | `kind`, `label`, `connected`, `capabilities`; `id` once a unit has been found; `held` when true; `units` once listed; `reason` while not connected | the selected device is found or lost, or the units in reach change |
 
 `id` is what the system calls the selected unit (a Bluetooth peripheral's
 identifier, a serial port path): the string a `device_select` names.
 `held` says another program on this computer has the unit open (7.1).
 `units` is the list of units in reach, the selected one included, each
 `{id, kind, label, held}`; a connector that has not listed yet sends none.
-A service that knows none of the three drops them and reads the message as
-before. A `device` report describes a unit the connector has opened at
+`reason`, sent while `connected` is false, is why the unit went, so the
+service can say what to do about it: `idle_off` (the unit switched itself
+off after sitting idle at zero, as a Mastago does after a few minutes; its
+power button brings it back), `output_off` (switched itself off after
+running continuously for too long), `battery_off`, `button_off` (switched
+off at its own button), `link_lost` (the Bluetooth link ended without a
+word from the unit), `stopped_answering` (a unit that was answering fell
+silent), `let_go` (the connector let this unit go for the one selected,
+7.1). The connector reconnects on its own whichever it was, once the unit
+is on and in reach. A service that knows none of the four fields drops them
+and reads the message as before. A `device` report describes a unit the connector has opened at
 least once (connected now or not); until one has been (every unit in reach
 held by another program, a first scan that missed it), a listing is not
 reported on its own and rides with the report of the first unit that

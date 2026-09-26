@@ -280,8 +280,9 @@ func (s *Session) UnitsChanged(_ context.Context, _ []Unit) {
 }
 
 // deviceMessage is the connector-level `device` report (PROTOCOL.md 7.3):
-// the selected unit, with `id` once one has been found and `units`, the
-// units in reach, once listed. A service that knows neither drops them.
+// the selected unit, with `id` once one has been found, `units`, the
+// units in reach, once listed, and `reason` why it is not connected when
+// it is not. A service that knows neither drops them.
 // Nil when no unit has been opened yet (the descriptor has no kind): the
 // service reads a report without one as malformed and refuses the whole
 // post, and would go on refusing it.
@@ -295,6 +296,9 @@ func (s *Session) deviceMessage(d Descriptor) map[string]any {
 	}
 	if d.Held {
 		msg["held"] = true
+	}
+	if !d.Connected && d.Reason != "" {
+		msg["reason"] = d.Reason
 	}
 	if units := s.Runtime.Units(); units != nil {
 		msg["units"] = units

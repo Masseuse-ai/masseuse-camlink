@@ -185,9 +185,13 @@ func (d *Device) linkErrLocked() error {
 		return d.linkErr
 	}
 	if d.st.ShutdownReason != nil {
-		return fmt.Errorf("%w: the unit switched itself off (%s)", ErrLinkLost, ShutdownReason(*d.st.ShutdownReason))
+		code := *d.st.ShutdownReason
+		return &estim.LossError{
+			Reason: LossReason(code),
+			Err:    fmt.Errorf("%w: the unit switched itself off (%s)", ErrLinkLost, ShutdownReason(code)),
+		}
 	}
-	return ErrLinkLost
+	return &estim.LossError{Reason: estim.ReasonLinkLost, Err: ErrLinkLost}
 }
 
 // LinkError is why the link ended, or nil while it is up.

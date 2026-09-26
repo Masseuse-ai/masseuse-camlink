@@ -239,9 +239,29 @@ func (l *estimLink) deviceChanged(ctx context.Context, d estim.Descriptor) {
 		// The connector is exiting and let go of the device on purpose;
 		// the service is told, the person is not.
 	default:
-		l.out("Stimulation device disconnected.\n")
+		l.out("%s\n", disconnectedLine(d.Reason))
 	}
 	l.session.DeviceChanged(ctx, d)
+}
+
+// disconnectedLine is the console's word on a unit gone, by the reason the
+// connector knows (estim.Descriptor.Reason): what to do about it differs.
+func disconnectedLine(reason string) string {
+	switch reason {
+	case estim.ReasonIdleOff:
+		return "Stimulation device disconnected: it switched itself off after sitting idle at zero. Press its power button; it reconnects on its own."
+	case estim.ReasonOutputOff:
+		return "Stimulation device disconnected: it switched itself off after running for too long. Press its power button; it reconnects on its own."
+	case estim.ReasonBatteryOff:
+		return "Stimulation device disconnected: it switched itself off, battery low. Charge it; it reconnects on its own when it is on again."
+	case estim.ReasonButtonOff:
+		return "Stimulation device disconnected: it was switched off at its power button. It reconnects on its own when it is on again."
+	case estim.ReasonLinkLost:
+		return "Stimulation device disconnected: the link to it dropped. It reconnects on its own once it is in reach again."
+	case estim.ReasonLetGo:
+		return "Stimulation device let go for the unit selected."
+	}
+	return "Stimulation device disconnected."
 }
 
 // reportDevice repeats the device report after every hello: the service

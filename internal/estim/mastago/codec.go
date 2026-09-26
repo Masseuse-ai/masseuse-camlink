@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/FemLed/masseuse-camlink/internal/ble"
+	"github.com/FemLed/masseuse-camlink/internal/estim"
 )
 
 // GATT identifiers.
@@ -275,6 +276,22 @@ func ParseVolts(value string) (float64, bool) {
 func BatteryPercent(volts float64) int {
 	v := max(3.2, min(4.0, volts))
 	return int((v-3.2)/0.8*100 + 0.5)
+}
+
+// LossReason is the connector's Reason code (estim.Descriptor.Reason) for a
+// "+QPOWD:<code>" auto-off: what the person does about it depends on it.
+func LossReason(code int) string {
+	switch code {
+	case 0:
+		return estim.ReasonIdleOff
+	case 1:
+		return estim.ReasonOutputOff
+	case 2:
+		return estim.ReasonBatteryOff
+	case 3:
+		return estim.ReasonButtonOff
+	}
+	return estim.ReasonLinkLost
 }
 
 // ShutdownReason names a "+QPOWD:<code>" auto-off reason.

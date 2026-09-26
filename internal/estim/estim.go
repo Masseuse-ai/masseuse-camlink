@@ -107,6 +107,47 @@ type Descriptor struct {
 	// the connector shares its link (a Bluetooth unit the vendor's app
 	// holds): that program's commands and the service's would collide.
 	Held bool `json:"held,omitempty"`
+	// Reason says why the unit is not connected, when it is not (one of
+	// the Reason* codes; PROTOCOL.md 7.3): what the person should do
+	// depends on it. A unit that switched itself off comes back at its
+	// power button; a link that dropped comes back on its own.
+	Reason string `json:"reason,omitempty"`
+}
+
+// Why a unit is not connected (Descriptor.Reason). The unit's own
+// shutdowns, as it reported them before the link ended; the link ending
+// without a word; a unit that stopped answering the connector; a unit the
+// connector let go of for another (7.1).
+const (
+	ReasonIdleOff          = "idle_off"
+	ReasonOutputOff        = "output_off"
+	ReasonBatteryOff       = "battery_off"
+	ReasonButtonOff        = "button_off"
+	ReasonLinkLost         = "link_lost"
+	ReasonStoppedAnswering = "stopped_answering"
+	ReasonLetGo            = "let_go"
+)
+
+// LossError is a driver's error for a link that ended, naming why in a
+// Reason code the connector reports (Descriptor.Reason). Drivers wrap the
+// underlying error; the Runtime reads the code with errors.As.
+type LossError struct {
+	Reason string
+	Err    error
+}
+
+func (e *LossError) Error() string { return e.Err.Error() }
+func (e *LossError) Unwrap() error { return e.Err }
+
+// LossReason is the Reason code behind err: a LossError's, or
+// ReasonStoppedAnswering for any other failure of a device that was
+// answering before.
+func LossReason(err error) string {
+	var loss *LossError
+	if errors.As(err, &loss) && loss.Reason != "" {
+		return loss.Reason
+	}
+	return ReasonStoppedAnswering
 }
 
 // Unit is one stimulation unit this computer can see, served or not: what

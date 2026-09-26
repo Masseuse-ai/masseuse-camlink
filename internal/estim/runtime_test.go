@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/estim"
+	"github.com/FemLed/masseuse-camlink/internal/estim/mastago"
 	"github.com/FemLed/masseuse-camlink/internal/estim/mastago/fakeunit"
 )
 
@@ -312,6 +313,10 @@ func TestRuntimeFaultAndReconnect(t *testing.T) {
 	if got := seen(); len(got) != 2 || got[1].Connected || got[1].Kind != estim.KindMastago {
 		t.Fatalf("OnDevice calls = %+v", got)
 	}
+	// A unit that went quiet without a word: stopped answering.
+	if got := seen(); got[1].Reason != estim.ReasonStoppedAnswering || rt.Descriptor().Reason != estim.ReasonStoppedAnswering {
+		t.Fatalf("reason after a silent unit = %q", got[1].Reason)
+	}
 	// While the unit is silent, reconnecting fails quietly.
 	if err := rt.Open(ctx); err == nil {
 		t.Fatal("open succeeded against a silent device")
@@ -324,8 +329,55 @@ func TestRuntimeFaultAndReconnect(t *testing.T) {
 	if !rt.Connected() || rt.Armed() || !rt.CancelLatched() {
 		t.Fatal("reconnected device must not be armed")
 	}
-	if got := seen(); len(got) != 3 || !got[2].Connected {
+	if got := seen(); len(got) != 3 || !got[2].Connected || got[2].Reason != "" {
 		t.Fatalf("OnDevice calls = %+v", got)
+	}
+}
+
+func TestRuntimeNamesWhyTheUnitWent(t *testing.T) {
+	ctx := context.Background()
+	u := fakeunit.New("id-1", "MASTOGO G-12AB")
+	rt, seen := watched(t, u)
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The unit switched itself off after sitting idle at zero (+QPOWD:0),
+	// as a Mastago does after a few minutes: the report says so, and what
+	// the person does about it follows from that (its power button).
+	u.AutoOff(0)
+	deadline := time.Now().Add(2 * time.Second)
+	for rt.HealthCheck(ctx) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if rt.Connected() {
+		t.Fatal("the unit is still held after switching itself off")
+	}
+	d := rt.Descriptor()
+	if d.Connected || d.Reason != estim.ReasonIdleOff {
+		t.Fatalf("descriptor after the auto-off = %+v", d)
+	}
+	if got := seen(); got[len(got)-1].Reason != estim.ReasonIdleOff {
+		t.Fatalf("OnDevice after the auto-off = %+v", got[len(got)-1])
+	}
+	// Back on: connected again, no reason.
+	u.PowerOn()
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := rt.Descriptor(); !d.Connected || d.Reason != "" {
+		t.Fatalf("descriptor after the unit is back = %+v", d)
+	}
+	// The other shutdowns and the bare link loss have their codes.
+	for code, want := range map[int]string{1: estim.ReasonOutputOff, 2: estim.ReasonBatteryOff, 3: estim.ReasonButtonOff, 9: estim.ReasonLinkLost} {
+		if got := mastago.LossReason(code); got != want {
+			t.Fatalf("LossReason(%d) = %q, want %q", code, got, want)
+		}
+	}
+	if estim.LossReason(errors.New("anything else")) != estim.ReasonStoppedAnswering {
+		t.Fatal("an unnamed failure is a unit that stopped answering")
+	}
+	if estim.LossReason(&estim.LossError{Reason: estim.ReasonLinkLost, Err: errors.New("x")}) != estim.ReasonLinkLost {
+		t.Fatal("a LossError names its reason")
 	}
 }
 

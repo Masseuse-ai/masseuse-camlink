@@ -542,7 +542,7 @@ func TestSessionServiceDetachAndDeviceReports(t *testing.T) {
 	rt.HealthCheck(ctx)
 	s.DeviceChanged(ctx, rt.Descriptor())
 	got = up.drain(ctx, s)
-	if d := find(got, "device"); d == nil || d["connected"] != false {
+	if d := find(got, "device"); d == nil || d["connected"] != false || d["reason"] != estim.ReasonIdleOff {
 		t.Fatalf("device lost report = %v", d)
 	}
 	if a := find(got, "armed"); a == nil || a["armed"] != false {

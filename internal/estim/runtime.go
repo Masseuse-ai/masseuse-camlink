@@ -432,6 +432,10 @@ func (r *Runtime) SelectUnit(ctx context.Context, unit string) error {
 	r.st.Unlock()
 	if held != nil && unit != "" && !isUnit(held, unit) {
 		r.log().Info("estim: another unit selected; letting this one go", "device", held.Label(), "port", held.Port(), "selected", unit)
+		// The report Close sends says why this unit is gone: for another.
+		r.st.Lock()
+		r.last.Reason = ReasonLetGo
+		r.st.Unlock()
 		if err := r.Close(ctx); err != nil {
 			r.log().Warn("estim: letting the unit go", "err", err)
 		}
@@ -458,6 +462,10 @@ func (r *Runtime) fault(err error) Driver {
 	failed := r.device
 	r.device = nil
 	r.lastError = truncate(err.Error(), 300)
+	// Why the unit went, for the `device` report: the driver's word when
+	// it has one (the unit's own shutdown, the link ending), otherwise a
+	// unit that stopped answering.
+	r.last.Reason = LossReason(err)
 	// Every safety-relevant field unknown, so the service's completeness
 	// check refuses to trust it.
 	r.lastStatus = Status{Connected: false, Port: r.lastStatus.Port, Mode: r.lastStatus.Mode, Power: r.lastStatus.Power, Error: String(r.lastError)}
