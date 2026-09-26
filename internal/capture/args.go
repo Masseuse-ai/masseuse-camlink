@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"strings"
 )
 
 // Encoder names accepted by Options.Encoder.
@@ -21,6 +20,10 @@ type Options struct {
 	// each. Mic "none" sends video only.
 	Camera string
 	Mic    string
+	// Fallback lets a named device that is not connected give way to the
+	// first of its kind (Source.Substitutions says which), for a remembered
+	// choice; a device named on the command line is an error when absent.
+	Fallback bool
 	// VideoSize is WxH; default 1280x720.
 	VideoSize string
 	// FPS is the capture rate; default 30.
@@ -123,13 +126,13 @@ func Args(goos string, o Options, cam Device, mic *Device, encoder, url string) 
 				"-map", "0:v:0", "-map", "1:a:0")
 		}
 	}
-	args = append(args, encoderArgs(encoder)...)
+	args = append(args, encoderArgs(encoder, h264Level(o.VideoSize, o.FPS))...)
 	gop := strconv.Itoa(2 * o.FPS)
+	// The rate-control buffer is one second of the bit rate: what a bit
+	// rate change (Reshape) may swing by before the next keyframe, and
+	// small enough that a low rung is really low.
 	args = append(args, "-pix_fmt", "yuv420p", "-r", fps, "-g", gop, "-force_key_frames", "expr:gte(t,n_forced*2)",
-		"-b:v", o.Bitrate, "-maxrate", o.Bitrate)
-	if buf := scaleRate(o.Bitrate, 2); buf != "" {
-		args = append(args, "-bufsize", buf)
-	}
+		"-b:v", o.Bitrate, "-maxrate", o.Bitrate, "-bufsize", o.Bitrate)
 	if mic != nil {
 		args = append(args, "-c:a", "libopus", "-ac", "1", "-ar", "48000", "-b:a", "64k", "-application", "audio")
 	} else {
@@ -140,31 +143,50 @@ func Args(goos string, o Options, cam Device, mic *Device, encoder, url string) 
 	return append(args, "-f", "rtsp", "-rtsp_transport", "tcp", "-pkt_size", "1200", url)
 }
 
-func encoderArgs(encoder string) []string {
+// encoderArgs selects the encoder. Profile and level are pinned where the
+// encoder lets them be, so the parameter sets the enclave learnt from the
+// SDP stay valid when the bit rate changes underneath (Reshape): left to
+// itself an encoder picks the level from the bit rate.
+func encoderArgs(encoder, level string) []string {
 	switch encoder {
 	case EncoderVideoToolbox:
-		return []string{"-c:v", EncoderVideoToolbox, "-realtime", "1", "-allow_sw", "1", "-profile:v", "main"}
+		return []string{"-c:v", EncoderVideoToolbox, "-realtime", "1", "-allow_sw", "1", "-profile:v", "main", "-level", level}
 	case EncoderMediaFound:
 		return []string{"-c:v", EncoderMediaFound, "-rate_control", "cbr", "-scenario", "video_conference"}
 	default:
-		return []string{"-c:v", EncoderX264, "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main"}
+		return []string{"-c:v", EncoderX264, "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main", "-level", level}
 	}
 }
 
-// scaleRate multiplies an ffmpeg rate ("2500k", "2.5M") by n, or returns ""
-// when it cannot read it.
-func scaleRate(rate string, n float64) string {
-	m := bitrateRe.FindStringSubmatch(rate)
-	if m == nil {
-		return ""
+// h264Level is the lowest H.264 level from 3.1 up that fits the picture
+// size and frame rate (macroblocks per frame and per second), so the level
+// depends on those alone and not on the bit rate.
+func h264Level(videoSize string, fps int) string {
+	var w, h int
+	if _, err := fmt.Sscanf(videoSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
+		return "3.1"
 	}
-	v, err := strconv.ParseFloat(m[1], 64)
-	if err != nil {
-		return ""
+	mbs := ((w + 15) / 16) * ((h + 15) / 16)
+	mbps := mbs * fps
+	for _, l := range h264Levels {
+		if mbs <= l.maxFrameMBs && mbps <= l.maxMBPerSec {
+			return l.name
+		}
 	}
-	v *= n
-	if v == float64(int64(v)) {
-		return strconv.FormatInt(int64(v), 10) + m[2]
-	}
-	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(v, 'f', 3, 64), "0"), ".") + m[2]
+	return h264Levels[len(h264Levels)-1].name
+}
+
+// h264Levels are the levels' limits (H.264 Annex A, table A-1), from 3.1.
+var h264Levels = []struct {
+	name        string
+	maxFrameMBs int
+	maxMBPerSec int
+}{
+	{"3.1", 3600, 108000},
+	{"3.2", 5120, 216000},
+	{"4.0", 8192, 245760},
+	{"4.2", 8704, 522240},
+	{"5.0", 22080, 589824},
+	{"5.1", 36864, 983040},
+	{"5.2", 36864, 2073600},
 }

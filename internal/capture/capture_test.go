@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,10 +35,13 @@ func TestMain(m *testing.M) {
 }
 
 func fakeFFmpeg(args []string) int {
-	url, encoder := args[len(args)-1], ""
+	url, encoder, bitrate := args[len(args)-1], "", ""
 	for i, a := range args {
 		if a == "-c:v" && i+1 < len(args) {
 			encoder = args[i+1]
+		}
+		if a == "-b:v" && i+1 < len(args) {
+			bitrate = args[i+1]
 		}
 	}
 	if os.Getenv("CAPTURE_FAKE_HW_FAILS") == "1" && encoder != EncoderX264 {
@@ -76,9 +80,12 @@ func fakeFFmpeg(args []string) int {
 		seq++
 		for _, m := range desc.Medias {
 			pt := m.Formats[0].PayloadType()
+			// The video payload carries the bit rate this ffmpeg was started
+			// with, after the IDR NAL header, so tests can see which
+			// generation a packet came from.
 			pkt := &rtp.Packet{
 				Header:  rtp.Header{Version: 2, Marker: true, PayloadType: pt, SequenceNumber: seq, Timestamp: uint32(seq) * 3000, SSRC: uint32(pt)},
-				Payload: []byte{0x65, 1, 2, 3},
+				Payload: append([]byte{0x65}, bitrate...),
 			}
 			if err := c.WritePacketRTP(m, pkt); err != nil {
 				return 1
@@ -226,6 +233,44 @@ func TestSelect(t *testing.T) {
 	}
 }
 
+func TestResolveFallsBackForARememberedDeviceOnly(t *testing.T) {
+	devs := parseAVFoundation(avfListing)
+	// Named on the command line and absent: an error, whatever else is there.
+	if _, _, _, err := Resolve(devs, Options{Camera: "Studio Cam 4K"}); !errors.Is(err, ErrNoDevice) {
+		t.Fatalf("flag naming an absent camera: err %v", err)
+	}
+	if _, _, _, err := Resolve(devs, Options{Mic: "USB Mic"}); !errors.Is(err, ErrNoDevice) {
+		t.Fatalf("flag naming an absent microphone: err %v", err)
+	}
+	// Remembered and absent: the first of its kind stands in, and says so.
+	cam, mic, subs, err := Resolve(devs, Options{Camera: "Studio Cam 4K", Mic: "USB Mic", Fallback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cam.ID != "0" || mic == nil || mic.ID != "0" {
+		t.Fatalf("cam %+v mic %+v", cam, mic)
+	}
+	if len(subs) != 2 || subs[0].Kind != Video || subs[0].Wanted != "Studio Cam 4K" || subs[0].Using.ID != "0" ||
+		subs[1].Kind != Audio || subs[1].Wanted != "USB Mic" || subs[1].Using.ID != "0" {
+		t.Fatalf("substitutions %+v", subs)
+	}
+	// Remembered and present: no substitution; "none" is not a device.
+	cam, mic, subs, err = Resolve(devs, Options{Camera: "FaceTime HD Camera", Mic: "none", Fallback: true})
+	if err != nil || cam.ID != "1" || mic != nil || subs != nil {
+		t.Fatalf("cam %+v mic %+v subs %+v err %v", cam, mic, subs, err)
+	}
+	// No device of the kind at all: the error stands even with the fallback.
+	var audioOnly []Device
+	for _, d := range devs {
+		if d.Kind == Audio {
+			audioOnly = append(audioOnly, d)
+		}
+	}
+	if _, _, _, err := Resolve(audioOnly, Options{Camera: "Studio Cam 4K", Fallback: true}); !errors.Is(err, ErrNoDevice) {
+		t.Fatalf("no cameras: err %v", err)
+	}
+}
+
 func TestArgs(t *testing.T) {
 	cam := Device{Kind: Video, ID: "0", Name: "Insta360 Link"}
 	mic := Device{Kind: Audio, ID: "1", Name: "Yeti"}
@@ -235,8 +280,9 @@ func TestArgs(t *testing.T) {
 	mac := join(Args("darwin", Options{}, cam, &mic, EncoderVideoToolbox, url))
 	for _, want := range []string{
 		"-f avfoundation -framerate 30 -video_size 1280x720 -thread_queue_size 512 -i 0:1",
-		"-c:v h264_videotoolbox -realtime 1", "-pix_fmt yuv420p -r 30 -g 60 -force_key_frames expr:gte(t,n_forced*2)",
-		"-b:v 2500k -maxrate 2500k -bufsize 5000k", "-c:a libopus -ac 1 -ar 48000 -b:a 64k",
+		"-c:v h264_videotoolbox -realtime 1", "-profile:v main -level 3.1",
+		"-pix_fmt yuv420p -r 30 -g 60 -force_key_frames expr:gte(t,n_forced*2)",
+		"-b:v 2500k -maxrate 2500k -bufsize 2500k", "-c:a libopus -ac 1 -ar 48000 -b:a 64k",
 		"-f rtsp -rtsp_transport tcp -pkt_size 1200 " + url,
 	} {
 		if !strings.Contains(mac, want) {
@@ -251,21 +297,41 @@ func TestArgs(t *testing.T) {
 		Device{ID: "Insta360 Link"}, &Device{ID: "Microphone (Yeti)"}, EncoderMediaFound, url))
 	for _, want := range []string{
 		"-f dshow -rtbufsize 100M -framerate 25 -video_size 1920x1080 -thread_queue_size 512 -i video=Insta360 Link:audio=Microphone (Yeti)",
-		"-c:v h264_mf", "-g 50", "-b:v 4M -maxrate 4M -bufsize 8M",
+		"-c:v h264_mf", "-g 50", "-b:v 4M -maxrate 4M -bufsize 4M",
 	} {
 		if !strings.Contains(win, want) {
 			t.Errorf("windows args missing %q:\n%s", want, win)
 		}
+	}
+	if strings.Contains(win, "-level") {
+		t.Errorf("h264_mf takes no level:\n%s", win)
 	}
 
 	lin := join(Args("linux", Options{}, Device{ID: "/dev/video0"}, &Device{ID: "alsa_input.usb-yeti"}, EncoderX264, url))
 	for _, want := range []string{
 		"-f v4l2 -framerate 30 -video_size 1280x720 -thread_queue_size 512 -i /dev/video0",
 		"-f pulse -thread_queue_size 512 -i alsa_input.usb-yeti -map 0:v:0 -map 1:a:0",
-		"-c:v libx264 -preset veryfast -tune zerolatency",
+		"-c:v libx264 -preset veryfast -tune zerolatency -profile:v main -level 3.1",
 	} {
 		if !strings.Contains(lin, want) {
 			t.Errorf("linux args missing %q:\n%s", want, lin)
+		}
+	}
+	// The level follows the picture, not the bit rate.
+	hd := join(Args("linux", Options{VideoSize: "1920x1080", Bitrate: "600k"}, Device{ID: "/dev/video0"}, nil, EncoderX264, url))
+	if !strings.Contains(hd, "-level 4.0") {
+		t.Errorf("1080p30 level:\n%s", hd)
+	}
+	for _, tc := range []struct {
+		size string
+		fps  int
+		want string
+	}{
+		{"1280x720", 30, "3.1"}, {"640x480", 30, "3.1"}, {"1280x720", 60, "3.2"}, {"1920x1080", 30, "4.0"},
+		{"1920x1080", 60, "4.2"}, {"3840x2160", 30, "5.1"}, {"3840x2160", 60, "5.2"}, {"bad", 30, "3.1"},
+	} {
+		if got := h264Level(tc.size, tc.fps); got != tc.want {
+			t.Errorf("level for %s@%d: %s, want %s", tc.size, tc.fps, got, tc.want)
 		}
 	}
 
@@ -286,12 +352,6 @@ func TestOptionsValidate(t *testing.T) {
 			t.Errorf("%+v accepted", bad)
 		}
 	}
-	if got := scaleRate("2.5M", 2); got != "5M" {
-		t.Errorf("scaleRate %q", got)
-	}
-	if got := scaleRate("1250k", 2); got != "2500k" {
-		t.Errorf("scaleRate %q", got)
-	}
 	if HardwareEncoder("darwin") != EncoderVideoToolbox || HardwareEncoder("windows") != EncoderMediaFound || HardwareEncoder("linux") != EncoderX264 {
 		t.Error("hardware encoders")
 	}
@@ -308,10 +368,30 @@ func TestFindFFmpegMissing(t *testing.T) {
 	}
 }
 
+// playback is what a reader saw: packets by count, the latest video
+// payload, and whether video sequence numbers ever skipped.
+type playback struct {
+	n           atomic.Int64
+	lastVideo   atomic.Pointer[[]byte]
+	seqGaps     atomic.Int64
+	haveSeq     atomic.Bool
+	lastSeq     atomic.Uint32
+	firstVideoP atomic.Pointer[[]byte]
+}
+
+// video is the bit rate the latest video packet's publisher was started
+// with (fakeFFmpeg puts it after the NAL header).
+func (p *playback) video() string {
+	if b := p.lastVideo.Load(); b != nil && len(*b) > 1 {
+		return string((*b)[1:])
+	}
+	return ""
+}
+
 // play reads the connector's stream over the server's in-process dial.
-func play(t *testing.T, srv *serve.Server) (*gortsplib.Client, *atomic.Int64) {
+func play(t *testing.T, srv *serve.Server) (*gortsplib.Client, *playback) {
 	t.Helper()
-	var n atomic.Int64
+	p := &playback{}
 	c := &gortsplib.Client{
 		Scheme: "rtsps", Host: serve.Target, ReadTimeout: 10 * time.Second, Protocol: &tcp,
 		DialContext: func(context.Context, string, string) (net.Conn, error) { return srv.Dial() },
@@ -331,11 +411,23 @@ func play(t *testing.T, srv *serve.Server) (*gortsplib.Client, *atomic.Int64) {
 	if err := c.SetupAll(desc.BaseURL, desc.Medias); err != nil {
 		t.Fatal(err)
 	}
-	c.OnPacketRTPAny(func(*description.Media, format.Format, *rtp.Packet) { n.Add(1) })
+	c.OnPacketRTPAny(func(medi *description.Media, _ format.Format, pkt *rtp.Packet) {
+		p.n.Add(1)
+		if medi.Type != description.MediaTypeVideo {
+			return
+		}
+		payload := append([]byte(nil), pkt.Payload...)
+		p.lastVideo.Store(&payload)
+		if p.haveSeq.Load() && uint16(p.lastSeq.Load())+1 != pkt.SequenceNumber {
+			p.seqGaps.Add(1)
+		}
+		p.lastSeq.Store(uint32(pkt.SequenceNumber))
+		p.haveSeq.Store(true)
+	})
 	if _, err := c.Play(nil); err != nil {
 		t.Fatal(err)
 	}
-	return c, &n
+	return c, p
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {
@@ -382,7 +474,7 @@ func TestSourceStartsFFmpegAndPublishes(t *testing.T) {
 	// The enclave's DESCRIBE arrives while ffmpeg is still starting.
 	c, n := play(t, srv)
 	defer c.Close()
-	waitFor(t, "packets", func() bool { return n.Load() >= 20 })
+	waitFor(t, "packets", func() bool { return n.n.Load() >= 20 })
 	if !src.Publishing() || !srv.Stats().Publishing {
 		t.Fatal("not publishing")
 	}
@@ -401,8 +493,52 @@ func TestSourceStartsFFmpegAndPublishes(t *testing.T) {
 	src.Start()
 	c2, n2 := play(t, srv)
 	defer c2.Close()
-	waitFor(t, "packets again", func() bool { return n2.Load() >= 5 })
+	waitFor(t, "packets again", func() bool { return n2.n.Load() >= 5 })
 	src.Stop()
+}
+
+func TestReshapeRestartsTheEncoderWithoutLosingTheReader(t *testing.T) {
+	srv, src := testSource(t, Options{})
+	if src.Bitrate() != Defaults.Bitrate {
+		t.Fatalf("bitrate %q before anything", src.Bitrate())
+	}
+	// Idle: only the rate for the next start changes.
+	if src.Reshape("1600k") {
+		t.Fatal("reshaped an idle source")
+	}
+	if src.Bitrate() != "1600k" || src.Options().Bitrate != Defaults.Bitrate {
+		t.Fatalf("bitrate %q, configured %q", src.Bitrate(), src.Options().Bitrate)
+	}
+	src.Start()
+	c, p := play(t, srv)
+	defer c.Close()
+	waitFor(t, "packets at 1600k", func() bool { return p.n.Load() >= 20 && p.video() == "1600k" })
+
+	// Running: ffmpeg is replaced at the new rate; the reader keeps playing
+	// one stream, with no sequence gap and no reconnect.
+	if !src.Reshape("1000k") {
+		t.Fatal("did not reshape a running source")
+	}
+	waitFor(t, "packets at 1000k", func() bool { return p.video() == "1000k" })
+	if st := srv.Stats(); st.Generations != 2 || !st.Publishing {
+		t.Fatalf("stats %+v", st)
+	}
+	if srv.Readers() != 1 || !src.Publishing() || !src.Running() {
+		t.Fatalf("readers %d publishing %v running %v", srv.Readers(), src.Publishing(), src.Running())
+	}
+	if p.seqGaps.Load() != 0 {
+		t.Fatalf("%d sequence gaps across the handover", p.seqGaps.Load())
+	}
+	if src.Reshape("1000k") {
+		t.Fatal("reshaped to the same rate")
+	}
+
+	// Stop still turns everything off, and the next start is at the ceiling.
+	src.Stop()
+	waitFor(t, "publication end", func() bool { return !srv.Stats().Publishing })
+	if src.Bitrate() != Defaults.Bitrate {
+		t.Fatalf("bitrate %q after Stop", src.Bitrate())
+	}
 }
 
 func TestSourceFallsBackToSoftwareEncoder(t *testing.T) {
@@ -411,7 +547,7 @@ func TestSourceFallsBackToSoftwareEncoder(t *testing.T) {
 	src.Start()
 	c, n := play(t, srv)
 	defer c.Close()
-	waitFor(t, "packets", func() bool { return n.Load() >= 5 })
+	waitFor(t, "packets", func() bool { return n.n.Load() >= 5 })
 	if src.Encoder() != EncoderX264 {
 		t.Fatalf("encoder %s after hardware failure", src.Encoder())
 	}

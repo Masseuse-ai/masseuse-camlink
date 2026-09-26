@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,43 @@ import (
 
 // Subprotocol is the WebSocket subprotocol both ends require.
 const Subprotocol = "camlink.v1"
+
+const (
+	// DefaultSendBuffer is the TCP send buffer asked for on the tunnel
+	// connection: about three seconds of a 2.5 Mb/s stream, so a short
+	// uplink stall queues in the kernel without blocking the writer.
+	DefaultSendBuffer = 1 << 20
+	// ProbeInterval is how often the tunnel pings the gateway to measure how
+	// far behind the connection is (Tunnel.Backlog).
+	ProbeInterval = time.Second
+	// ProbeTimeout is how long a probe may go unanswered before the tunnel
+	// is closed as dead, so a connection the network silently dropped is
+	// redialed rather than held until TCP gives up. Longer than the
+	// gateway's own 30 s ping timeout, so the gateway decides first.
+	ProbeTimeout = 45 * time.Second
+)
+
+// StatusError is the gateway answering the tunnel request with an HTTP
+// status instead of upgrading: 401 or 403 mean it is not expecting this
+// connector with this ticket, which no retry will change.
+type StatusError struct {
+	Host   string
+	Status int
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("tunnel: %s answered %d", e.Host, e.Status) }
+
+// Refused reports whether the status means the ticket is not expected.
+func (e *StatusError) Refused() bool {
+	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden
+}
+
+// wantSendBuffer says whether to ask for SendBuffer on the tunnel's socket.
+// macOS and Windows start small (128 KiB and 64 KiB) and grow the buffer
+// only while the connection is moving, which a stall is not; Linux tunes it
+// up to 4 MiB on its own, and asking for a fixed size there would only cap
+// it at the system's much lower limit for explicit requests.
+func wantSendBuffer(goos string) bool { return goos != "linux" }
 
 // Attester verifies an origin's attestation and returns the TLS key to pin.
 type Attester interface {
@@ -61,8 +99,17 @@ type Dialer struct {
 	// connector's own camera stream, internal/serve). The target still has
 	// to pass the single-target policy; the function's connection is
 	// relayed in place of a TCP one, and its error refuses the stream.
-	Local  map[string]func() (net.Conn, error)
-	Logger *slog.Logger
+	Local map[string]func() (net.Conn, error)
+	// SendBuffer is the TCP send buffer asked for on the tunnel connection
+	// (best effort); 0 means DefaultSendBuffer.
+	SendBuffer int
+	// ProbeInterval is how often the backlog probe pings; 0 means
+	// ProbeInterval.
+	ProbeInterval time.Duration
+	// ProbeTimeout is how long a probe may go unanswered before the tunnel
+	// is given up as dead; 0 means ProbeTimeout.
+	ProbeTimeout time.Duration
+	Logger       *slog.Logger
 }
 
 // Tunnel is one attached tunnel.
@@ -74,6 +121,13 @@ type Tunnel struct {
 	sess   *mux.Session
 	policy targetPolicy
 	log    *slog.Logger
+
+	// The backlog probe: a ping every ProbeInterval, its round trip
+	// remembered; while one is outstanding, its age is the backlog.
+	probeMu     sync.Mutex
+	probeStart  time.Time // zero when no ping is outstanding
+	probeRTT    time.Duration
+	probeFailed bool
 }
 
 func (d *Dialer) logger() *slog.Logger {
@@ -108,10 +162,24 @@ func (d *Dialer) Dial(ctx context.Context, origin, ticket, ticketHash string) (*
 	hctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	sendBuffer := d.SendBuffer
+	if sendBuffer == 0 {
+		sendBuffer = DefaultSendBuffer
+	}
 	transport := &http.Transport{
 		TLSClientConfig:   attest.PinnedTLSConfig(d.RootCAs, hostname, res.SPKISHA256),
 		DisableKeepAlives: true,
 		Proxy:             nil, // never through a proxy: the pin is to this host
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			if tc, ok := conn.(*net.TCPConn); ok && wantSendBuffer(runtime.GOOS) {
+				_ = tc.SetWriteBuffer(sendBuffer) // best effort: the system may cap it
+			}
+			return conn, nil
+		},
 	}
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+ticket)
@@ -124,7 +192,7 @@ func (d *Dialer) Dial(ctx context.Context, origin, ticket, ticketHash string) (*
 	})
 	if err != nil {
 		if resp != nil {
-			return nil, fmt.Errorf("tunnel: %s answered %d", hostname, resp.StatusCode)
+			return nil, &StatusError{Host: hostname, Status: resp.StatusCode}
 		}
 		return nil, fmt.Errorf("tunnel: dial %s: %w", hostname, err)
 	}
@@ -147,7 +215,82 @@ func (d *Dialer) Dial(ctx context.Context, origin, ticket, ticketHash string) (*
 		<-sess.Done()
 		scancel()
 	}()
-	return &Tunnel{Origin: origin, Result: res, d: d, sess: sess, log: d.logger().With("origin", hostname)}, nil
+	t := &Tunnel{Origin: origin, Result: res, d: d, sess: sess, log: d.logger().With("origin", hostname)}
+	go t.probe(sctx, c)
+	return t, nil
+}
+
+// probe pings the gateway every ProbeInterval. A ping goes out through the
+// same connection as the stream, behind whatever is queued in it, so the
+// time it takes to be answered is how far behind the connection is; and
+// while one is unanswered its age is. The gate in the connector's own
+// stream (internal/serve) drops video by this number.
+//
+// The ping's context carries no deadline on purpose: the library closes
+// the connection when a write it has started outlives its context, and a
+// slow probe must never end the tunnel. A ping the library could not even
+// start within its own 5 s (the write lock held by a stalled data write)
+// fails without closing anything; that counts as a backlog of at least
+// that long until the next ping is answered.
+func (t *Tunnel) probe(ctx context.Context, c *websocket.Conn) {
+	interval, timeout := t.d.ProbeInterval, t.d.ProbeTimeout
+	if interval == 0 {
+		interval = ProbeInterval
+	}
+	if timeout == 0 {
+		timeout = ProbeTimeout
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		start := time.Now()
+		t.probeMu.Lock()
+		t.probeStart = start
+		t.probeMu.Unlock()
+		result := make(chan error, 1)
+		go func() { result <- c.Ping(ctx) }()
+		var err error
+		select {
+		case err = <-result:
+		case <-time.After(timeout):
+			t.log.Warn("tunnel: the enclave has not answered a probe; giving the connection up", "after", timeout.String())
+			t.sess.Close()
+			return
+		}
+		t.probeMu.Lock()
+		t.probeStart = time.Time{}
+		if err == nil {
+			t.probeRTT = time.Since(start)
+			t.probeFailed = false
+		} else {
+			t.probeFailed = true
+		}
+		t.probeMu.Unlock()
+		if err != nil && ctx.Err() == nil {
+			t.log.Debug("tunnel: probe failed", "err", err, "after", time.Since(start).Round(time.Millisecond).String())
+		}
+	}
+}
+
+// Backlog is how far behind the tunnel connection is: the last probe's
+// round trip, or the age of the probe still unanswered, whichever is
+// larger. A probe that failed counts as five seconds until one succeeds.
+func (t *Tunnel) Backlog() time.Duration {
+	t.probeMu.Lock()
+	defer t.probeMu.Unlock()
+	b := t.probeRTT
+	if t.probeFailed {
+		b = max(b, 5*time.Second)
+	}
+	if !t.probeStart.IsZero() {
+		b = max(b, time.Since(t.probeStart))
+	}
+	return b
 }
 
 func (d *Dialer) prove(conn net.Conn, host, ticketHash string, timeout time.Duration) error {

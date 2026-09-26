@@ -47,7 +47,7 @@ how to check the signer and how to compare them with a rebuild all the same.
 
 ```
 $ masseuse-camlink
-masseuse-camlink v0.5.0
+masseuse-camlink v0.5.1
 Identity 3fK9pQ2m… (state in /Users/you/Library/Application Support/masseuse-camlink)
 Camera: Insta360 Link + Yeti Stereo Microphone (1280x720 30 fps, h264_videotoolbox). It is on only while a session reads it.
 
@@ -85,11 +85,17 @@ $ masseuse-camlink -camera 1 -mic 1
 ```
 
 A number or (part of) a name works; `-mic none` sends video only. The
-choice is remembered, so later starts need no flags. `-video-size`, `-fps`,
-`-bitrate` and `-encoder` change the picture (defaults 1280x720, 30, 2500k
-and the hardware encoder, with libx264 as fallback). Leave the program
-running in the background, or set it up as a service; nothing else is
-needed.
+choice is remembered by name, so later starts need no flags and survive
+the devices being renumbered. If a remembered device is not plugged in at
+start, the first of its kind stands in and a line says so (`Insta360 Link
+is not connected; using FaceTime HD Camera.`); the remembered choice stays
+for the day it is back. `-video-size`, `-fps`, `-bitrate` and `-encoder`
+change the picture (defaults 1280x720, 30, 2500k and the hardware encoder,
+with libx264 as fallback). `-bitrate` is the ceiling: while the connection
+cannot keep up the program steps the video down to 64, 40 or 24 % of it
+and back up once it has been clear for a while (see below). Leave the
+program running in the background, or set it up as a service; nothing else
+is needed.
 
 ## Use a camera on your network
 
@@ -108,6 +114,42 @@ then pull the camera only while they are watching.
 Other flags: `-service https://masseuse.ai` (the rendezvous service),
 `-state-dir DIR` (where the identity key, pairings and camera choice live),
 `-log-level debug`, `-version`.
+
+## When the connection cannot keep up
+
+The program watches how far behind the enclave is. A slow or stalling
+uplink (Wi‑Fi hiccups, someone else's upload) shows up as these lines:
+
+```
+Connection congested: dropping video to keep up (backlog 1.4 s).
+Connection cannot keep up: video now 1.6 Mb/s
+Video back to 2.5 Mb/s
+```
+
+The first means whole video frames are being left out rather than queued,
+so what does arrive is current and the audio keeps flowing; the picture
+resumes at the next keyframe. The second is the bit rate ladder stepping
+down (64, 40, 24 % of `-bitrate`), the third the step back up after a few
+clean minutes. The session sees a rougher picture, not a frozen one. A hard
+stall of several seconds that happens to coincide with the enclave's
+periodic ping can still end the link; the program then reconnects as it
+always did, and the session picks the camera up again.
+
+Two lines say the link was ended on purpose and the program is waiting
+rather than redialing:
+
+```
+Camera link on hold: the enclave is not expecting this connector; waiting for the service.
+The enclave closed the camera link (session cleared); waiting for the service.
+```
+
+The first is a ticket the enclave no longer holds (the session moved on);
+the second is the session letting the camera go. Both are normal after
+"Use phone camera" or the end of a session; the next "Use this camera"
+brings a new ticket. While attached, the program also tells the service
+every 30 s that it is still there, so if the computer sleeps or drops off
+the network the app shows the camera offline within about 90 s rather than
+whenever the dead connection is noticed.
 
 ## How it stays private
 

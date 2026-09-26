@@ -1,7 +1,8 @@
 // Package rendezvous is the connector's client for the masseuse.ai service
 // (docs/PROTOCOL.md, section 2): POST /api/camlink/hello with a signed
-// identity, then hold GET /api/camlink/events open and dispatch its events.
-// It reconnects forever with jittered exponential backoff.
+// identity, then hold GET /api/camlink/events open and dispatch its events,
+// heartbeating while it is. It reconnects forever with jittered exponential
+// backoff.
 package rendezvous
 
 import (
@@ -85,7 +86,14 @@ type helloResponse struct {
 	StreamToken     string `json:"streamToken"`
 	Code            string `json:"code"`
 	CodeExpiresAtMs int64  `json:"codeExpiresAtMs"`
+	// HeartbeatEveryMs is how often to POST /api/camlink/heartbeat while
+	// the stream is attached; 0 means the service takes none.
+	HeartbeatEveryMs int64 `json:"heartbeatEveryMs"`
 }
+
+// ErrNoHeartbeats is returned by Heartbeat when the service has no such
+// route: an older service, which judges the connector by its stream alone.
+var ErrNoHeartbeats = errors.New("rendezvous: the service does not take heartbeats")
 
 // StatusError is a non-2xx answer from the service.
 type StatusError struct {
@@ -160,7 +168,67 @@ func (c *Client) once(ctx context.Context, h Handler) error {
 			}
 		}
 	}
-	return c.Stream(ctx, hello.StreamToken, h)
+	return c.Stream(ctx, hello.StreamToken, time.Duration(hello.HeartbeatEveryMs)*time.Millisecond, h)
+}
+
+// Heartbeat tells the service the connector is still there (docs/PROTOCOL.md,
+// section 2.4). It is signed like hello.
+func (c *Client) Heartbeat(ctx context.Context) error {
+	ts := time.Now().Unix()
+	key := c.Identity.PublicKeyString()
+	body, _ := json.Marshal(map[string]any{
+		"key": key,
+		"ts":  ts,
+		"sig": b64(c.Identity.Sign(identity.HeartbeatMessage(ts, key))),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Service, "/")+"/api/camlink/heartbeat", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "masseuse-camlink/"+c.Version)
+	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, err := c.http().Do(req.WithContext(hctx))
+	if err != nil {
+		return fmt.Errorf("heartbeat: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return ErrNoHeartbeats
+	case resp.StatusCode/100 != 2:
+		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
+	}
+	return nil
+}
+
+// heartbeats sends one every interval until ctx ends, or until the service
+// says it takes none. Failures are logged and retried at the next tick: the
+// service's remedy for a connector that cannot reach it is the same as for
+// one that is gone.
+func (c *Client) heartbeats(ctx context.Context, interval time.Duration) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		err := c.Heartbeat(ctx)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrNoHeartbeats):
+			c.log().Debug("rendezvous: the service takes no heartbeats")
+			return
+		case ctx.Err() != nil:
+			return
+		default:
+			c.log().Warn("rendezvous: heartbeat failed", "err", err)
+		}
+	}
 }
 
 // ReportSource tells the service which camera the connector offers. It is
@@ -239,8 +307,9 @@ func (c *Client) Hello(ctx context.Context) (*helloResponse, error) {
 	return &out, nil
 }
 
-// Stream attaches to the event stream and dispatches until it ends.
-func (c *Client) Stream(ctx context.Context, streamToken string, h Handler) error {
+// Stream attaches to the event stream and dispatches until it ends,
+// heartbeating every heartbeatEvery while attached (0: not at all).
+func (c *Client) Stream(ctx context.Context, streamToken string, heartbeatEvery time.Duration, h Handler) error {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	req, err := http.NewRequestWithContext(sctx, http.MethodGet, strings.TrimRight(c.Service, "/")+"/api/camlink/events", nil)
@@ -261,6 +330,10 @@ func (c *Client) Stream(ctx context.Context, streamToken string, h Handler) erro
 	}
 	h.OnOnline(true)
 	defer h.OnOnline(false)
+	if heartbeatEvery > 0 {
+		// Stops with the stream: sctx is cancelled on the way out.
+		go c.heartbeats(sctx, heartbeatEvery)
+	}
 
 	idle := c.IdleTimeout
 	if idle == 0 {

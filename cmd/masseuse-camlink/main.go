@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"github.com/FemLed/masseuse-camlink/internal/buildinfo"
 	"github.com/FemLed/masseuse-camlink/internal/capture"
 	"github.com/FemLed/masseuse-camlink/internal/identity"
+	"github.com/FemLed/masseuse-camlink/internal/mux"
 	"github.com/FemLed/masseuse-camlink/internal/oci"
 	"github.com/FemLed/masseuse-camlink/internal/provenance"
 	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
@@ -97,7 +99,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger)
+	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger, !sf.any())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, capture.ErrNoDevice) {
@@ -288,10 +290,20 @@ type manager struct {
 	log    *slog.Logger
 	dialer *tunnel.Dialer
 	cam    *camControl
+	// out is the console; nil means standard output.
+	out io.Writer
 
 	mu       sync.Mutex
 	tunnels  map[string]*active // by session id
 	lastCode string             // the code last shown, so a re-send is not printed twice
+}
+
+func (m *manager) printf(format string, args ...any) {
+	w := m.out
+	if w == nil {
+		w = os.Stdout
+	}
+	fmt.Fprintf(w, format, args...)
 }
 
 // CurrentSource tells the service which camera this connector offers.
@@ -305,6 +317,18 @@ func (m *manager) CurrentSource() (rendezvous.Source, bool) {
 type active struct {
 	dial   rendezvous.Dial
 	cancel context.CancelFunc
+	// done is closed when run has given up on this dial (the enclave
+	// refused the ticket or closed the link); a fresh dial then replaces it.
+	done chan struct{}
+}
+
+func (a *active) finished() bool {
+	select {
+	case <-a.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // OnCode shows a pairing code. The service sends the current code with
@@ -318,10 +342,10 @@ func (m *manager) OnCode(code string, expiresAt time.Time) {
 	if same {
 		return
 	}
-	fmt.Printf("\nPairing code: %s\n", code)
-	fmt.Println("Enter it in the masseuse.ai app: Camera > Computer or home camera.")
+	m.printf("\nPairing code: %s\n", code)
+	m.printf("Enter it in the masseuse.ai app: Camera > Computer or home camera.\n")
 	if !expiresAt.IsZero() && expiresAt.Year() > 2000 {
-		fmt.Printf("(valid until %s; a new one appears here when it expires)\n\n", expiresAt.Local().Format("15:04"))
+		m.printf("(valid until %s; a new one appears here when it expires)\n\n", expiresAt.Local().Format("15:04"))
 	}
 }
 
@@ -330,7 +354,7 @@ func (m *manager) OnPaired(hash string) {
 		m.log.Error("could not save pairing", "err", err)
 		return
 	}
-	fmt.Println("Paired with a phone. Sessions that use this camera connect automatically.")
+	m.printf("Paired with a phone. Sessions that use this camera connect automatically.\n")
 }
 
 func (m *manager) OnOnline(online bool) {
@@ -344,7 +368,7 @@ func (m *manager) OnOnline(online bool) {
 func (m *manager) OnDial(d rendezvous.Dial) {
 	m.mu.Lock()
 	if cur, ok := m.tunnels[d.SessionID]; ok {
-		if cur.dial.Origin == d.Origin && cur.dial.TicketHash == d.TicketHash {
+		if cur.dial.Origin == d.Origin && cur.dial.TicketHash == d.TicketHash && !cur.finished() {
 			m.mu.Unlock()
 			return // idempotent
 		}
@@ -358,9 +382,10 @@ func (m *manager) OnDial(d rendezvous.Dial) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m.tunnels[d.SessionID] = &active{dial: d, cancel: cancel}
+	a := &active{dial: d, cancel: cancel, done: make(chan struct{})}
+	m.tunnels[d.SessionID] = a
 	m.mu.Unlock()
-	go m.run(ctx, d)
+	go m.run(ctx, d, a.done)
 }
 
 func (m *manager) OnClear(sessionID, reason string) {
@@ -373,7 +398,7 @@ func (m *manager) OnClear(sessionID, reason string) {
 	if ok {
 		cur.cancel()
 		m.log.Info("session ended", "session", sessionID, "reason", reason)
-		fmt.Println("Camera link closed.")
+		m.printf("Camera link closed.\n")
 	}
 }
 
@@ -388,10 +413,18 @@ func (m *manager) closeAll(reason string) {
 }
 
 // run keeps a tunnel up for the session until it is cleared, re-dialing
-// after failures with backoff. The camera, if the session turned it on,
-// goes off whenever the tunnel is down: it comes back at the next stream
-// the enclave opens.
-func (m *manager) run(ctx context.Context, d rendezvous.Dial) {
+// after network failures with backoff. The camera, if the session turned
+// it on, goes off whenever the tunnel is down: it comes back at the next
+// stream the enclave opens.
+//
+// Two endings are final for this ticket and are not retried: the enclave
+// answering that it is not expecting the connector (the ticket is spent or
+// forgotten, as after the phone removed the camera), and the enclave
+// closing the link itself. Either way the service sends a new dial when a
+// session wants the camera again; the session entry stays so that a clear
+// is still reported and the same ticket is not dialed twice.
+func (m *manager) run(ctx context.Context, d rendezvous.Dial, done chan struct{}) {
+	defer close(done)
 	defer m.cam.off()
 	backoff := time.Second
 	for {
@@ -401,6 +434,12 @@ func (m *manager) run(ctx context.Context, d rendezvous.Dial) {
 		t, err := m.dialer.Dial(ctx, d.Origin, d.Ticket, d.TicketHash)
 		if err != nil {
 			if ctx.Err() != nil {
+				return
+			}
+			var se *tunnel.StatusError
+			if errors.As(err, &se) && se.Refused() {
+				m.log.Warn("the enclave is not expecting this connector; waiting for the service", "status", se.Status, "session", d.SessionID)
+				m.printf("Camera link on hold: the enclave is not expecting this connector; waiting for the service.\n")
 				return
 			}
 			m.log.Warn("could not reach the enclave", "err", err, "retryIn", backoff.String())
@@ -413,10 +452,18 @@ func (m *manager) run(ctx context.Context, d rendezvous.Dial) {
 			continue
 		}
 		backoff = time.Second
-		fmt.Println("Camera link active: connected to the verified enclave.")
+		m.printf("Camera link active: connected to the verified enclave.\n")
+		m.cam.attach(t.Backlog)
 		err = t.Serve(ctx)
+		m.cam.attach(nil)
 		m.cam.off()
 		if ctx.Err() != nil {
+			return
+		}
+		var re *mux.ResetError
+		if errors.As(err, &re) {
+			m.log.Info("the enclave closed the camera link; waiting for the service", "reason", re.Reason, "session", d.SessionID)
+			m.printf("The enclave closed the camera link (%s); waiting for the service.\n", re.Reason)
 			return
 		}
 		m.log.Warn("tunnel ended; reconnecting", "err", err)

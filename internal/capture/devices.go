@@ -242,6 +242,44 @@ func parsePactlSources(out string) []Device {
 // ErrNoDevice is returned when a selector matches nothing.
 var ErrNoDevice = errors.New("capture: no such device")
 
+// A Substitution is a device that was asked for but not connected and the
+// one used in its place (Options.Fallback).
+type Substitution struct {
+	Kind   Kind
+	Wanted string
+	Using  Device
+}
+
+// Resolve picks the camera and, unless Mic is "none", the microphone that
+// opts name among devs. With Fallback, a named device that is absent gives
+// way to the first of its kind and is reported in the substitutions; with
+// no device of that kind at all the error stands either way.
+func Resolve(devs []Device, opts Options) (cam Device, mic *Device, subs []Substitution, err error) {
+	pick := func(kind Kind, selector string) (Device, error) {
+		d, err := Select(devs, kind, selector)
+		if err == nil || !opts.Fallback || strings.TrimSpace(selector) == "" || !errors.Is(err, ErrNoDevice) {
+			return d, err
+		}
+		first, ferr := Select(devs, kind, "")
+		if ferr != nil {
+			return Device{}, err
+		}
+		subs = append(subs, Substitution{Kind: kind, Wanted: strings.TrimSpace(selector), Using: first})
+		return first, nil
+	}
+	if cam, err = pick(Video, opts.Camera); err != nil {
+		return Device{}, nil, nil, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(opts.Mic), "none") {
+		m, err := pick(Audio, opts.Mic)
+		if err != nil {
+			return Device{}, nil, nil, err
+		}
+		mic = &m
+	}
+	return cam, mic, subs, nil
+}
+
 // Select picks the device of a kind named by selector: its number in the
 // listing, its exact name, or a case-insensitive substring of its name
 // matching exactly one device. An empty selector picks the first.

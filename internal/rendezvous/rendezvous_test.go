@@ -80,6 +80,18 @@ type fakeService struct {
 	// noSource makes the service an older one without /api/camlink/source.
 	noSource bool
 	sources  []Source
+	// heartbeatMs, when set, is announced in the hello response; noHeartbeat
+	// makes the heartbeat route a 404 all the same.
+	heartbeatMs int64
+	noHeartbeat bool
+	heartbeats  int
+	badBeats    int
+}
+
+func (f *fakeService) beats() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.heartbeats, f.badBeats
 }
 
 // offering is a recorder that also offers a source.
@@ -123,7 +135,42 @@ func (f *fakeService) handler() http.Handler {
 		tok := fmt.Sprintf("tok-%d", f.hellos)
 		f.tokens[tok] = true
 		f.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"streamToken": tok, "code": "7QK4-N2PX", "codeExpiresAtMs": time.Now().Add(10 * time.Minute).UnixMilli()})
+		out := map[string]any{"streamToken": tok, "code": "7QK4-N2PX", "codeExpiresAtMs": time.Now().Add(10 * time.Minute).UnixMilli()}
+		if f.heartbeatMs > 0 {
+			out["heartbeatEveryMs"] = f.heartbeatMs
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+	m.HandleFunc("POST /api/camlink/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		if f.noHeartbeat {
+			f.mu.Lock()
+			f.heartbeats++
+			f.mu.Unlock()
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Key string `json:"key"`
+			Ts  int64  `json:"ts"`
+			Sig string `json:"sig"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		pub, err := identity.ParsePublicKey(body.Key)
+		sig, _ := base64.RawURLEncoding.DecodeString(body.Sig)
+		if err != nil || !ed25519.Verify(pub, identity.HeartbeatMessage(body.Ts, body.Key), sig) {
+			f.mu.Lock()
+			f.badBeats++
+			f.mu.Unlock()
+			http.Error(w, "bad signature", 401)
+			return
+		}
+		f.mu.Lock()
+		f.heartbeats++
+		f.mu.Unlock()
+		w.WriteHeader(204)
 	})
 	m.HandleFunc("POST /api/camlink/source", func(w http.ResponseWriter, r *http.Request) {
 		if f.noSource {
@@ -322,6 +369,71 @@ func TestReconnectsWithFreshHello(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("only %d hellos", f.hellos)
+}
+
+func TestHeartbeatsWhileAttached(t *testing.T) {
+	f := &fakeService{t: t, tokens: map[string]bool{}, block: make(chan struct{}), heartbeatMs: 40}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+	c, _ := newClient(t, srv)
+	rec := newRecorder()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx, rec) }()
+	rec.wait(t, "online:true")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		n, bad := f.beats()
+		if bad != 0 {
+			t.Fatalf("%d heartbeats had a bad signature", bad)
+		}
+		if n >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d heartbeats", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The stream ends: so do the heartbeats.
+	close(f.block)
+	rec.wait(t, "online:false")
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+	n, _ := f.beats()
+	time.Sleep(200 * time.Millisecond)
+	if m, _ := f.beats(); m != n {
+		t.Fatalf("heartbeats went on after the stream: %d then %d", n, m)
+	}
+}
+
+func TestHeartbeatsStopWhenTheServiceTakesNone(t *testing.T) {
+	f := &fakeService{t: t, tokens: map[string]bool{}, block: make(chan struct{}), heartbeatMs: 20, noHeartbeat: true}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+	c, _ := newClient(t, srv)
+	rec := newRecorder()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx, rec) }()
+	rec.wait(t, "online:true")
+	time.Sleep(300 * time.Millisecond)
+	if n, _ := f.beats(); n != 1 {
+		t.Fatalf("%d heartbeat attempts against a 404, want exactly one", n)
+	}
+	// Without heartbeatEveryMs in the hello there are none at all.
+	f2 := &fakeService{t: t, tokens: map[string]bool{}, block: make(chan struct{})}
+	srv2 := httptest.NewServer(f2.handler())
+	defer srv2.Close()
+	c2, _ := newClient(t, srv2)
+	rec2 := newRecorder()
+	go func() { _ = c2.Run(ctx, rec2) }()
+	rec2.wait(t, "online:true")
+	time.Sleep(200 * time.Millisecond)
+	if n, _ := f2.beats(); n != 0 {
+		t.Fatalf("%d heartbeats to a service that asked for none", n)
+	}
+	cancel() // before the servers close, so their streams end
 }
 
 func TestHelloRejectsBadSignature(t *testing.T) {

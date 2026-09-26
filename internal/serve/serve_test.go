@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -55,11 +56,21 @@ func pump(ctx context.Context, t *testing.T, pub *Publication, desc *description
 	}
 }
 
-// reader plays the stream over conns from dial and counts packets by kind.
+// reader plays the stream over conns from dial and counts packets by kind,
+// keeping the video packets' headers to check continuity.
 type reader struct {
 	c            *gortsplib.Client
 	video, audio atomic.Int64
 	leaf         string
+
+	mu      sync.Mutex
+	headers []rtp.Header
+}
+
+func (r *reader) videoHeaders() []rtp.Header {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]rtp.Header(nil), r.headers...)
 }
 
 func play(t *testing.T, dial func() (net.Conn, error)) (*reader, error) {
@@ -92,9 +103,12 @@ func play(t *testing.T, dial func() (net.Conn, error)) (*reader, error) {
 		r.c.Close()
 		return nil, err
 	}
-	r.c.OnPacketRTPAny(func(medi *description.Media, _ format.Format, _ *rtp.Packet) {
+	r.c.OnPacketRTPAny(func(medi *description.Media, _ format.Format, pkt *rtp.Packet) {
 		if medi.Type == description.MediaTypeVideo {
 			r.video.Add(1)
+			r.mu.Lock()
+			r.headers = append(r.headers, pkt.Header)
+			r.mu.Unlock()
 		} else {
 			r.audio.Add(1)
 		}

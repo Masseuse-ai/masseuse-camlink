@@ -209,6 +209,12 @@ func SourceMessage(ts int64, key, kind string, ready bool, label string) []byte 
 	return []byte("camlink-source-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + kind + "|" + r + "|" + label)
 }
 
+// HeartbeatMessage is what the connector signs to say it is still there
+// (POST /api/camlink/heartbeat).
+func HeartbeatMessage(ts int64, key string) []byte {
+	return []byte("camlink-heartbeat-v1|" + strconv.FormatInt(ts, 10) + "|" + key)
+}
+
 // TunnelProof is the string the connector signs to answer the gateway's
 // CHALLENGE: host is the origin host it dialed, ticketHash the hex SHA-256
 // of the ticket, nonce the challenge payload in base64url.

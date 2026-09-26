@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -102,6 +103,11 @@ type offer struct {
 	start      func()
 	stop       func()
 	publishing func() bool
+	// adapt, when the source can change its bit rate (the computer's own
+	// camera), runs the controller that lowers it while the connection
+	// cannot keep up and raises it back (internal/capture, Adapter); it
+	// runs while the camera is on.
+	adapt *capture.Adapter
 	// save is the configuration to remember: devices by name, so a later
 	// start finds them even if their numbering changed.
 	save sourceConfig
@@ -113,8 +119,11 @@ func (o *offer) source() rendezvous.Source {
 
 // buildOffer prepares the configured source; it does not turn anything on.
 // Errors are the person's to fix (a wrong flag); a missing ffmpeg or camera
-// is reported as an offer that is not ready, so pairing still works.
-func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *serve.Server, logger *slog.Logger) (*offer, error) {
+// is reported as an offer that is not ready, so pairing still works. With
+// saved, cfg is the remembered choice rather than today's flags: a device
+// it names that is not connected gives way to the first of its kind, and a
+// line says so; the remembered name stands for the day it is back.
+func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *serve.Server, logger *slog.Logger, saved bool) (*offer, error) {
 	switch cfg.Kind {
 	case "camera":
 		src, err := camera.New(ctx, sink, camera.Options{
@@ -145,18 +154,25 @@ func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *se
 		return o, nil
 	default:
 		opts := capture.Options{Camera: cfg.Camera, Mic: cfg.Mic, VideoSize: cfg.VideoSize, FPS: cfg.FPS,
-			Bitrate: cfg.Bitrate, Encoder: cfg.Encoder, FFmpeg: cfg.FFmpeg}
+			Bitrate: cfg.Bitrate, Encoder: cfg.Encoder, FFmpeg: cfg.FFmpeg, Fallback: saved}
 		src, err := capture.New(ctx, sink, opts, logger)
 		if err != nil {
-			if capture.IsNoFFmpeg(err) || (errors.Is(err, capture.ErrNoDevice) && cfg.Camera == "" && cfg.Mic == "") {
+			if capture.IsNoFFmpeg(err) || (errors.Is(err, capture.ErrNoDevice) && (saved || (cfg.Camera == "" && cfg.Mic == ""))) {
 				// Nothing to fix on the command line: report it and carry on.
 				return &offer{kind: "capture", label: "This computer's camera", note: err.Error(), save: cfg}, nil
 			}
 			return nil, err
 		}
+		for _, sub := range src.Substitutions() {
+			fmt.Printf("%s is not connected; using %s.\n", sub.Wanted, sub.Using.Name)
+		}
 		o := &offer{kind: "capture", label: src.Label(), ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing}
 		so := src.Options()
 		o.shape = fmt.Sprintf("%s %d fps, %s", so.VideoSize, so.FPS, src.Encoder())
+		o.adapt = &capture.Adapter{
+			Ceiling: so.Bitrate, FPS: so.FPS, Stats: sink.Stats, Target: src, Logger: logger,
+			Notify: func(line string) { fmt.Println(line) },
+		}
 		o.save = cfg
 		o.save.Camera = src.Camera().Name
 		if m := src.Mic(); m != nil {
@@ -220,10 +236,41 @@ type camControl struct {
 	sink  *serve.Server
 	offer *offer
 	log   *slog.Logger
+	// out is the console; nil means standard output.
+	out io.Writer
 
-	mu     sync.Mutex
-	on     bool
-	cancel context.CancelFunc
+	mu      sync.Mutex
+	on      bool
+	cancel  context.CancelFunc
+	backlog func() time.Duration // the active tunnel's, nil between tunnels
+}
+
+func (c *camControl) printf(format string, args ...any) {
+	w := c.out
+	if w == nil {
+		w = os.Stdout
+	}
+	fmt.Fprintf(w, format, args...)
+}
+
+// attach gives the stream the active tunnel's backlog (internal/tunnel,
+// Tunnel.Backlog), by which it drops video when the connection falls
+// behind; nil when the tunnel has ended.
+func (c *camControl) attach(backlog func() time.Duration) {
+	c.mu.Lock()
+	c.backlog = backlog
+	c.mu.Unlock()
+	c.sink.SetBacklog(backlog)
+}
+
+func (c *camControl) currentBacklog() time.Duration {
+	c.mu.Lock()
+	fn := c.backlog
+	c.mu.Unlock()
+	if fn == nil {
+		return 0
+	}
+	return fn()
 }
 
 // dialLocal answers the enclave's OPEN for the connector's own stream.
@@ -241,8 +288,11 @@ func (c *camControl) dialLocal() (net.Conn, error) {
 		ctx, cancel := context.WithCancel(context.Background())
 		c.cancel = cancel
 		c.offer.start()
-		fmt.Printf("Camera on: %s.\n", c.offer.label)
+		c.printf("Camera on: %s.\n", c.offer.label)
 		go c.report(ctx)
+		if c.offer.adapt != nil {
+			go c.offer.adapt.Run(ctx)
+		}
 	}
 	c.mu.Unlock()
 	return c.sink.Dial()
@@ -261,10 +311,12 @@ func (c *camControl) off() {
 	}
 	cancel()
 	c.offer.stop()
-	fmt.Println("Camera off.")
+	c.printf("Camera off.\n")
 }
 
-// report prints the send rate every 10 s while the camera is on.
+// report prints the send rate every 10 s while the camera is on, and, in
+// the same breath and so at most once per 10 s, that the connection is
+// congested when video had to be dropped since the last report.
 func (c *camControl) report(ctx context.Context) {
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
@@ -282,9 +334,12 @@ func (c *camControl) report(ctx context.Context) {
 		if st.Publishing && last.Publishing && st.Readers > 0 && secs > 0 {
 			video := float64(st.VideoBytes-last.VideoBytes) * 8 / secs
 			audio := float64(st.AudioBytes-last.AudioBytes) * 8 / secs
-			fmt.Printf("Sending %s: video %s, audio %s\n", c.offer.shape, rate(video), rate(audio))
+			c.printf("Sending %s: video %s, audio %s\n", c.offer.shape, rate(video), rate(audio))
+			if st.Congested || st.VideoFramesDropped > last.VideoFramesDropped {
+				c.printf("Connection congested: dropping video to keep up (backlog %.1f s).\n", c.currentBacklog().Seconds())
+			}
 		} else if !st.Publishing {
-			fmt.Println("Camera on but not sending yet (waiting for the source).")
+			c.printf("Camera on but not sending yet (waiting for the source).\n")
 		}
 		last, lastAt = st, now
 	}

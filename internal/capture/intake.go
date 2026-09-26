@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/serve"
 	"github.com/bluenviron/gortsplib/v5"
@@ -75,16 +76,16 @@ func (in *intake) Publishing() bool {
 	return in.pub != nil
 }
 
-// OnAnnounce takes the publisher's description into the stream.
+// OnAnnounce takes the publisher's description into the stream. While the
+// stream has a handover armed (a restart at another bit rate), the new
+// ffmpeg joins the publication its predecessor fed, so readers notice
+// nothing; otherwise a second publisher is refused.
 func (in *intake) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
 	if ctx.Path != in.path {
 		return &base.Response{StatusCode: base.StatusNotFound}, nil
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	if in.pub != nil {
-		return &base.Response{StatusCode: base.StatusServiceUnavailable}, nil
-	}
 	pub, err := in.sink.Publish(ctx.Description)
 	if err != nil {
 		in.log.Warn("capture: stream refused the publication", "err", err)
@@ -95,6 +96,20 @@ func (in *intake) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.R
 		in.onChange(true)
 	}
 	return &base.Response{StatusCode: base.StatusOK}, nil
+}
+
+// armHandover tells the current publication its publisher is about to be
+// replaced (serve.Publication.ArmHandover); nothing is publishing does
+// nothing.
+func (in *intake) armHandover(grace time.Duration) bool {
+	in.mu.Lock()
+	pub := in.pub
+	in.mu.Unlock()
+	if pub == nil {
+		return false
+	}
+	pub.ArmHandover(grace)
+	return true
 }
 
 // OnSetup admits the publisher's tracks; nobody plays from the intake.
@@ -132,7 +147,9 @@ func (in *intake) OnDescribe(*gortsplib.ServerHandlerOnDescribeCtx) (*base.Respo
 	return &base.Response{StatusCode: base.StatusMethodNotAllowed}, nil, nil
 }
 
-// OnSessionClose ends the publication when ffmpeg goes.
+// OnSessionClose releases the publication when ffmpeg goes: it ends, unless
+// a handover is armed and the replacement is on its way. A close from a
+// publisher that has already been replaced is ignored.
 func (in *intake) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	in.mu.Lock()
 	if in.sess != ctx.Session {
@@ -143,7 +160,7 @@ func (in *intake) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) 
 	in.pub, in.sess = nil, nil
 	in.mu.Unlock()
 	if pub != nil {
-		pub.Close()
+		pub.Release()
 	}
 	if in.onChange != nil {
 		in.onChange(false)

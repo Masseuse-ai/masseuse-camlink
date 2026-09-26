@@ -62,9 +62,14 @@ Response `200`:
 {
   "streamToken": "<opaque, valid for one event stream>",
   "code": "7QK4-N2PX",
-  "codeExpiresAtMs": 1757400600000
+  "codeExpiresAtMs": 1757400600000,
+  "heartbeatEveryMs": 30000
 }
 ```
+
+`heartbeatEveryMs` is how often the connector is to send a heartbeat
+(section 2.4) while its event stream is attached; absent means the service
+takes no heartbeats.
 
 The pairing code is 8 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`
 (no 0/O/1/I/L), shown as two groups of four. It rotates every 10 minutes and
@@ -112,6 +117,31 @@ the hello rules (`|now - ts| <= 60 s`, signature, rate limit), keeps the
 latest report per connector for as long as it remembers the connector, and
 shows it to a phone bound to that connector as `camlink.source`. A `404`
 means an older service; the connector goes on without the card.
+
+### 2.4 `POST /api/camlink/heartbeat`
+
+The event stream tells the service a connector is online, but not always
+that it has gone: a connector that loses power, or its network, leaves a
+stream the service's front end may hold open long after. So while the
+stream is attached the connector also says so, every `heartbeatEveryMs`
+from the hello response:
+
+```json
+{
+  "key": "<connectorKey>",
+  "ts": 1757400000,
+  "sig": "<base64url Ed25519 signature>"
+}
+```
+
+`sig` is over the UTF-8 string `camlink-heartbeat-v1|<ts>|<key>`. The
+service applies the hello rules (`|now - ts| <= 60 s`, signature; 30 per
+minute per IP). Once a connector has sent one heartbeat, the service marks
+it offline when 90 s pass without another, ending its stream and telling
+bound phones (`camlink.online` false) exactly as if the stream had closed.
+A connector that has never sent a heartbeat (an older connector) is judged
+by its stream alone, as before. A `404` means an older service; the
+connector stops sending them for that stream.
 
 ## 3. Phone <-> rendezvous
 
