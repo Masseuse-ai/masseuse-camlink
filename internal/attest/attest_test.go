@@ -23,9 +23,16 @@ import (
 const (
 	testDigest  = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	testTrainer = "https://masseuse-trainer.example.run.app"
+	// The launcher reports a signing key as the hex SHA-256 of its DER
+	// public key.
+	testKeyID   = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+	testRelease = "v0.4.0"
+	testCommit  = "0123456789abcdef0123456789abcdef01234567"
+	testRepo    = "ghcr.io/femled/masseuse-video-tee"
+	testSrcURI  = "github.com/FemLed/masseuse-video-tee"
 )
 
-var testSource = ImageSource{Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "v0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"}
+var testSource = ImageSource{Repo: testRepo, Tag: "v0.1.0", SourceURI: testSrcURI}
 
 // fakeSlot is an enclave that mints tokens the way Confidential Space does,
 // signed by a test key, with the nonce bindings a real slot adds.
@@ -100,8 +107,8 @@ func (fs *fakeSlot) handle(w http.ResponseWriter, r *http.Request) {
 			"container": map[string]any{
 				"image_digest":     testDigest,
 				"image_reference":  "us-central1-docker.pkg.dev/p/r/masseuse-video-tee@" + testDigest,
-				"env":              map[string]any{"TRAINER_URL": testTrainer + "/"},
-				"image_signatures": []any{map[string]any{"key_id": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "signature_algorithm": "RSASSA_PSS_SHA256"}},
+				"env":              map[string]any{"TRAINER_URL": testTrainer + "/", "TEE_IMAGE_VERSION": testRelease, "TEE_IMAGE_COMMIT": testCommit},
+				"image_signatures": []any{map[string]any{"key_id": testKeyID, "signature_algorithm": "ECDSA_P256_SHA256"}},
 			},
 			"gce":                map[string]any{"instance_id": "1234567890", "project_id": "p"},
 			"nvidia_gpu":         map[string]any{"cc_mode": "ON", "gpus": []any{map[string]any{"hwmodel": "GCP_NVIDIA_H100"}}},
@@ -139,39 +146,122 @@ func signJWT(t *testing.T, key *rsa.PrivateKey, kid, alg string, claims map[stri
 	return signing + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
+// policyFor is the rule-based policy the service publishes: the signing
+// key, a release floor, and where the source and the public image live.
 func policyFor() *Policy {
 	p := &Policy{
+		AllowDebug:         false,
+		RequireStable:      true,
+		RequireGpuCc:       true,
+		ExpectedTrainerURL: testTrainer,
+		ImageSignatures:    []string{testKeyID},
+		MinRelease:         "v0.4.0",
+		SourceURI:          testSrcURI,
+		ImageRepo:          testRepo,
+	}
+	if err := p.Validate(); err != nil {
+		panic(err)
+	}
+	return p
+}
+
+// pinnedPolicyFor is the older shape: an explicit digest list with a
+// per-digest build record and no signing key.
+func pinnedPolicyFor() *Policy {
+	p := &Policy{
 		AllowedImageDigests: []string{testDigest},
-		AllowDebug:          false,
 		RequireStable:       true,
 		RequireGpuCc:        true,
 		ExpectedTrainerURL:  testTrainer,
 		ImageSources:        map[string]ImageSource{testDigest: testSource},
 	}
-	_ = p.Validate()
+	if err := p.Validate(); err != nil {
+		panic(err)
+	}
 	return p
 }
 
-func TestImageSources(t *testing.T) {
+func TestReleaseStampAndSource(t *testing.T) {
 	fs := newFakeSlot(t)
 	res, err := verifierFor(fs, policyFor()).Verify(context.Background(), fs.origin())
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
+	if res.Release == nil || res.Release.Version != testRelease || res.Release.Commit != testCommit {
+		t.Fatalf("release %+v", res.Release)
+	}
+	// The source record comes from the policy's constants and the token's
+	// tag, so the verify command names the release that is running.
+	want := ImageSource{Repo: testRepo, Tag: testRelease, SourceURI: testSrcURI}
+	if res.Source == nil || *res.Source != want {
+		t.Fatalf("source %+v, want %+v", res.Source, want)
+	}
+	if got, want := res.Source.String(), testSrcURI+"@"+testRelease; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	wantCmd := "slsa-verifier verify-image " + testRepo + "@" + testDigest + " --source-uri " + testSrcURI + " --source-tag " + testRelease
+	if got := res.Source.VerifyCommand(res.ImageDigest); got != wantCmd {
+		t.Fatalf("VerifyCommand() = %q, want %q", got, wantCmd)
+	}
+
+	// An unstamped image under a policy without a floor: no release, and
+	// the verify command names the source without a tag.
+	unstamped := newFakeSlot(t)
+	unstamped.mutate = func(c, _ map[string]any) {
+		c["submods"].(map[string]any)["container"].(map[string]any)["env"] = map[string]any{"TRAINER_URL": testTrainer}
+	}
+	p := policyFor()
+	p.MinRelease = ""
+	res, err = verifierFor(unstamped, p).Verify(context.Background(), unstamped.origin())
+	if err != nil {
+		t.Fatalf("unstamped image without a floor: %v", err)
+	}
+	if res.Release != nil {
+		t.Fatalf("release %+v, want nil", res.Release)
+	}
+	if got, want := res.Source.VerifyCommand(res.ImageDigest), "slsa-verifier verify-image "+testRepo+"@"+testDigest+" --source-uri "+testSrcURI; got != want {
+		t.Fatalf("VerifyCommand() = %q, want %q", got, want)
+	}
+	if got, want := res.Source.String(), testSrcURI; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	// ... unless the policy still carries a per-digest record for it.
+	p.ImageSources = map[string]ImageSource{testDigest: testSource}
+	res, err = verifierFor(unstamped, p).Verify(context.Background(), unstamped.origin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Source == nil || res.Source.Tag != "v0.1.0" {
+		t.Fatalf("source %+v, want the record's tag", res.Source)
+	}
+
+	// A policy that publishes no source at all: Source nil, attestation holds.
+	p = policyFor()
+	p.SourceURI, p.ImageRepo = "", ""
+	res, err = verifierFor(fs, p).Verify(context.Background(), fs.origin())
+	if err != nil {
+		t.Fatalf("verify without a source: %v", err)
+	}
+	if res.Source != nil {
+		t.Fatalf("source %+v, want nil", res.Source)
+	}
+}
+
+func TestPinnedPolicyStillWorks(t *testing.T) {
+	fs := newFakeSlot(t)
+	res, err := verifierFor(fs, pinnedPolicyFor()).Verify(context.Background(), fs.origin())
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	// With no sourceUri/imageRepo the per-digest record is the source.
 	if res.Source == nil || *res.Source != testSource {
 		t.Fatalf("source %+v, want %+v", res.Source, testSource)
 	}
-	if got, want := res.Source.String(), "github.com/FemLed/masseuse-video-tee@v0.1.0"; got != want {
-		t.Fatalf("String() = %q, want %q", got, want)
-	}
-	want := "slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@" + testDigest +
-		" --source-uri github.com/FemLed/masseuse-video-tee --source-tag v0.1.0"
+	want := "slsa-verifier verify-image " + testRepo + "@" + testDigest + " --source-uri " + testSrcURI + " --source-tag v0.1.0"
 	if got := res.Source.VerifyCommand(res.ImageDigest); got != want {
 		t.Fatalf("VerifyCommand() = %q, want %q", got, want)
 	}
-
-	// A digest the policy has no build record for verifies with Source nil.
-	p := policyFor()
+	p := pinnedPolicyFor()
 	p.ImageSources = nil
 	res, err = verifierFor(fs, p).Verify(context.Background(), fs.origin())
 	if err != nil {
@@ -180,31 +270,89 @@ func TestImageSources(t *testing.T) {
 	if res.Source != nil {
 		t.Fatalf("source %+v, want nil", res.Source)
 	}
+	// Both pins at once: the digest list still applies.
+	p = policyFor()
+	p.AllowedImageDigests = []string{"sha256:" + strings.Repeat("ab", 32)}
+	_, err = verifierFor(fs, p).Verify(context.Background(), fs.origin())
+	var perr *PolicyError
+	if !errors.As(err, &perr) || !strings.Contains(err.Error(), "is not in the policy") {
+		t.Fatalf("digest list ignored: %v", err)
+	}
+}
 
-	// Validate rejects a malformed record; a well-formed one for another
-	// digest is fine.
-	for name, s := range map[string]ImageSource{
-		"no repo":       {Tag: "v0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"},
-		"repo with tag": {Repo: "ghcr.io/femled/masseuse-video-tee:v0.1.0", Tag: "v0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"},
-		"bare tag":      {Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"},
-		"url source":    {Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "v0.1.0", SourceURI: "https://github.com/FemLed/masseuse-video-tee"},
-		"no source":     {Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "v0.1.0"},
-	} {
+func TestPolicyValidate(t *testing.T) {
+	if err := (&Policy{}).Validate(); err == nil || !strings.Contains(err.Error(), "neither") {
+		t.Fatalf("empty policy: %v", err)
+	}
+	bad := map[string]func(*Policy){
+		"bad digest":       func(p *Policy) { p.AllowedImageDigests = []string{"latest"} },
+		"empty key id":     func(p *Policy) { p.ImageSignatures = []string{""} },
+		"bare min release": func(p *Policy) { p.MinRelease = "0.4.0" },
+		"two-part release": func(p *Policy) { p.MinRelease = "v0.4" },
+		"url source":       func(p *Policy) { p.SourceURI = "https://" + testSrcURI },
+		"repo with tag":    func(p *Policy) { p.ImageRepo = testRepo + ":v0.4.0" },
+		"repo without src": func(p *Policy) { p.SourceURI = "" },
+		"src without repo": func(p *Policy) { p.ImageRepo = "" },
+		"insecure jwks":    func(p *Policy) { p.JWKSURL = "http://jwks.example" },
+		"source no repo": func(p *Policy) {
+			p.ImageSources = map[string]ImageSource{testDigest: {Tag: "v0.1.0", SourceURI: testSrcURI}}
+		},
+		"source bare tag": func(p *Policy) {
+			p.ImageSources = map[string]ImageSource{testDigest: {Repo: testRepo, Tag: "0.1.0", SourceURI: testSrcURI}}
+		},
+		"source url": func(p *Policy) {
+			p.ImageSources = map[string]ImageSource{testDigest: {Repo: testRepo, Tag: "v0.1.0", SourceURI: "https://" + testSrcURI}}
+		},
+		"source no src":     func(p *Policy) { p.ImageSources = map[string]ImageSource{testDigest: {Repo: testRepo, Tag: "v0.1.0"}} },
+		"source non-digest": func(p *Policy) { p.ImageSources = map[string]ImageSource{"latest": testSource} },
+	}
+	for name, mutate := range bad {
 		p := policyFor()
-		p.ImageSources = map[string]ImageSource{testDigest: s}
+		mutate(p)
 		if err := p.Validate(); err == nil {
-			t.Errorf("%s: accepted %+v", name, s)
+			t.Errorf("%s: accepted", name)
 		}
 	}
-	p = policyFor()
-	p.ImageSources = map[string]ImageSource{"latest": testSource}
-	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "imageSources key") {
-		t.Fatalf("non-digest key: %v", err)
-	}
-	p = policyFor()
+	// Pre-release floors and records for other digests are fine.
+	p := policyFor()
+	p.MinRelease = "v1.2.0-rc.1"
 	p.ImageSources = map[string]ImageSource{"sha256:" + strings.Repeat("ab", 32): testSource}
 	if err := p.Validate(); err != nil {
-		t.Fatalf("record for another digest: %v", err)
+		t.Fatal(err)
+	}
+	// Defaults are filled.
+	if p.Issuer != DefaultIssuer || p.JWKSURL != DefaultJWKSURL || p.SWName != DefaultSWName || p.HWModel != DefaultHWModel {
+		t.Fatalf("defaults %+v", p)
+	}
+}
+
+func TestCompareRelease(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"v0.4.0", "v0.4.0", 0},
+		{"v0.4.1", "v0.4.0", 1},
+		{"v0.4.0", "v0.10.0", -1},
+		{"v1.0.0", "v0.99.99", 1},
+		{"v0.4.0-rc.1", "v0.4.0", -1},
+		{"v0.4.0", "v0.4.0-rc.1", 1},
+		{"v0.4.0-rc.1", "v0.4.0-rc.2", -1},
+		{"v0.4.0+build.7", "v0.4.0", 0},
+	} {
+		if got := CompareRelease(tc.a, tc.b); got != tc.want {
+			t.Errorf("CompareRelease(%s, %s) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+	for _, ok := range []string{"v0.0.0", "v10.20.30", "v1.2.3-beta", "v1.2.3+meta"} {
+		if !ValidRelease(ok) {
+			t.Errorf("ValidRelease(%q) = false", ok)
+		}
+	}
+	for _, bad := range []string{"", "0.4.0", "v0.4", "v0.4.0.1", "va.b.c", "v0.4.0-", "v 0.4.0", "latest"} {
+		if ValidRelease(bad) {
+			t.Errorf("ValidRelease(%q) = true", bad)
+		}
 	}
 }
 
@@ -256,9 +404,26 @@ func TestVerifyPolicyFailures(t *testing.T) {
 		nonce  bool
 		want   string
 	}{
-		{name: "wrong digest", mutate: func(c, _ map[string]any) {
-			c["submods"].(map[string]any)["container"].(map[string]any)["image_digest"] = "sha256:ffff"
-		}, want: "is not in the policy"},
+		{name: "wrong digest", policy: func(p *Policy) { p.AllowedImageDigests = []string{"sha256:" + strings.Repeat("ab", 32)} }, want: "is not in the policy"},
+		{name: "no digest", mutate: func(c, _ map[string]any) {
+			delete(c["submods"].(map[string]any)["container"].(map[string]any), "image_digest")
+		}, want: "no image digest"},
+		{name: "unsigned image", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["container"].(map[string]any)["image_signatures"] = []any{}
+		}, want: "none of the required signatures"},
+		{name: "other key", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["container"].(map[string]any)["image_signatures"] = []any{map[string]any{"key_id": strings.Repeat("ee", 32), "signature_algorithm": "ECDSA_P256_SHA256"}}
+		}, want: "none of the required signatures"},
+		{name: "release below the floor", policy: func(p *Policy) { p.MinRelease = "v0.4.1" }, want: "older than the policy's minimum v0.4.1"},
+		{name: "release pre-release below the floor", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["container"].(map[string]any)["env"].(map[string]any)["TEE_IMAGE_VERSION"] = "v0.4.0-rc.2"
+		}, want: "older than the policy's minimum"},
+		{name: "unstamped image under a floor", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["container"].(map[string]any)["env"] = map[string]any{"TRAINER_URL": testTrainer}
+		}, want: "no release stamp"},
+		{name: "malformed stamp", mutate: func(c, _ map[string]any) {
+			c["submods"].(map[string]any)["container"].(map[string]any)["env"].(map[string]any)["TEE_IMAGE_VERSION"] = "latest"
+		}, want: "is not a release tag"},
 		{name: "debug not allowed", mutate: func(c, _ map[string]any) { c["dbgstat"] = "enabled" }, want: "does not allow debug"},
 		{name: "unknown dbgstat", mutate: func(c, _ map[string]any) { c["dbgstat"] = "weird" }, want: "dbgstat is weird"},
 		{name: "not stable", mutate: func(c, _ map[string]any) {
@@ -271,9 +436,9 @@ func TestVerifyPolicyFailures(t *testing.T) {
 			c["submods"].(map[string]any)["nvidia_gpu"].(map[string]any)["gpus"] = []any{}
 		}, want: "no GPU"},
 		{name: "wrong trainer", mutate: func(c, _ map[string]any) {
-			c["submods"].(map[string]any)["container"].(map[string]any)["env"] = map[string]any{"TRAINER_URL": "https://evil.example"}
+			c["submods"].(map[string]any)["container"].(map[string]any)["env"].(map[string]any)["TRAINER_URL"] = "https://evil.example"
 		}, want: "not the expected service"},
-		{name: "signature required", policy: func(p *Policy) { p.ImageSignatures = []string{"projects/other"} }, want: "none of the required signatures"},
+		{name: "signature required", policy: func(p *Policy) { p.ImageSignatures = []string{strings.Repeat("ee", 32)} }, want: "none of the required signatures"},
 		{name: "swname", mutate: func(c, _ map[string]any) { c["swname"] = "OTHER" }, want: "swname is OTHER"},
 		{name: "hwmodel", mutate: func(c, _ map[string]any) { c["hwmodel"] = "GCP_AMD_SEV" }, want: "hwmodel is GCP_AMD_SEV"},
 		{name: "secboot", mutate: func(c, _ map[string]any) { c["secboot"] = false }, want: "secure boot"},
@@ -330,7 +495,8 @@ func TestVerifyDebugPostureAllowed(t *testing.T) {
 	if _, err := verifierFor(fs, p).Verify(context.Background(), fs.origin()); err != nil {
 		t.Fatalf("debug posture refused: %v", err)
 	}
-	p.ImageSignatures = []string{"projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"}
+	// Any listed key satisfies the signature check.
+	p.ImageSignatures = []string{strings.Repeat("ee", 32), testKeyID}
 	if _, err := verifierFor(fs, p).Verify(context.Background(), fs.origin()); err != nil {
 		t.Fatalf("matching signature refused: %v", err)
 	}
@@ -415,13 +581,15 @@ func TestOriginRules(t *testing.T) {
 
 func TestFetchPolicy(t *testing.T) {
 	good := map[string]any{
-		"allowedImageDigests": []string{testDigest},
+		"allowedImageDigests": []string{},
 		"allowDebug":          true,
 		"requireStable":       false,
 		"requireGpuCc":        true,
 		"expectedTrainerUrl":  testTrainer,
-		"imageSignatures":     []string{},
-		"imageSources":        map[string]any{testDigest: map[string]string{"repo": testSource.Repo, "tag": testSource.Tag, "sourceUri": testSource.SourceURI}},
+		"imageSignatures":     []string{testKeyID},
+		"minRelease":          "v0.4.0",
+		"sourceUri":           testSrcURI,
+		"imageRepo":           testRepo,
 		"issuer":              DefaultIssuer,
 		"jwksUrl":             DefaultJWKSURL,
 		"swname":              DefaultSWName,
@@ -446,33 +614,39 @@ func TestFetchPolicy(t *testing.T) {
 	if !p.AllowDebug || p.RequireStable || len(p.TeeSlotHostSuffixes) != 1 || p.JWKSURL != DefaultJWKSURL {
 		t.Fatalf("policy %+v", p)
 	}
+	if p.MinRelease != "v0.4.0" || p.SourceURI != testSrcURI || p.ImageRepo != testRepo || len(p.ImageSignatures) != 1 {
+		t.Fatalf("policy %+v", p)
+	}
+
+	// The older, digest-pinned shape is still accepted.
+	pinned := map[string]any{
+		"allowedImageDigests": []string{testDigest},
+		"imageSources":        map[string]any{testDigest: map[string]string{"repo": testSource.Repo, "tag": testSource.Tag, "sourceUri": testSource.SourceURI}},
+	}
+	srvPinned := serve(pinned)
+	defer srvPinned.Close()
+	p, err = FetchPolicy(context.Background(), srvPinned.Client(), srvPinned.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.ImageSources[testDigest] != testSource {
 		t.Fatalf("imageSources %+v", p.ImageSources)
 	}
-	badSource := map[string]any{"allowedImageDigests": []string{testDigest}, "imageSources": map[string]any{testDigest: map[string]string{"repo": "ghcr.io/femled/masseuse-video-tee", "tag": "latest"}}}
-	srv5 := serve(badSource)
-	defer srv5.Close()
-	if _, err := FetchPolicy(context.Background(), srv5.Client(), srv5.URL); err == nil {
-		t.Fatal("accepted a malformed image source")
-	}
 
-	bad := map[string]any{"allowedImageDigests": []string{"latest"}}
-	srv2 := serve(bad)
-	defer srv2.Close()
-	if _, err := FetchPolicy(context.Background(), srv2.Client(), srv2.URL); err == nil {
-		t.Fatal("accepted a non-digest")
-	}
-	empty := map[string]any{"allowedImageDigests": []string{}}
-	srv3 := serve(empty)
-	defer srv3.Close()
-	if _, err := FetchPolicy(context.Background(), srv3.Client(), srv3.URL); err == nil {
-		t.Fatal("accepted an empty digest list")
-	}
-	insecure := map[string]any{"allowedImageDigests": []string{testDigest}, "jwksUrl": "http://jwks.example"}
-	srv4 := serve(insecure)
-	defer srv4.Close()
-	if _, err := FetchPolicy(context.Background(), srv4.Client(), srv4.URL); err == nil {
-		t.Fatal("accepted an http JWKS URL")
+	for name, doc := range map[string]map[string]any{
+		"malformed image source": {"allowedImageDigests": []string{testDigest}, "imageSources": map[string]any{testDigest: map[string]string{"repo": testRepo, "tag": "latest"}}},
+		"non-digest":             {"allowedImageDigests": []string{"latest"}},
+		"neither pin":            {"allowedImageDigests": []string{}, "imageSignatures": []string{}},
+		"bad min release":        {"imageSignatures": []string{testKeyID}, "minRelease": "0.4.0"},
+		"source without repo":    {"imageSignatures": []string{testKeyID}, "sourceUri": testSrcURI},
+		"http jwks":              {"imageSignatures": []string{testKeyID}, "jwksUrl": "http://jwks.example"},
+	} {
+		srv := serve(doc)
+		_, err := FetchPolicy(context.Background(), srv.Client(), srv.URL)
+		srv.Close()
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }
 

@@ -76,21 +76,23 @@ leaves the enclave (numbers, never frames or sound).
 
 You do not have to take that on trust. Every enclave image is built by that
 repository's release workflow on GitHub Actions from a tagged commit, with
-SLSA provenance and a keyless signature, and the digest the enclave attests
-is the digest the workflow built. When the connector dials an enclave it
-logs three things:
+SLSA provenance and a keyless signature; the workflow alone holds the key
+the enclave's launcher checks the image against, and it stamps the release
+tag and source commit into the image, where the attestation reports them.
+When the connector dials an enclave it logs two things:
 
 ```
-enclave verified  image=sha256:… instance=… dbgstat=disabled-since-boot
-enclave source    image=sha256:… source=github.com/FemLed/masseuse-video-tee@v0.1.0 registry=ghcr.io/femled/masseuse-video-tee
-                  verify="slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:… --source-uri github.com/FemLed/masseuse-video-tee --source-tag v0.1.0"
+enclave verified  image=sha256:… instance=… dbgstat=disabled-since-boot release=vX.Y.Z commit=…
+enclave source    image=sha256:… source=github.com/FemLed/masseuse-video-tee@vX.Y.Z registry=ghcr.io/femled/masseuse-video-tee
+                  verify="slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:… --source-uri github.com/FemLed/masseuse-video-tee --source-tag vX.Y.Z"
 ```
 
-Run the `verify` command (or `sh scripts/verify-enclave.sh`, which checks every
-digest the service currently allows) and `slsa-verifier` confirms, from the
-public registry, that this exact digest was produced by that repository at
-that tag. [VERIFY.md](VERIFY.md), "The enclave your camera streams to",
-walks through it.
+Run the `verify` command (or `sh scripts/verify-enclave.sh --origin
+https://slot-N.tee.masseuse.ai`, which reads the digest and release off a
+live enclave's attestation) and `slsa-verifier` confirms, from the public
+registry, that this exact digest was produced by that repository at that
+tag. [VERIFY.md](VERIFY.md), "The enclave your camera streams to", walks
+through it.
 
 ## Build from source
 

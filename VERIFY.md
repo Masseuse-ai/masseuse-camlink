@@ -110,40 +110,52 @@ container image holds the very same binaries as the archives.
 The connector dials one kind of peer: a masseuse.ai video enclave whose
 Confidential Space attestation it has verified against the policy the
 service publishes at `https://masseuse.ai/api/tee-policy` (`internal/attest`;
-the checks are listed in `masseuse-video-tee/VERIFY.md`). The policy names
-the image digests an enclave may attest and, per digest, where it was built:
+the checks are listed in `masseuse-video-tee/VERIFY.md`). The policy does
+not list image digests. It names the rule an image must satisfy and where
+its source lives:
 
 ```json
-"imageSources": {
-  "sha256:…": {
-    "repo": "ghcr.io/femled/masseuse-video-tee",
-    "tag": "v0.1.0",
-    "sourceUri": "github.com/FemLed/masseuse-video-tee"
-  }
-}
+"imageSignatures": ["<hex SHA-256 of the release signing key>"],
+"minRelease": "v0.4.0",
+"sourceUri": "github.com/FemLed/masseuse-video-tee",
+"imageRepo": "ghcr.io/femled/masseuse-video-tee"
 ```
 
-That repository's release workflow builds the image on GitHub Actions from
-the tagged commit, pushes it to the public registry with SLSA provenance
-and a keyless signature, and copies the same digest into the registry the
-enclave boots from. So the digest in the attestation, the digest in the
-public registry and the digest in the provenance are one value, and:
+`imageSignatures` is the key the Confidential Space launcher must have
+verified a signature from before it started the image (the token lists the
+key ids it checked). Only that repository's release workflow can sign with
+the key, so a listed key id means the image was built by that workflow at a
+release tag. Which release: the workflow bakes the tag and the source commit
+into the image as `TEE_IMAGE_VERSION` and `TEE_IMAGE_COMMIT`, the launcher
+attests the whole container environment, and the connector refuses a release
+below `minRelease`. Nothing has to be committed after the fact for this to
+hold, which is the point: a list of digests kept in a repository is always
+one release behind the image it describes.
+
+The release workflow builds the image on GitHub Actions from the tagged
+commit, pushes it to the public registry with SLSA provenance and a keyless
+signature, and copies the same digest into the registry the enclave boots
+from. So the digest in the attestation, the digest in the public registry and
+the digest in the provenance are one value, and with the digest and release
+the token names:
 
 ```sh
 slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:<digest> \
-  --source-uri github.com/FemLed/masseuse-video-tee --source-tag v0.1.0
+  --source-uri github.com/FemLed/masseuse-video-tee --source-tag <TEE_IMAGE_VERSION>
 cosign verify ghcr.io/femled/masseuse-video-tee@sha256:<digest> \
   --certificate-identity-regexp '^https://github.com/FemLed/masseuse-video-tee/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-proves that the code at that tag is what ran on the frames and the audio. The connector
-prints exactly this `slsa-verifier` line (`enclave source ... verify=`) each
-time it dials, with the digest it just verified; `sh scripts/verify-enclave.sh`
-runs both checks for every digest the policy currently allows, and says so
-when a digest has no published build (one from before the source was
-public). A digest that is not in the policy at all is one the connector
-would refuse.
+proves that the code at that tag is what ran on the frames and the audio.
+The connector prints exactly this `slsa-verifier` line (`enclave source ...
+verify=`) each time it dials, with the digest and release it just verified
+(`enclave verified ... release= commit=`); `sh scripts/verify-enclave.sh
+--origin https://slot-N.tee.masseuse.ai` reads the digest and release off a
+live enclave's token and runs both checks, and `sh scripts/verify-enclave.sh
+sha256:<digest>@<tag>` does the same for a line from the connector's log.
+An image built before the stamp existed verifies without `--source-tag`;
+the provenance still names the source repository and the commit.
 
 What this does not cover is the same as for the connector itself: that the
 source does what it says is a matter of reading it (`masseuse-video-tee`,

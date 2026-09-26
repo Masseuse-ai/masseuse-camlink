@@ -6,13 +6,23 @@
 // in masseuse-video-tee/verifier: fetch GET /attestation?nonce=<fresh> over
 // TLS, keep the leaf certificate that connection used, verify the
 // Confidential Space token (RS256 against Google's JWKS; issuer, audience,
-// expiry), apply the policy the service publishes at /api/tee-policy (image
-// digest, debug state, STABLE, GPU confidential computing, TRAINER_URL,
-// image signatures), and check the nonce bindings: the fresh nonce, the
-// SHA-256 of the enclave's evidence key, and the SHA-256 of the TLS leaf's
-// SubjectPublicKeyInfo. The last binding is what a browser cannot check and
-// what proves the TLS endpoint terminates inside the attested enclave; the
-// connector then pins the tunnel's TLS to that same key.
+// expiry), apply the policy the service publishes at /api/tee-policy (the
+// signing key the launcher verified the image with, the lowest release the
+// image may be, debug state, STABLE, GPU confidential computing,
+// TRAINER_URL, and image digests when the policy pins any), and check the
+// nonce bindings: the fresh nonce, the SHA-256 of the enclave's evidence
+// key, and the SHA-256 of the TLS leaf's SubjectPublicKeyInfo. The last
+// binding is what a browser cannot check and what proves the TLS endpoint
+// terminates inside the attested enclave; the connector then pins the
+// tunnel's TLS to that same key.
+//
+// Which code runs is read off the token, not off a list: the enclave
+// repository's release workflow bakes the release tag and source commit
+// into the image (TEE_IMAGE_VERSION, TEE_IMAGE_COMMIT), the launcher
+// attests the whole container environment, and the same workflow is the
+// only holder of the signing key. The digest the token names is then
+// checked against its SLSA provenance in the public registry with the one
+// command the connector logs at dial.
 package attest
 
 import (
@@ -47,20 +57,36 @@ const (
 	dbgstatDebug   = "enabled"
 )
 
-// Policy is the document served at <service>/api/tee-policy.
+// Policy is the document served at <service>/api/tee-policy. It must pin
+// the image one of two ways: ImageSignatures (the rule) or
+// AllowedImageDigests (an explicit list); a policy with neither is refused.
 type Policy struct {
+	// AllowedImageDigests, when non-empty, restricts the enclave to these
+	// digests on top of everything else.
 	AllowedImageDigests []string `json:"allowedImageDigests"`
 	AllowDebug          bool     `json:"allowDebug"`
 	RequireStable       bool     `json:"requireStable"`
 	RequireGpuCc        bool     `json:"requireGpuCc"`
 	ExpectedTrainerURL  string   `json:"expectedTrainerUrl"`
-	ImageSignatures     []string `json:"imageSignatures"`
-	// ImageSources says where each allowed digest was built from: the public
-	// registry that holds the same digest with its SLSA provenance and
-	// keyless signature, the release tag, and the source repository the
-	// provenance names. A digest without an entry predates the published
-	// source; the connector says so rather than refusing, since the
-	// attestation itself still holds.
+	// ImageSignatures are key ids (hex SHA-256 of the DER public key) one
+	// of which the launcher must have verified a signature from before it
+	// started the image; the token lists them in image_signatures[]. The
+	// enclave repository's release workflow is the only user of the key,
+	// so a listed key id means "built by that workflow at a release tag".
+	ImageSignatures []string `json:"imageSignatures"`
+	// MinRelease is the lowest release (vX.Y.Z) an enclave may run, read
+	// off the image's attested TEE_IMAGE_VERSION. Empty accepts any release,
+	// including images built before the stamp existed.
+	MinRelease string `json:"minRelease"`
+	// SourceURI is the repository whose release workflow builds the image
+	// and ImageRepo the public registry holding the same digest with its
+	// SLSA provenance; together with the token's release stamp they form
+	// the verify command the connector logs at dial.
+	SourceURI string `json:"sourceUri"`
+	ImageRepo string `json:"imageRepo"`
+	// ImageSources is the older, per-digest form of the same record. It is
+	// consulted for the verify command when the token carries no release
+	// stamp and the policy has an entry for the digest.
 	ImageSources        map[string]ImageSource `json:"imageSources"`
 	Issuer              string                 `json:"issuer"`
 	JWKSURL             string                 `json:"jwksUrl"`
@@ -72,19 +98,119 @@ type Policy struct {
 // ImageSource is the public build record of one image digest.
 type ImageSource struct {
 	Repo      string `json:"repo"`      // e.g. ghcr.io/femled/masseuse-video-tee
-	Tag       string `json:"tag"`       // the release tag, e.g. v0.1.0
+	Tag       string `json:"tag"`       // the release tag, e.g. v0.4.0; empty when the image is unstamped
 	SourceURI string `json:"sourceUri"` // e.g. github.com/FemLed/masseuse-video-tee
 }
 
-// String is "<sourceUri>@<tag>", the source revision the digest was built from.
-func (s ImageSource) String() string { return s.SourceURI + "@" + s.Tag }
+// String is "<sourceUri>@<tag>", the source revision the digest was built
+// from, or the source alone when the tag is unknown.
+func (s ImageSource) String() string {
+	if s.Tag == "" {
+		return s.SourceURI
+	}
+	return s.SourceURI + "@" + s.Tag
+}
 
 // VerifyCommand is the one-line check anyone can run against the digest:
 // slsa-verifier confirms the provenance attached to the image in the public
-// registry names this source at this tag, and the digest is the one the
-// enclave attested (VERIFY.md, "The enclave your camera streams to").
+// registry names this source (at this tag, when known), and the digest is
+// the one the enclave attested (VERIFY.md, "The enclave your camera streams
+// to").
 func (s ImageSource) VerifyCommand(digest string) string {
-	return fmt.Sprintf("slsa-verifier verify-image %s@%s --source-uri %s --source-tag %s", s.Repo, digest, s.SourceURI, s.Tag)
+	cmd := fmt.Sprintf("slsa-verifier verify-image %s@%s --source-uri %s", s.Repo, digest, s.SourceURI)
+	if s.Tag != "" {
+		cmd += " --source-tag " + s.Tag
+	}
+	return cmd
+}
+
+// Release is what the image says about itself: the release tag and the
+// source commit the enclave repository's release workflow baked into it as
+// TEE_IMAGE_VERSION and TEE_IMAGE_COMMIT, attested with the rest of the
+// container environment. Images built before the stamp existed have none.
+type Release struct {
+	Version string
+	Commit  string
+}
+
+func validRegistryPath(s string) bool {
+	return s != "" && !strings.ContainsAny(s, " @:\n") && strings.Contains(s, "/")
+}
+
+func validSourceURI(s string) bool {
+	return s != "" && !strings.Contains(s, "://") && !strings.ContainsAny(s, " \n") && strings.Contains(s, "/")
+}
+
+// releaseNumbers parses "vMAJOR.MINOR.PATCH[-pre][+build]" into its three
+// numbers and its pre-release suffix; ok is false for anything else.
+func releaseNumbers(tag string) (nums [3]int, pre string, ok bool) {
+	if !strings.HasPrefix(tag, "v") {
+		return nums, "", false
+	}
+	rest := tag[1:]
+	if i := strings.IndexByte(rest, '+'); i >= 0 {
+		rest = rest[:i]
+	}
+	if i := strings.IndexByte(rest, '-'); i >= 0 {
+		rest, pre = rest[:i], rest[i+1:]
+		if pre == "" {
+			return nums, "", false
+		}
+	}
+	parts := strings.Split(rest, ".")
+	if len(parts) != 3 {
+		return nums, "", false
+	}
+	for i, p := range parts {
+		if p == "" || len(p) > 9 {
+			return nums, "", false
+		}
+		n := 0
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return nums, "", false
+			}
+			n = n*10 + int(c-'0')
+		}
+		nums[i] = n
+	}
+	return nums, pre, true
+}
+
+// ValidRelease reports whether tag is a release tag of the form vX.Y.Z,
+// optionally with a pre-release suffix.
+func ValidRelease(tag string) bool {
+	_, _, ok := releaseNumbers(tag)
+	return ok
+}
+
+// CompareRelease orders two release tags: -1, 0 or +1 as a is older than,
+// the same as or newer than b. A pre-release precedes the release it
+// precedes ("v1.2.0-rc.1" < "v1.2.0"); two pre-releases of one version
+// compare as strings. Both tags must satisfy ValidRelease.
+func CompareRelease(a, b string) int {
+	an, ap, _ := releaseNumbers(a)
+	bn, bp, _ := releaseNumbers(b)
+	for i := range an {
+		if an[i] != bn[i] {
+			if an[i] < bn[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case ap == bp:
+		return 0
+	case ap == "":
+		return 1
+	case bp == "":
+		return -1
+	case ap < bp:
+		return -1
+	default:
+		return 1
+	}
 }
 
 func isDigest(d string) bool {
@@ -101,25 +227,42 @@ func isDigest(d string) bool {
 
 // Validate fills defaults and rejects a policy that could not pin anything.
 func (p *Policy) Validate() error {
-	if len(p.AllowedImageDigests) == 0 {
-		return errors.New("policy names no image digests")
+	if len(p.AllowedImageDigests) == 0 && len(p.ImageSignatures) == 0 {
+		return errors.New("policy names neither image signing keys nor image digests")
 	}
 	for _, d := range p.AllowedImageDigests {
 		if !isDigest(d) {
 			return fmt.Errorf("policy digest %q is not sha256:<64 hex>", d)
 		}
 	}
+	for _, k := range p.ImageSignatures {
+		if k == "" || strings.ContainsAny(k, " \n") {
+			return fmt.Errorf("policy imageSignatures entry %q is not a key id", k)
+		}
+	}
+	if p.MinRelease != "" && !ValidRelease(p.MinRelease) {
+		return fmt.Errorf("policy minRelease %q is not a release tag (vX.Y.Z)", p.MinRelease)
+	}
+	if p.SourceURI != "" && !validSourceURI(p.SourceURI) {
+		return fmt.Errorf("policy sourceUri %q is not a source URI", p.SourceURI)
+	}
+	if p.ImageRepo != "" && !validRegistryPath(p.ImageRepo) {
+		return fmt.Errorf("policy imageRepo %q is not a registry path", p.ImageRepo)
+	}
+	if (p.SourceURI == "") != (p.ImageRepo == "") {
+		return errors.New("policy sourceUri and imageRepo go together")
+	}
 	for d, s := range p.ImageSources {
 		if !isDigest(d) {
 			return fmt.Errorf("policy imageSources key %q is not sha256:<64 hex>", d)
 		}
-		if s.Repo == "" || strings.ContainsAny(s.Repo, " @:\n") || !strings.Contains(s.Repo, "/") {
+		if !validRegistryPath(s.Repo) {
 			return fmt.Errorf("policy imageSources[%s].repo %q is not a registry path", d, s.Repo)
 		}
 		if !strings.HasPrefix(s.Tag, "v") || strings.ContainsAny(s.Tag, " \n") {
 			return fmt.Errorf("policy imageSources[%s].tag %q is not a release tag", d, s.Tag)
 		}
-		if s.SourceURI == "" || strings.Contains(s.SourceURI, "://") || strings.ContainsAny(s.SourceURI, " \n") || !strings.Contains(s.SourceURI, "/") {
+		if !validSourceURI(s.SourceURI) {
 			return fmt.Errorf("policy imageSources[%s].sourceUri %q is not a source URI", d, s.SourceURI)
 		}
 	}
@@ -174,9 +317,16 @@ func (e *PolicyError) Error() string {
 
 // Result is what a verified enclave looks like.
 type Result struct {
-	Origin       string
-	ImageDigest  string
-	Source       *ImageSource // the policy's build record for ImageDigest; nil when it has none
+	Origin      string
+	ImageDigest string
+	// Release is the image's attested release stamp; nil for an image built
+	// before the stamp existed.
+	Release *Release
+	// Source is where to check ImageDigest against its provenance: the
+	// policy's sourceUri/imageRepo with the token's release tag, or the
+	// policy's per-digest record for an unstamped image; nil when the
+	// policy publishes neither.
+	Source       *ImageSource
 	InstanceID   string
 	DbgStat      string
 	Leaf         *x509.Certificate
@@ -316,9 +466,8 @@ func (v *Verifier) Verify(ctx context.Context, origin string) (*Result, error) {
 	res.SPKISHA256 = sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 	res.TLSSpkiNonce = base64.RawURLEncoding.EncodeToString(res.SPKISHA256[:])
 	res.ImageDigest = nestedString(claims.Submods, "container", "image_digest")
-	if s, ok := v.Policy.ImageSources[res.ImageDigest]; ok {
-		res.Source = &s
-	}
+	res.Release = releaseOf(claims)
+	res.Source = sourceOf(v.Policy, res.ImageDigest, res.Release)
 	res.InstanceID = nestedString(claims.Submods, "gce", "instance_id")
 	res.DbgStat = claims.DbgStat
 	res.TokenExpiry = time.Unix(claims.Expiry, 0)
@@ -327,6 +476,43 @@ func (v *Verifier) Verify(ctx context.Context, origin string) (*Result, error) {
 		return nil, &PolicyError{Reasons: reasons}
 	}
 	return res, nil
+}
+
+// containerEnv returns the attested container environment.
+func containerEnv(c *Claims) map[string]any {
+	env, _ := nestedAny(c.Submods, "container", "env").(map[string]any)
+	return env
+}
+
+// releaseOf reads the image's release stamp off the attested environment;
+// nil when the image carries none.
+func releaseOf(c *Claims) *Release {
+	env := containerEnv(c)
+	version, _ := env["TEE_IMAGE_VERSION"].(string)
+	if version == "" {
+		return nil
+	}
+	commit, _ := env["TEE_IMAGE_COMMIT"].(string)
+	return &Release{Version: version, Commit: commit}
+}
+
+// sourceOf says where digest can be checked against its provenance: the
+// policy's source repository and public registry with the release the
+// token names, else the policy's per-digest record, else nothing.
+func sourceOf(p *Policy, digest string, rel *Release) *ImageSource {
+	if p.SourceURI != "" && p.ImageRepo != "" {
+		s := &ImageSource{Repo: p.ImageRepo, SourceURI: p.SourceURI}
+		if rel != nil && ValidRelease(rel.Version) {
+			s.Tag = rel.Version
+		} else if old, ok := p.ImageSources[digest]; ok {
+			s.Tag = old.Tag
+		}
+		return s
+	}
+	if s, ok := p.ImageSources[digest]; ok {
+		return &s
+	}
+	return nil
 }
 
 // checkClaims applies the policy to verified claims and returns every
@@ -346,8 +532,21 @@ func checkClaims(p *Policy, c *Claims, doc *attestationDoc, nonce, tlsSpki strin
 		fail("secure boot is not on")
 	}
 	digest := nestedString(c.Submods, "container", "image_digest")
-	if !contains(p.AllowedImageDigests, digest) {
-		fail("image %s is not in the policy", orUnknown(digest))
+	if digest == "" {
+		fail("no image digest in the attestation")
+	} else if len(p.AllowedImageDigests) > 0 && !contains(p.AllowedImageDigests, digest) {
+		fail("image %s is not in the policy", digest)
+	}
+	if p.MinRelease != "" {
+		version, _ := containerEnv(c)["TEE_IMAGE_VERSION"].(string)
+		switch {
+		case version == "":
+			fail("image carries no release stamp, policy requires %s or later", p.MinRelease)
+		case !ValidRelease(version):
+			fail("image release stamp %q is not a release tag", version)
+		case CompareRelease(version, p.MinRelease) < 0:
+			fail("image release %s is older than the policy's minimum %s", version, p.MinRelease)
+		}
 	}
 	switch c.DbgStat {
 	case dbgstatProd:
@@ -370,8 +569,7 @@ func checkClaims(p *Policy, c *Claims, doc *attestationDoc, nonce, tlsSpki strin
 		}
 	}
 	if p.ExpectedTrainerURL != "" {
-		env, _ := nestedAny(c.Submods, "container", "env").(map[string]any)
-		trainer, _ := env["TRAINER_URL"].(string)
+		trainer, _ := containerEnv(c)["TRAINER_URL"].(string)
 		if strings.TrimRight(trainer, "/") != strings.TrimRight(p.ExpectedTrainerURL, "/") {
 			fail("slot posts to %s, not the expected service", orNowhere(trainer))
 		}

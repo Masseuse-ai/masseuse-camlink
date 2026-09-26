@@ -17,9 +17,9 @@ are acknowledged within three business days.
 - It refuses to dial anything but a single private-network `host:port` per
   session, so a compromised service cannot turn it into a proxy.
 - It dials an enclave only after verifying that enclave's Confidential Space
-  attestation (image digest, debug state, hardware model) against the policy
-  published at `https://masseuse.ai/api/tee-policy`, and pins the enclave's
-  TLS key to the one bound into that attestation.
+  attestation (the image's signing key and release, debug state, hardware
+  model) against the policy published at `https://masseuse.ai/api/tee-policy`,
+  and pins the enclave's TLS key to the one bound into that attestation.
 - Its identity is an Ed25519 key stored with mode 0600 in its state
   directory. Deleting the directory revokes every pairing.
 
