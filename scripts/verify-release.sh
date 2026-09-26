@@ -335,7 +335,7 @@ if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
     # linux/amd64 archive: units/<name> hashes to the manifest's linux/amd64 entry.
     archive="masseuse-camlink_${version}_linux_amd64.tar.gz"
     if [ -s "$archive" ]; then
-      tar -tzf "$archive" | grep '^units/' | while read -r f; do
+      tar -tzf "$archive" | grep '^units/[^/]' | while read -r f; do
         name=${f#units/}
         want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "linux" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
         got=$(tar -xzOf "$archive" "$f" | $SHA | cut -d' ' -f1)
@@ -347,7 +347,8 @@ if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
     # The Windows zip: units/<name>.exe against the windows/amd64 entries.
     zipfile="Masseuse.ai-${version}-windows.zip"
     if [ -s "$zipfile" ] && command -v unzip >/dev/null 2>&1; then
-      unzip -Z1 "$zipfile" | grep '^units/' | while read -r f; do
+      # The zip lists the directory entry units/ too; files only.
+      unzip -Z1 "$zipfile" | grep '^units/[^/]' | while read -r f; do
         name=${f#units/}
         want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "windows" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
         got=$(unzip -p "$zipfile" "$f" | $SHA | cut -d' ' -f1)

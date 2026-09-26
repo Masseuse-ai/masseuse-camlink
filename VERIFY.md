@@ -502,4 +502,53 @@ toolchain from the binary's embedded build information, e.g.
 `v0.1.0 go1.27.1`. `go version -m <binary>` prints the whole module list,
 including `github.com/FemLed/masseuse-camlink vX.Y.Z h1:...`; that `h1:` hash
 is the one `go mod download -json github.com/FemLed/masseuse-camlink@vX.Y.Z`
-reports from `sum.golang.org`. A build from a working tree prints `(devel)`.
+reports from `sum.golang.org`. A build from a working tree prints `(devel)`,
+or Go's pseudo-version for the commit with `+dirty` when the tree has
+changes; neither is a release, and such a build never updates itself.
+
+## 6. What the updater verifies
+
+From v0.11.0 the program replaces itself with a newer release on its own
+(README, "Updates"). What it accepts is what this document tells a reader
+to accept, checked by the running program (`internal/update`, with
+`internal/provenance` doing the Sigstore work it already does for the
+enclave image) before any file is moved:
+
+1. `checksums.txt` and `checksums.txt.sigstore.json` from the latest
+   release (`releases/latest/download/`). The bundle must verify against
+   the Sigstore trust root the program carries (refreshed through TUF into
+   its state directory when the network allows, as for the enclave), with a
+   certificate issued by GitHub Actions to
+   `https://github.com/FemLed/masseuse-camlink/.github/workflows/release.yml@refs/tags/vX.Y.Z`
+   for a run on this repository, logged in Rekor: step 1 above. The release
+   tag is read from that certificate, never from a file name or a version
+   string on the page, and only a tag newer than the running program's own
+   goes further; pre-releases never do.
+2. The checksum file the artifact is listed in (`checksums-darwin.txt` for
+   the disk image, `checksums-windows.txt` for the Windows zip, both with
+   their own bundles verified the same way at that exact tag), and the
+   download's SHA-256 against it: step 2.
+3. The SLSA provenance for the artifact (`multiple.intoto.jsonl`,
+   `darwin.intoto.jsonl` or `windows.intoto.jsonl`), a Sigstore bundle
+   signed by the SLSA generic generator for a build configured by this
+   repository's release workflow at that tag, whose statement names the
+   downloaded file and its digest among its subjects: step 3, as
+   `slsa-verifier verify-artifact` does it.
+4. On a Mac, the application inside the mounted image: `codesign --verify
+   --deep --strict`, `spctl --assess --type execute` answering `accepted`,
+   `TeamIdentifier=B8Z4RP3846` and the hardened runtime flag, on the image's
+   copy and again on the copy taken with `ditto`: "The macOS app" above.
+5. The new program's own `--version`, run from where it was staged, must
+   print the tag.
+
+Only then is the running install renamed aside (`Masseuse.previous.app`,
+`.previous/`) and the new one renamed in; the new program is started with
+the same arguments, and removes the previous install after its first
+connection to the service. A refusal at any step leaves the running program
+as it is. The service at masseuse.ai plays no part: it names no version and
+serves no file. `masseuse-camlink update` runs the same steps from a
+terminal and prints what it verified; the release workflow runs it against
+every release it publishes, on the three platforms, both as the release
+itself ("up to date") and as an older release told to update
+(`update-check*` in `.github/workflows/release.yml`), so the path a
+person's computer takes at the next release has run at this one.

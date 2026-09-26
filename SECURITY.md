@@ -66,6 +66,19 @@ are acknowledged within three business days.
   the key whose public half is `packaging/units/cosign.pub`, and the
   release workflow verifies that before bundling (`VERIFY.md`).
 
+- It updates itself (README "Updates") only from this repository's
+  releases, and only after verifying, with the Sigstore trust root it
+  carries, that the release's checksum file was signed by this
+  repository's release workflow at a release tag, that the download's hash
+  is in that file, that the SLSA provenance names the download, and on a
+  Mac that the application is signed by the same Developer ID and accepted
+  by Gatekeeper (VERIFY.md, "What the updater verifies"). The service at
+  masseuse.ai names no version and serves no file, so it cannot push code
+  to a connector. Nothing is run, moved or removed before it verifies; the
+  version replaced is kept until the new one has connected once; a new
+  version is installed only while no session is using the computer.
+  `-no-update` turns it off.
+
 ## Supply chain
 
 Every release is built by GitHub Actions from a tag, with a pinned Go

@@ -89,6 +89,50 @@ ffmpeg is built from pinned upstream sources by the same public workflow,
 `windows_amd64` binary under the name `Masseuse.ai.exe`, byte for byte, with
 an ffmpeg built the same way (VERIFY.md, "The Windows package").
 
+### Updates
+
+From v0.11.0 the program keeps itself current, so there is no going back
+to masseuse.ai/app for a new version. Fifteen seconds after it starts, and
+every six hours after, it looks at the latest release on GitHub. A newer
+one is downloaded and checked the way VERIFY.md tells a reader to check a
+release, by the running program: the checksum file's signature must be the
+release workflow's (this repository's, at a release tag), the download's
+hash must be in that file, the SLSA provenance must name the download, and
+on a Mac the application inside the disk image must carry the same
+Developer ID and pass Gatekeeper. Then the new version is put in place and
+started, but only when nothing is using the computer: no session has the
+camera, and the unit is neither attached to one nor armed. During a session
+the window says
+
+```
+Update: Masseuse.ai v0.11.1 downloaded and verified; installing when the session ends.
+```
+
+and afterwards `Updating to v0.11.1; back in a moment.` followed by the
+new version's own first lines, `Updated to v0.11.1.` among them, in the
+same window, with the same pairing. An update downloaded but not yet
+installed when the program was closed is installed the next time it opens.
+Nothing is asked; nothing is run, moved or removed before it has verified.
+
+What goes wrong stays on the console in one line and changes nothing:
+no network means no check until the next one; a release that does not
+verify, or does not fit on the disk, is said so once and left alone for a
+day (`Update v0.11.1 did not verify; staying on v0.11.0.`); a copy of the
+program this user cannot replace where it is (`Masseuse` run from the disk
+image rather than from Applications, a binary under `/usr/local/bin`) says
+so at start and is left to be updated by hand. The version replaced is kept
+beside the new one (`Masseuse.previous.app`, `.previous/`) until the new
+one has connected to the service once, then removed; if a new version
+would not start, the previous one is put back and the window says so.
+
+`-no-update` (or `MASSEUSE_CAMLINK_UPDATE=off`) turns it off, for people
+who manage their installs; `masseuse-camlink update` installs the latest
+release now, from a terminal, with the program stopped. Builds from a
+working tree and the container image do not update themselves (the image
+is updated by its tag). Whatever the update did is what an install by
+hand would have done: the same release files, the same checks
+(VERIFY.md, "What the updater verifies").
+
 ## Use your computer's camera
 
 ```

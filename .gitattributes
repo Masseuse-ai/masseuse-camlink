@@ -1,0 +1,3 @@
+# The recorded release files are verified byte for byte against their
+# signatures: no line-ending conversion anywhere.
+internal/provenance/testdata/release/* -text

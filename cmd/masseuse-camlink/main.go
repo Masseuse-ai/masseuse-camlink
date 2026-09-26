@@ -92,8 +92,10 @@ func main() {
 			exit(2)
 		}
 		exit(probeEstim(ctx, *stateDir, logger))
+	case "update":
+		exit(updateNow(ctx, *stateDir, logger))
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (the commands are: devices, estim probe)\n", flag.Arg(0))
+		fmt.Fprintf(os.Stderr, "unknown command %q (the commands are: devices, estim probe, update)\n", flag.Arg(0))
 		exit(2)
 	}
 
@@ -127,6 +129,21 @@ func main() {
 	// own name and version for anyone comparing with a release.
 	fmt.Printf("%s for your computer  (masseuse-camlink %s)\n", appName, buildinfo.Version())
 	fmt.Printf("Identity %s… (state in %s)\n", id.PublicKeyString()[:8], *stateDir)
+	// The program keeps itself current (update.go). What the last update
+	// did is said now; an update downloaded and verified on an earlier run
+	// is put in place before anything else starts, the person having just
+	// opened the program.
+	upd, updatesOff := newUpdater(*stateDir, logger, func(format string, args ...any) { fmt.Printf(format, args...) })
+	if updatesOff != "" {
+		fmt.Println(updatesOff)
+	}
+	if upd != nil {
+		upd.announce()
+		upd.handoff = func() { release() }
+		if upd.applyStaged(ctx) {
+			return // Windows: the new program has the console
+		}
+	}
 
 	// The connector's own stream and the camera behind it.
 	sink, err := serve.New(serve.Config{StateDir: *stateDir, Logger: logger})
@@ -165,7 +182,8 @@ func main() {
 	// laptop left at the foot of the bed would otherwise idle-sleep while
 	// the enclave boots, taking the camera, the microphone and the unit's
 	// Bluetooth link with it.
-	defer keepAwake(*allowSleep, logger)()
+	stopAwake := keepAwake(*allowSleep, logger)
+	defer stopAwake()
 
 	httpClient := &http.Client{}
 	mgr := &manager{
@@ -199,6 +217,21 @@ func main() {
 	estimCtx, stopEstim := context.WithCancel(context.Background())
 	estimDone := make(chan struct{})
 	go func() { defer close(estimDone); mgr.estim.run(estimCtx) }()
+	if upd != nil {
+		// An update is applied only while nothing is using this computer,
+		// and after everything this program holds has been let go.
+		upd.idle = mgr.idle
+		upd.handoff = func() {
+			mgr.closeAll("updating")
+			cam.off(false)
+			stopEstim()
+			<-estimDone
+			stopAwake()
+			release()
+		}
+		mgr.onFirstOnline = upd.proven
+		go upd.run(ctx)
+	}
 	err = client.Run(ctx, mgr)
 	mgr.closeAll("shutting down")
 	cam.off(false)
@@ -219,6 +252,7 @@ on your network, to the enclave of a masseuse.ai session.
   masseuse-camlink                    run with the remembered (or first) camera and microphone
   masseuse-camlink devices            list cameras and microphones
   masseuse-camlink estim probe        find the stimulation unit over Bluetooth and print its status
+  masseuse-camlink update             install the latest release now, if it is newer (it happens by itself otherwise)
   masseuse-camlink -camera 1 -mic 0   choose by number or by (part of) the name; remembered
   masseuse-camlink -camera-url rtsps://user:password@192.168.1.20:322/live
                                       send a camera on your network instead
@@ -364,6 +398,28 @@ type manager struct {
 	mu       sync.Mutex
 	tunnels  map[string]*active // by session id
 	lastCode string             // the code last shown, so a re-send is not printed twice
+	// onFirstOnline runs once, the first time the service answers: the
+	// updater takes it as the new program having proven itself.
+	onFirstOnline func()
+	wasOnline     bool
+}
+
+// idle says whether nothing is using this computer: no session has a
+// tunnel, and the stimulation unit is neither attached to one nor armed.
+// An update is applied only then.
+func (m *manager) idle() bool {
+	m.mu.Lock()
+	tunnels := len(m.tunnels)
+	m.mu.Unlock()
+	if tunnels > 0 {
+		return false
+	}
+	if m.estim != nil {
+		if _, attached := m.estim.session.Attached(); attached || m.estim.rt.Armed() {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *manager) printf(format string, args ...any) {
@@ -450,6 +506,14 @@ func (m *manager) OnOnline(online bool) {
 		m.log.Info("connected to the service")
 		if m.estim != nil {
 			m.estim.reportDevice()
+		}
+		m.mu.Lock()
+		first := !m.wasOnline
+		m.wasOnline = true
+		f := m.onFirstOnline
+		m.mu.Unlock()
+		if first && f != nil {
+			f()
 		}
 	} else {
 		m.log.Warn("disconnected from the service; reconnecting")

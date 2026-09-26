@@ -233,6 +233,54 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  update-check:
+    # The program updates itself (internal/update, README "Updates"). The
+    # published linux/amd64 connector, run as an install of its own, must
+    # find itself up to date; and told it is an older release
+    # (MASSEUSE_CAMLINK_UPDATE_AS) it must download this very release from
+    # GitHub, verify the checksums' signature and the provenance against
+    # the real Sigstore records, stage it, and swap it in: the whole path a
+    # person's computer takes at the next release, run here at this one.
+    needs: [goreleaser, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: The published linux/amd64 connector
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p install && cd install
+          for i in $(seq 1 20); do
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              --pattern "masseuse-camlink_${version}_linux_amd64.tar.gz" && break
+            sleep 15
+          done
+          tar -xzf "masseuse-camlink_${version}_linux_amd64.tar.gz"
+          rm "masseuse-camlink_${version}_linux_amd64.tar.gz"
+          ./masseuse-camlink --version
+      - name: It knows it is the latest release
+        run: |
+          out=$(install/masseuse-camlink -state-dir "${RUNNER_TEMP}/state-1" update)
+          echo "$out"
+          echo "$out" | grep -q "^Up to date: ${GITHUB_REF_NAME} is the latest release"
+      - name: As an older release, it updates itself to this one
+        env:
+          MASSEUSE_CAMLINK_UPDATE_AS: v0.10.0
+        run: |
+          before=$(sha256sum install/masseuse-camlink | cut -d' ' -f1)
+          out=$(install/masseuse-camlink -state-dir "${RUNNER_TEMP}/state-2" update)
+          echo "$out"
+          echo "$out" | grep -q "^A newer release: ${GITHUB_REF_NAME} (running v0.10.0), signed by https://github.com/FemLed/masseuse-camlink/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}"
+          echo "$out" | grep -q "^Downloaded and verified masseuse-camlink_${GITHUB_REF_NAME#v}_linux_amd64.tar.gz .*provenance by https://github.com/slsa-framework/slsa-github-generator/"
+          echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
+          test "$(install/masseuse-camlink --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
+          test -f install/.previous/masseuse-camlink
+          test "$(sha256sum install/masseuse-camlink | cut -d' ' -f1)" = "$before"
+          test -d install/units || echo "no helpers in this archive"
+          echo "the connector took the release from GitHub, verified it and swapped it in"
+
   macos-app:
     # The Mac download (packaging/macos/README.md): Masseuse.app,
     # universal, with ffmpeg inside, in Masseuse.ai-<version>.dmg; app and
@@ -431,6 +479,52 @@ jobs:
       provenance-name: darwin.intoto.jsonl
       upload-assets: true
 
+  update-check-macos:
+    # The application bundle updates itself from the disk image (update-check
+    # above says why): the published app, copied where a person would keep
+    # it, told it is an older release, downloads this release's image,
+    # checks the application inside as Gatekeeper does, copies it out and
+    # swaps it in.
+    needs: [macos-app, provenance-darwin]
+    runs-on: macos-26
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: The published application, in an Applications folder of its own
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 20); do
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              --pattern "Masseuse.ai-${version}.dmg" && break
+            sleep 15
+          done
+          mkdir -p Applications mnt
+          hdiutil attach -nobrowse -readonly -mountpoint mnt "Masseuse.ai-${version}.dmg"
+          ditto mnt/Masseuse.app Applications/Masseuse.app
+          hdiutil detach mnt
+          Applications/Masseuse.app/Contents/MacOS/Masseuse --version
+      - name: It knows it is the latest release
+        run: |
+          out=$(Applications/Masseuse.app/Contents/MacOS/Masseuse -state-dir "${RUNNER_TEMP}/state-1" update)
+          echo "$out"
+          echo "$out" | grep -q "^Up to date: ${GITHUB_REF_NAME} is the latest release"
+      - name: As an older release, it updates itself to this one
+        env:
+          MASSEUSE_CAMLINK_UPDATE_AS: v0.10.0
+        run: |
+          out=$(Applications/Masseuse.app/Contents/MacOS/Masseuse -state-dir "${RUNNER_TEMP}/state-2" update)
+          echo "$out"
+          echo "$out" | grep -q "^Downloaded and verified Masseuse.ai-${GITHUB_REF_NAME#v}.dmg"
+          echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
+          test -d Applications/Masseuse.previous.app
+          test "$(Applications/Masseuse.app/Contents/MacOS/Masseuse --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
+          codesign --verify --deep --strict Applications/Masseuse.app
+          spctl --assess --type execute -vv Applications/Masseuse.app 2>&1 | grep -q accepted
+          ls Applications/Masseuse.app/Contents/Helpers/units/
+          echo "the application took the release from GitHub, verified it and swapped it in"
+
   ffmpeg-windows:
     # ffmpeg.exe for the Windows download: the same pinned upstream tarballs
     # as the Mac's, cross-compiled here on Linux with mingw-w64 (a package
@@ -609,3 +703,50 @@ jobs:
       base64-subjects: ${{ needs.windows-app.outputs.hashes }}
       provenance-name: windows.intoto.jsonl
       upload-assets: true
+
+  update-check-windows:
+    # The Windows package updates itself from the zip (update-check above
+    # says why): the published package, extracted where a person would,
+    # told it is an older release, downloads this release's zip, checks
+    # it and swaps its files in; the running program's files may be
+    # renamed, never overwritten, and land in .previous\.
+    needs: [windows-app, provenance-windows]
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: The published package, extracted
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 20); do
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              --pattern "Masseuse.ai-${version}-windows.zip" && break
+            sleep 15
+          done
+          mkdir install && (cd install && 7z x -y "../Masseuse.ai-${version}-windows.zip" > /dev/null)
+          install/Masseuse.ai.exe --version
+      - name: It knows it is the latest release
+        run: |
+          out=$(install/Masseuse.ai.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-1")" update)
+          echo "$out"
+          echo "$out" | grep -q "^Up to date: ${GITHUB_REF_NAME} is the latest release"
+      - name: As an older release, it updates itself to this one
+        env:
+          MASSEUSE_CAMLINK_UPDATE_AS: v0.10.0
+        run: |
+          before=$(sha256sum install/Masseuse.ai.exe | cut -d' ' -f1)
+          out=$(install/Masseuse.ai.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-2")" update)
+          echo "$out"
+          echo "$out" | grep -q "^Downloaded and verified Masseuse.ai-${GITHUB_REF_NAME#v}-windows.zip"
+          echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
+          test -f install/.previous/Masseuse.ai.exe
+          test -f install/.previous/ffmpeg.exe
+          test "$(install/Masseuse.ai.exe --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
+          test "$(sha256sum install/Masseuse.ai.exe | cut -d' ' -f1)" = "$before"
+          ls install/units
+          echo "the package took the release from GitHub, verified it and swapped it in"

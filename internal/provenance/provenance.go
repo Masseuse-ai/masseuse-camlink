@@ -381,11 +381,13 @@ func (v *Verifier) identity(san, sanRegexp, sourceURL string, e Expect) (verify.
 	if err != nil {
 		return verify.CertificateIdentity{}, err
 	}
-	return verify.NewCertificateIdentity(sanMatcher, issuer, certificate.Extensions{
-		SourceRepositoryURI:    sourceURL,
-		SourceRepositoryRef:    "refs/tags/" + e.Release,
-		SourceRepositoryDigest: e.Commit,
-	})
+	ext := certificate.Extensions{SourceRepositoryURI: sourceURL, SourceRepositoryDigest: e.Commit}
+	if e.Release != "" {
+		// An empty release (a blob signature whose tag is read off the
+		// certificate afterwards, blob.go) leaves the ref unconstrained.
+		ext.SourceRepositoryRef = "refs/tags/" + e.Release
+	}
+	return verify.NewCertificateIdentity(sanMatcher, issuer, ext)
 }
 
 // verifyBundle runs sigstore-go: the certificate chains to Fulcio and was
@@ -494,6 +496,13 @@ func legacyBundle(envelope []byte, ann map[string]string) (*bundle.Bundle, error
 // enclave repository at the release tag and commit. SLSA v0.2 (what the
 // generator produces today) and v1 are both understood.
 func (v *Verifier) checkStatement(out *verify.VerificationResult, e Expect, sourceURL string, res *Result) error {
+	return v.checkStatementWith(out, e, sourceURL, v.builderSAN(), v.workflowPath(), res)
+}
+
+// checkStatementWith is checkStatement for a given builder identity and
+// workflow path (the connector's own releases are built by the generic
+// generator, blob.go).
+func (v *Verifier) checkStatementWith(out *verify.VerificationResult, e Expect, sourceURL string, builderSAN *regexp.Regexp, workflowPath string, res *Result) error {
 	if out.Statement == nil {
 		return errors.New("no in-toto statement")
 	}
@@ -559,14 +568,14 @@ func (v *Verifier) checkStatement(out *verify.VerificationResult, e Expect, sour
 	default:
 		return fmt.Errorf("predicate %s is not SLSA provenance", out.Statement.PredicateType)
 	}
-	if !v.builderSAN().MatchString(builder) {
+	if !builderSAN.MatchString(builder) {
 		return fmt.Errorf("provenance builder is %q", builder)
 	}
 	if repoURL != sourceURL || ref != wantRef {
 		return fmt.Errorf("provenance was built from %s at %s, the token names %s at %s", repoURL, ref, sourceURL, wantRef)
 	}
-	if entryPoint != v.workflowPath() {
-		return fmt.Errorf("provenance entry point is %q, not %s", entryPoint, v.workflowPath())
+	if entryPoint != workflowPath {
+		return fmt.Errorf("provenance entry point is %q, not %s", entryPoint, workflowPath)
 	}
 	if commit == "" {
 		return errors.New("provenance names no source commit")

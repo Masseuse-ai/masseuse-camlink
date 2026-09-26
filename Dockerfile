@@ -14,6 +14,8 @@ COPY --from=gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7f
 COPY $TARGETPLATFORM/masseuse-camlink /usr/bin/masseuse-camlink
 
 ENV MASSEUSE_CAMLINK_STATE_DIR=/state
+# The image is updated by its tag, not by the program (README "Updates").
+ENV MASSEUSE_CAMLINK_UPDATE=off
 VOLUME /state
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/bin/masseuse-camlink"]
