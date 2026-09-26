@@ -32,11 +32,13 @@
 # image around it (`Masseuse.ai-<version>.dmg`), and adds them to the
 # release with `checksums-darwin.txt`, its signature bundle and
 # `darwin.intoto.jsonl` (packaging/macos/README.md; VERIFY.md, "The macOS
-# app"); the `windows-app` job packs the windows_amd64 archive's binary as
-# `Masseuse.ai.exe` with a cross-compiled `ffmpeg.exe` into
-# `Masseuse.ai-<version>-windows.zip`, listed in `checksums-windows.txt`
-# with `windows.intoto.jsonl` (packaging/windows/README.md; VERIFY.md, "The
-# Windows package").
+# app"); the `windows-app` job appends a cross-compiled `ffmpeg.exe` and the
+# unit driver helpers to the windows_amd64 archive's binary as a payload,
+# signs the result with Azure Artifact Signing and publishes it as the one
+# file `Masseuse.exe`, listed in `checksums-windows.txt` with
+# `windows.intoto.jsonl` (packaging/windows/README.md; VERIFY.md, "The
+# Windows package"); `cmd/pestrip` strips the signature and the payload and
+# gives the archive's binary back.
 version: 2
 project_name: masseuse-camlink
 
@@ -202,13 +204,18 @@ release:
     same way (`checksums-darwin.txt.sigstore.json`), with provenance in
     `darwin.intoto.jsonl`.
 
-    **Windows users:** the download is `Masseuse.ai-{{ .Version }}-windows.zip`
-    (extract it, open Masseuse.ai.exe; ffmpeg.exe is beside it). It is added
-    by the `windows-app` job after the archives; the executable is the
-    `windows_amd64` archive's binary byte for byte, listed in
-    `checksums-windows.txt` (signed, `checksums-windows.txt.sigstore.json`;
-    provenance `windows.intoto.jsonl`). It carries no Windows code signature
-    yet, so Windows asks before the first start: More info, then Run anyway.
+    **Windows users:** the download is the one file `Masseuse.exe`: save
+    it anywhere and open it (ffmpeg and the unit drivers are inside it and
+    unpack under %LOCALAPPDATA%\masseuse-camlink on the first start). It is
+    added by the `windows-app` job after the archives; it is the
+    `windows_amd64` archive's binary byte for byte with the payload
+    appended and signed by Principled Labs, Inc. (Azure Artifact Signing),
+    listed in `checksums-windows.txt` (signed,
+    `checksums-windows.txt.sigstore.json`; provenance `windows.intoto.jsonl`).
+    While a release is new to Microsoft, Windows may still ask before the
+    first start: More info, then Run anyway. Installs of releases before
+    0.13 update themselves from `Masseuse.ai-{{ .Version }}-windows.zip`,
+    which holds the same file.
 
     See VERIFY.md for the commands and for rebuilding the binaries byte for
     byte.

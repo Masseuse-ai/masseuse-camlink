@@ -1,6 +1,6 @@
 #!/bin/sh
 # Generate the Windows resource objects the connector is linked with: the
-# icon Explorer shows for Masseuse.ai.exe and the strings its Details tab
+# icon Explorer shows for Masseuse.exe and the strings its Details tab
 # lists (winres.json: ProductName Masseuse.ai, CompanyName FemLed, Inc.,
 # FileDescription "Masseuse.ai for your computer"). The Go linker picks up
 # cmd/masseuse-camlink/rsrc_windows_<arch>.syso by name on a windows build,

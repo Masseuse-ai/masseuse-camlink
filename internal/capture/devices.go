@@ -57,16 +57,31 @@ func (d Device) input() string {
 // ErrNoFFmpeg is returned when ffmpeg cannot be found.
 var ErrNoFFmpeg = errors.New("capture: ffmpeg not found")
 
+// BundledDir, when set, is where the program unpacked the files it carries
+// inside itself (the Windows package's payload, cmd/masseuse-camlink): the
+// ffmpeg there comes before any other. Empty for every other build.
+var BundledDir string
+
 // FindFFmpeg resolves the ffmpeg executable: path as given; else the one
-// shipped beside this program, if any (the macOS application bundle carries
-// it in Contents/Helpers; a folder would carry it next to the executable);
-// else "ffmpeg" on PATH plus the usual install locations.
+// shipped with this program, if any (unpacked from the Windows package,
+// BundledDir; in Contents/Helpers of the macOS application bundle; next to
+// the executable in a folder); else "ffmpeg" on PATH plus the usual install
+// locations.
 func FindFFmpeg(path string) (string, error) {
 	if path != "" {
 		if p, err := exec.LookPath(path); err == nil {
 			return p, nil
 		}
 		return "", fmt.Errorf("%w at %s", ErrNoFFmpeg, path)
+	}
+	if BundledDir != "" {
+		name := "ffmpeg"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		if p := filepath.Join(BundledDir, name); isFile(p) {
+			return p, nil
+		}
 	}
 	if exe, err := os.Executable(); err == nil {
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {

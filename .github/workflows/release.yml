@@ -518,7 +518,10 @@ jobs:
           echo "$out"
           echo "$out" | grep -q "^Downloaded and verified Masseuse.ai-${GITHUB_REF_NAME#v}.dmg"
           echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
-          test -d Applications/Masseuse.previous.app
+          # The previous bundle goes under the state directory, not beside
+          # the new one: the Applications folder shows one application.
+          test -d "${RUNNER_TEMP}/state-2/previous/Masseuse.app"
+          test "$(ls Applications | wc -l)" -eq 1
           test "$(Applications/Masseuse.app/Contents/MacOS/Masseuse --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
           codesign --verify --deep --strict Applications/Masseuse.app
           spctl --assess --type execute -vv Applications/Masseuse.app 2>&1 | grep -q accepted
@@ -567,21 +570,34 @@ jobs:
           retention-days: 7
 
   windows-app:
-    # The Windows download (packaging/windows): Masseuse.ai-<version>-windows.zip
-    # holding the windows_amd64 connector goreleaser published, verified
-    # against the signed checksums.txt and renamed Masseuse.ai.exe (the same
-    # bytes: build-zip.sh checks), ffmpeg.exe from ffmpeg-windows, the
-    # notices and a README. This runner is where the Windows ffmpeg first
-    # runs: the smoke test and the connector's real-ffmpeg test gate the
-    # package. Nothing here is signed with a Windows certificate yet, so
-    # SmartScreen warns at the first start (README.txt says what to click);
-    # Authenticode is its own task.
+    # The Windows download (packaging/windows): one Masseuse.exe (the name
+    # the Mac bundle has too, Masseuse.app; the program calls itself
+    # Masseuse.ai), the windows_amd64 connector goreleaser published, verified against the
+    # signed checksums.txt, with ffmpeg.exe from ffmpeg-windows, the unit
+    # driver helpers and the notices appended as a payload
+    # (internal/payload; packaging/windows/pack), the files inside and the
+    # whole signed with Azure Artifact Signing when the repository has the
+    # credentials (the "Whether this run signs" step; without them the
+    # package ships unsigned, as before v0.13). cmd/pestrip proves that
+    # each signed file minus its signature is the file that was verified,
+    # and that the package minus its signature and payload is the published
+    # connector byte for byte. This runner is where the Windows ffmpeg
+    # first runs: the smoke test and the connector's real-ffmpeg test gate
+    # the package. The zip of releases before 0.13,
+    # Masseuse.ai-<version>-windows.zip, is still published with the same
+    # file inside under the name those releases used, Masseuse.ai.exe, for
+    # the installs of those releases to update themselves from (their
+    # updater runs and swaps in the zip's Masseuse.ai.exe by that name).
     needs: [goreleaser, ffmpeg-windows]
     runs-on: windows-2022
     timeout-minutes: 45
+    # The federated credential Artifact Signing trusts names this
+    # environment (packaging/windows/README.md, "Signing"). The keyless
+    # cosign identity is the workflow's and does not change with it.
+    environment: release
     permissions:
-      contents: write # the zip and checksums-windows.txt
-      id-token: write # keyless signing (Fulcio)
+      contents: write # the package, the zip and checksums-windows.txt
+      id-token: write # keyless signing (Fulcio) and the Azure login (OIDC)
     outputs:
       hashes: ${{ steps.hashes.outputs.hashes }}
     env:
@@ -656,37 +672,176 @@ jobs:
         run: |
           units=$(tr -d '[:space:]' < packaging/units/VERSION)
           sh packaging/units/fetch.sh "$units" windows amd64 dist/units
-      - name: Assemble the zip
-        run: sh packaging/windows/build-zip.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -u dist/units -o dist
-      - name: The zip's connector finds its helpers
-        # units\ next to the program is where the connector looks
-        # (cmd/masseuse-camlink/helpers.go); the extracted package names the
-        # helper on its first line.
+      - name: Whether this run signs
+        # Artifact Signing needs the Azure credentials (repository secrets)
+        # and the account (repository variables; packaging/windows/README.md,
+        # "Signing"). Without them the package is built, checked and
+        # published unsigned, and the run says so.
+        id: signing
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          mkdir extracted && (cd extracted && 7z x -y "../dist/Masseuse.ai-${version}-windows.zip" > /dev/null)
-          ls extracted/units
-          n=$(ls extracted/units/camlink-unit-*.exe | wc -l | tr -d ' ')
-          extracted/Masseuse.ai.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/probe-state")" -estim-ble off estim probe > probe.txt 2>&1 || true
+          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$ENDPOINT" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "signing with Artifact Signing at $ENDPOINT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::no Artifact Signing credentials (secret AZURE_CLIENT_ID, variable ARTIFACT_SIGNING_ENDPOINT): the Windows package ships unsigned"
+          fi
+      - name: What goes into the package
+        # The payload's programs are signed one by one before packing (each
+        # runs as a program of its own once unpacked); unsigned copies are
+        # kept to compare the signed ones with.
+        run: |
+          mkdir -p dist/pack/units dist/unsigned/units
+          cp dist/ffmpeg-windows/ffmpeg.exe dist/pack/ffmpeg.exe
+          cp -r dist/ffmpeg-windows/licenses dist/pack/licenses
+          cp dist/units/camlink-unit-*.exe dist/pack/units/
+          cp dist/pack/ffmpeg.exe dist/unsigned/ffmpeg.exe
+          cp dist/pack/units/*.exe dist/unsigned/units/
+      - name: Azure login (OIDC)
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign ffmpeg.exe and the helpers (Artifact Signing)
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist\pack
+          files-folder-filter: exe
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Masseuse.ai for your computer
+          description-url: https://masseuse.ai
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: The signed files are the verified files
+        # cmd/pestrip takes the signature off and zeroes the checksum, on
+        # both sides (ffmpeg's linker writes one): what remains must be
+        # what was verified a moment ago. For the Go-built helpers the
+        # stripped hash is the plain one, the manifest's.
+        run: |
+          for g in dist/pack/ffmpeg.exe dist/pack/units/camlink-unit-*.exe; do
+            rel=${g#dist/pack/}
+            a=$(go run ./cmd/pestrip -sha256 "$g")
+            b=$(go run ./cmd/pestrip -sha256 "dist/unsigned/$rel")
+            [ "$a" = "$b" ] || { echo "$rel: signed and stripped $a, unsigned $b" >&2; exit 1; }
+            echo "ok  $rel  $a"
+          done
+          for g in dist/unsigned/units/camlink-unit-*.exe; do
+            [ "$(go run ./cmd/pestrip -sha256 "$g")" = "$(sha256sum "$g" | cut -d' ' -f1)" ] ||
+              { echo "$g: a Go binary whose stripped hash is not its plain hash" >&2; exit 1; }
+          done
+      - name: Assemble the package
+        run: go run ./packaging/windows/pack -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink.exe -f dist/pack -u dist/pack/units -o dist/Masseuse.exe
+      - name: Sign the package (Artifact Signing)
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\Masseuse.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Masseuse.ai for your computer
+          description-url: https://masseuse.ai
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: The package is the published connector, with the payload
+        # pestrip: signature off, payload off, and the hash is the published
+        # windows_amd64 binary's; the payload written out is the signed
+        # ffmpeg and helpers, byte for byte.
+        run: |
+          got=$(go run ./cmd/pestrip -sha256 dist/Masseuse.exe)
+          want=$(sha256sum dist/masseuse-camlink.exe | cut -d' ' -f1)
+          [ "$got" = "$want" ] || { echo "Masseuse.exe stripped is $got, the connector $want" >&2; exit 1; }
+          echo "ok  Masseuse.exe minus its signature and payload is the published connector: $got"
+          go run ./cmd/pestrip -payload dist/payload-check dist/Masseuse.exe | tee dist/payload.txt
+          for g in dist/pack/ffmpeg.exe dist/pack/units/camlink-unit-*.exe; do
+            rel=${g#dist/pack/}
+            cmp "$g" "dist/payload-check/$rel" || { echo "$rel in the payload is not the signed file" >&2; exit 1; }
+          done
+          n=$(ls dist/pack/units/camlink-unit-*.exe | wc -l | tr -d ' ')
+          [ "$(grep -c ' units/camlink-unit-.*\.exe$' dist/payload.txt)" = "$n" ] || { echo "the payload does not carry every helper" >&2; exit 1; }
+      - name: Windows' verdict on the signatures
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $files = @('dist/Masseuse.exe', 'dist/pack/ffmpeg.exe') + (Get-ChildItem dist/pack/units/*.exe | ForEach-Object FullName)
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature $f
+            "$($s.Status)  $($s.SignerCertificate.Subject)  $f"
+            if ($s.Status -ne 'Valid') { throw "$f is not validly signed: $($s.Status) $($s.StatusMessage)" }
+          }
+      - name: The package runs alone
+        # Copied to a directory of its own, as a download is: the payload
+        # unpacks under the state directory, the connector names the helpers
+        # on its first line and finds its ffmpeg (devices lists none on the
+        # runner but runs ffmpeg to say so).
+        run: |
+          alone="${RUNNER_TEMP}/alone"; mkdir -p "$alone" && cp dist/Masseuse.exe "$alone/"
+          state="$(cygpath -w "${RUNNER_TEMP}/probe-state")"
+          "$alone/Masseuse.exe" --version
+          n=$(ls dist/pack/units/camlink-unit-*.exe | wc -l | tr -d ' ')
+          "$alone/Masseuse.exe" -state-dir "$state" -estim-ble off estim probe > probe.txt 2>&1 || true
           grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt ||
             { cat probe.txt; echo "the package's connector does not find its helpers" >&2; exit 1; }
+          "$alone/Masseuse.exe" -state-dir "$state" devices
+          ls "${RUNNER_TEMP}/probe-state/bin/"*/ffmpeg.exe
+      - name: The zip for installs before 0.13
+        # Those update themselves from Masseuse.ai-<version>-windows.zip: their
+        # updater runs `--version` on the zip's Masseuse.ai.exe, by that
+        # name, and swaps it in under the running program's name. So the
+        # zip holds this package under the old name; it then runs from its
+        # payload and ignores the files left beside it.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/zip && cp dist/Masseuse.exe dist/zip/Masseuse.ai.exe
+          (cd dist/zip && 7z a -tzip -mx=9 -bso0 -bsp0 "../Masseuse.ai-${version}-windows.zip" Masseuse.ai.exe > /dev/null)
+          7z l -ba "dist/Masseuse.ai-${version}-windows.zip" | tr -d '\r' | grep -q ' Masseuse.ai.exe$'
       - name: checksums-windows.txt, signed keyless
-        # The zip, hashed and signed like checksums.txt; the ffmpeg source
-        # tarballs are the ones checksums-darwin.txt lists (the same bytes).
+        # The package and the zip, hashed and signed like checksums.txt.
         run: |
           version="${GITHUB_REF_NAME#v}"
           cd dist
           # sha256sum on Windows hashes in binary mode and marks the name with
           # an asterisk; the file keeps the two-space form the other checksum
           # files have, which is also the name the provenance's subject gets.
-          sha256sum "Masseuse.ai-${version}-windows.zip" | sed 's/ \*/  /' > checksums-windows.txt
+          sha256sum Masseuse.exe "Masseuse.ai-${version}-windows.zip" | sed 's/ \*/  /' > checksums-windows.txt
           cat checksums-windows.txt
           cosign sign-blob --yes --bundle checksums-windows.txt.sigstore.json checksums-windows.txt
       - name: Upload to the release
         run: |
           version="${GITHUB_REF_NAME#v}"
           gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
-            "dist/Masseuse.ai-${version}-windows.zip" \
+            dist/Masseuse.exe "dist/Masseuse.ai-${version}-windows.zip" \
             dist/checksums-windows.txt dist/checksums-windows.txt.sigstore.json
       - name: Subjects for provenance
         id: hashes
@@ -705,11 +860,13 @@ jobs:
       upload-assets: true
 
   update-check-windows:
-    # The Windows package updates itself from the zip (update-check above
-    # says why): the published package, extracted where a person would,
-    # told it is an older release, downloads this release's zip, checks
-    # it and swaps its files in; the running program's files may be
-    # renamed, never overwritten, and land in .previous\.
+    # The Windows package updates itself from the release's Masseuse.exe
+    # (update-check above says why): the published package, downloaded to
+    # a directory of its own as a person would, told it is an older
+    # release, downloads this release's package, checks it and swaps it
+    # in; the running program may be renamed, never overwritten, and lands
+    # in .previous\. The zip for installs before 0.13 holds the same file
+    # under the name those installs know it by.
     needs: [windows-app, provenance-windows]
     runs-on: windows-2022
     permissions:
@@ -720,33 +877,35 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: The published package, extracted
+      - name: The published package, on its own
         run: |
           version="${GITHUB_REF_NAME#v}"
+          mkdir install
           for i in $(seq 1 20); do
-            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
-              --pattern "Masseuse.ai-${version}-windows.zip" && break
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber --dir install \
+              --pattern Masseuse.exe --pattern "Masseuse.ai-${version}-windows.zip" && break
             sleep 15
           done
-          mkdir install && (cd install && 7z x -y "../Masseuse.ai-${version}-windows.zip" > /dev/null)
-          install/Masseuse.ai.exe --version
+          mkdir fromzip && (cd fromzip && 7z x -y "../install/Masseuse.ai-${version}-windows.zip" > /dev/null)
+          cmp install/Masseuse.exe fromzip/Masseuse.ai.exe
+          rm -r fromzip "install/Masseuse.ai-${version}-windows.zip"
+          install/Masseuse.exe --version
       - name: It knows it is the latest release
         run: |
-          out=$(install/Masseuse.ai.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-1")" update)
+          out=$(install/Masseuse.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-1")" update)
           echo "$out"
           echo "$out" | grep -q "^Up to date: ${GITHUB_REF_NAME} is the latest release"
       - name: As an older release, it updates itself to this one
         env:
           MASSEUSE_CAMLINK_UPDATE_AS: v0.10.0
         run: |
-          before=$(sha256sum install/Masseuse.ai.exe | cut -d' ' -f1)
-          out=$(install/Masseuse.ai.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-2")" update)
+          before=$(sha256sum install/Masseuse.exe | cut -d' ' -f1)
+          out=$(install/Masseuse.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-2")" update)
           echo "$out"
-          echo "$out" | grep -q "^Downloaded and verified Masseuse.ai-${GITHUB_REF_NAME#v}-windows.zip"
+          echo "$out" | grep -q "^Downloaded and verified Masseuse.exe"
           echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
-          test -f install/.previous/Masseuse.ai.exe
-          test -f install/.previous/ffmpeg.exe
-          test "$(install/Masseuse.ai.exe --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
-          test "$(sha256sum install/Masseuse.ai.exe | cut -d' ' -f1)" = "$before"
-          ls install/units
+          test -f install/.previous/Masseuse.exe
+          test "$(install/Masseuse.exe --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
+          test "$(sha256sum install/Masseuse.exe | cut -d' ' -f1)" = "$before"
+          test "$(ls -A install | wc -l | tr -d ' ')" = "2" # the package and .previous, nothing beside
           echo "the package took the release from GitHub, verified it and swapped it in"

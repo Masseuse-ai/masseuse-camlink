@@ -71,6 +71,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-service must be an https:// URL")
 		exit(2)
 	}
+	// The Windows package carries ffmpeg.exe and the unit driver helpers
+	// inside the executable (payload.go): they are unpacked under the state
+	// directory before anything, the subcommands included, looks for them.
+	// A payload that will not unpack is said once; the program runs on as
+	// a bare build would, without a camera and without helpers.
+	if dir, err := unpackPayload(*stateDir, logger); err != nil {
+		fmt.Fprintf(os.Stderr, "The program's own files (ffmpeg and the unit drivers) could not be unpacked under %s: %v\n", *stateDir, err)
+	} else if dir != "" {
+		payloadDir = dir
+		capture.BundledDir = dir
+	}
 	// The window this runs in is named after the program (Windows; on a
 	// Mac the bundle's .command file does it), and an error exit keeps a
 	// window that would close with the process open until Enter
@@ -251,7 +262,7 @@ on your network, to the enclave of a masseuse.ai session.
 
   masseuse-camlink                    run with the remembered (or first) camera and microphone
   masseuse-camlink devices            list cameras and microphones
-  masseuse-camlink estim probe        find the stimulation unit over Bluetooth and print its status
+  masseuse-camlink estim probe        find the stimulation unit (Bluetooth, or USB serial through a driver helper) and print its status
   masseuse-camlink update             install the latest release now, if it is newer (it happens by itself otherwise)
   masseuse-camlink -camera 1 -mic 0   choose by number or by (part of) the name; remembered
   masseuse-camlink -camera-url rtsps://user:password@192.168.1.20:322/live
@@ -260,7 +271,8 @@ on your network, to the enclave of a masseuse.ai session.
 The downloads at masseuse.ai/app are this same program under the name
 Masseuse.ai: on a Mac the application bundle (Masseuse.app) runs it in a
 Terminal window when opened (-console and -app choose either way by hand); on
-Windows, Masseuse.ai.exe opens its own console window, with ffmpeg.exe beside it.
+Windows, Masseuse.exe opens its own console window, with ffmpeg and the unit
+drivers carried inside it and unpacked under the state directory.
 
 Flags:
 `)

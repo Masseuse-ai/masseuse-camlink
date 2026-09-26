@@ -16,14 +16,18 @@
 #      is the archives' binaries (signature stripped, per architecture) and
 #      Gatekeeper's own verdict on the app and the image,
 #   9. when the release carries the Windows package (checksums-windows.txt):
-#      its checksum file's signature, the zip's hash and provenance, and
-#      that the executable in the zip is the windows/amd64 archive's,
+#      its checksum file's signature, the package's (and the older
+#      installs' zip's) hash and provenance, and, with Go, that the package
+#      minus its Authenticode signature and its payload is the windows/amd64
+#      archive's executable (cmd/pestrip; v0.13.0 and later, a zip holding
+#      the files beside the executable before),
 #  10. when the release bundles unit driver helpers (packaging/units/VERSION
 #      at the tag; v0.10.0 and later): the helpers manifest's signature by
 #      the key whose public half the tag carries, and that every helper in
-#      the linux/amd64 archive and the Windows zip is the manifest's byte for
-#      byte (the app's are compared by the release itself, signature
-#      stripped; VERIFY.md "Unit driver helpers" says how by hand).
+#      the linux/amd64 archive and, signature stripped, in the Windows
+#      package's payload is the manifest's byte for byte (the app's are
+#      compared by the release itself, signature stripped; VERIFY.md "Unit
+#      driver helpers" says how by hand).
 #
 # usage: scripts/verify-release.sh vX.Y.Z [download dir]
 # needs: curl, sha256sum (or shasum), cosign (3 or later for the image),
@@ -300,9 +304,33 @@ if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/ch
       --source-tag "$tag" >/dev/null
     echo "    ok  $f"
   done
-  zipfile=$(winfiles | grep -E '\.zip$' | head -n 1)
   archive="masseuse-camlink_${version}_windows_amd64.zip"
-  if [ -n "$zipfile" ] && [ -s "$zipfile" ] && [ -s "$archive" ] && command -v unzip >/dev/null 2>&1; then
+  zipfile=$(winfiles | grep -E '\.zip$' | head -n 1)
+  if [ -s Masseuse.exe ]; then
+    # v0.13.0 and later: the one-file package. pestrip takes the signature
+    # and the payload off; what remains is the archive's executable.
+    if [ -s "$archive" ] && command -v go >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
+      stripped=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 Masseuse.exe | cut -d' ' -f1)
+      published=$(unzip -p "$archive" masseuse-camlink.exe | $SHA | cut -d' ' -f1)
+      [ "$stripped" = "$published" ] \
+        || { echo "    MISMATCH: Masseuse.exe minus signature and payload ($stripped) is not the published windows/amd64 connector ($published)" >&2; exit 1; }
+      echo "    ok  Masseuse.exe minus its signature and payload is the published windows/amd64 connector: $stripped"
+      rm -rf winpayload
+      go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -payload winpayload Masseuse.exe > winpayload.txt
+      grep -q '  ffmpeg.exe$' winpayload.txt || { echo "    no ffmpeg.exe in the payload" >&2; exit 1; }
+      echo "    ok  the payload carries $(wc -l < winpayload.txt | tr -d ' ') files, ffmpeg.exe among them"
+    else
+      echo "    skipped the executable comparison (needs go and unzip, and $archive)"
+    fi
+    if [ -n "$zipfile" ] && [ -s "$zipfile" ] && command -v unzip >/dev/null 2>&1; then
+      # The zip for installs before 0.13 holds the same file under the name
+      # those releases used, Masseuse.ai.exe.
+      [ "$(unzip -p "$zipfile" Masseuse.ai.exe | $SHA | cut -d' ' -f1)" = "$($SHA Masseuse.exe | cut -d' ' -f1)" ] \
+        || { echo "    MISMATCH: Masseuse.ai.exe in $zipfile is not Masseuse.exe" >&2; exit 1; }
+      echo "    ok  $zipfile holds the same file as Masseuse.ai.exe"
+    fi
+  elif [ -n "$zipfile" ] && [ -s "$zipfile" ] && [ -s "$archive" ] && command -v unzip >/dev/null 2>&1; then
+    # Before v0.13.0: the zip held the archive's executable as is.
     packed=$(unzip -p "$zipfile" Masseuse.ai.exe | $SHA | cut -d' ' -f1)
     published=$(unzip -p "$archive" masseuse-camlink.exe | $SHA | cut -d' ' -f1)
     [ "$packed" = "$published" ] \
@@ -344,9 +372,23 @@ if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
         echo "    ok  $f in $archive is the manifest's: $got"
       done
     fi
-    # The Windows zip: units/<name>.exe against the windows/amd64 entries.
+    # The Windows package's payload (written out by step 9 with pestrip):
+    # units/<name>.exe, Authenticode signature stripped, against the
+    # windows/amd64 entries; a Go binary's stripped hash is its plain one.
+    if [ -d winpayload/units ] && command -v go >/dev/null 2>&1; then
+      for p in winpayload/units/camlink-unit-*.exe; do
+        [ -f "$p" ] || continue
+        name=$(basename "$p")
+        want=$(jq -r --arg n "$name" '.files[] | select(.name == $n and .os == "windows" and .arch == "amd64") | .sha256' units-manifest.json | tr -d '\r')
+        got=$(go run "github.com/FemLed/masseuse-camlink/cmd/pestrip@$tag" -sha256 "$p" | cut -d' ' -f1)
+        [ -n "$want" ] && [ "$got" = "$want" ] \
+          || { echo "    MISMATCH: units/$name in Masseuse.exe is not the manifest's ($got, manifest $want)" >&2; exit 1; }
+        echo "    ok  units/$name in Masseuse.exe is the manifest's once its signature is stripped: $got"
+      done
+    fi
+    # Before v0.13.0, the Windows zip held units/<name>.exe unsigned.
     zipfile="Masseuse.ai-${version}-windows.zip"
-    if [ -s "$zipfile" ] && command -v unzip >/dev/null 2>&1; then
+    if [ ! -s Masseuse.exe ] && [ -s "$zipfile" ] && command -v unzip >/dev/null 2>&1; then
       # The zip lists the directory entry units/ too; files only.
       unzip -Z1 "$zipfile" | grep '^units/[^/]' | while read -r f; do
         name=${f#units/}

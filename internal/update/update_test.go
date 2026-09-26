@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FemLed/masseuse-camlink/internal/payload"
+	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
 	"github.com/FemLed/masseuse-camlink/internal/provenance"
 )
 
@@ -31,7 +33,8 @@ func TestDetectTellsTheLayoutsApart(t *testing.T) {
 	}{
 		{"/Applications/Masseuse.app/Contents/MacOS/Masseuse", "darwin", "arm64", LayoutBundle, "/Applications/Masseuse.app"},
 		{"/Users/x/Downloads/masseuse-camlink", "darwin", "amd64", LayoutArchive, "/Users/x/Downloads"},
-		{`C:\Users\x\Masseuse\Masseuse.ai.exe`, "windows", "amd64", LayoutPackage, `C:\Users\x\Masseuse`},
+		// The package's name alone does not make a package: the payload does.
+		{`C:\Users\x\Masseuse\Masseuse.exe`, "windows", "amd64", LayoutArchive, `C:\Users\x\Masseuse`},
 		{`C:\tools\masseuse-camlink.exe`, "windows", "arm64", LayoutArchive, `C:\tools`},
 		{"/usr/local/bin/masseuse-camlink", "linux", "amd64", LayoutArchive, "/usr/local/bin"},
 		{"/home/x/Masseuse.app/Contents/MacOS/Masseuse", "linux", "amd64", LayoutArchive, "/home/x/Masseuse.app/Contents/MacOS"},
@@ -51,6 +54,117 @@ func TestDetectTellsTheLayoutsApart(t *testing.T) {
 	if in := Detect("/x/masseuse-camlink", "linux", "arm"); in.GOARM != "7" {
 		t.Fatalf("arm: GOARM %q", in.GOARM)
 	}
+	// An executable carrying a payload is the Windows package, whatever it
+	// is called; the same bytes without one are an archive install.
+	dir := t.TempDir()
+	renamed := filepath.Join(dir, "Masseuse (1).exe")
+	if err := os.WriteFile(renamed, packagedExe(t), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if in := Detect(renamed, "windows", "amd64"); in.Layout != LayoutPackage || in.Root != dir {
+		t.Fatalf("a renamed package: %s at %s", in.Layout, in.Root)
+	}
+	// An install that came through the zip of releases before 0.13 is
+	// still called Masseuse.ai.exe, and is the package all the same.
+	viaZip := filepath.Join(dir, "Masseuse.ai.exe")
+	_ = os.WriteFile(viaZip, packagedExe(t), 0o755)
+	if in := Detect(viaZip, "windows", "amd64"); in.Layout != LayoutPackage {
+		t.Fatalf("the package under its pre-0.13 name: %s", in.Layout)
+	}
+	bare := filepath.Join(dir, "Masseuse.exe")
+	_ = os.WriteFile(bare, petest.Image([]byte("connector")), 0o755)
+	if in := Detect(bare, "windows", "amd64"); in.Layout != LayoutArchive {
+		t.Fatalf("a bare connector under the package's name: %s", in.Layout)
+	}
+	if in := Detect(renamed, "linux", "amd64"); in.Layout != LayoutArchive {
+		t.Fatalf("a payload on linux: %s", in.Layout)
+	}
+}
+
+// packagedExe is a Windows package: a synthetic connector with a payload.
+func packagedExe(t *testing.T) []byte {
+	t.Helper()
+	packed, err := payload.Append(petest.Image([]byte("connector")), "0.13.0", []payload.Entry{
+		{Name: "ffmpeg.exe", Data: petest.Image([]byte("ffmpeg"))},
+		{Name: "units/camlink-unit-mk312.exe", Data: petest.Image([]byte("helper"))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return packed
+}
+
+func TestStageAndSwapTheWindowsPackage(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	// The install as it stands: the package under the name it kept through
+	// a 0.12 install's zip update, and the files that used to lie beside it.
+	exe := filepath.Join(root, "Masseuse.ai.exe")
+	_ = os.WriteFile(exe, packagedExe(t), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "ffmpeg.exe"), []byte("old ffmpeg"), 0o755)
+	in := Detect(exe, "windows", "amd64")
+	if in.Layout != LayoutPackage {
+		t.Fatalf("layout %s", in.Layout)
+	}
+	name, sums, prov := in.Artifact("v0.13.0")
+	if name != PackageExe || sums != "checksums-windows.txt" || prov != "windows.intoto.jsonl" {
+		t.Fatalf("artifact %s %s %s", name, sums, prov)
+	}
+	// The download: the release's Masseuse.exe, a package too.
+	newPackage, err := payload.Append(petest.Image([]byte("connector v2")), "0.13.0", []payload.Entry{{Name: "ffmpeg.exe", Data: petest.Image([]byte("ffmpeg v2"))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := &Staged{Tag: "v0.13.0", Name: PackageExe, Path: filepath.Join(t.TempDir(), PackageExe)}
+	_ = os.WriteFile(staged.Path, newPackage, 0o600)
+	var ran []string
+	inst := &Installer{Install: in, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		ran = append(ran, name+" "+strings.Join(args, " "))
+		if filepath.Base(name) == PackageExe && len(args) == 1 && args[0] == "--version" {
+			return []byte("v0.13.0 go1.27.1\n"), nil
+		}
+		return nil, errors.New("unexpected")
+	}}
+	stageDir := filepath.Join(t.TempDir(), "staged")
+	sroot, err := inst.Stage(ctx, staged, stageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sroot != stageDir || len(ran) != 1 {
+		t.Fatalf("stage: root %s, ran %v", sroot, ran)
+	}
+	if _, err := os.Stat(staged.Path); err != nil {
+		t.Fatal("the download was moved rather than copied")
+	}
+	// A download that is not a package is refused before anything moves.
+	bare := &Staged{Tag: "v0.13.0", Name: PackageExe, Path: filepath.Join(t.TempDir(), PackageExe)}
+	_ = os.WriteFile(bare.Path, petest.Image([]byte("connector v2")), 0o600)
+	if _, err := inst.Stage(ctx, bare, filepath.Join(t.TempDir(), "s2")); err == nil || !strings.Contains(err.Error(), "not the Windows package") {
+		t.Fatalf("a bare connector staged as the package: %v", err)
+	}
+
+	previous, err := inst.Swap(sroot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous != filepath.Join(root, ".previous") {
+		t.Fatalf("previous at %s", previous)
+	}
+	read := func(p string) []byte { b, _ := os.ReadFile(p); return b }
+	// The running program keeps its name; the old one is aside; nothing
+	// else in the directory is touched.
+	if !bytes.Equal(read(exe), newPackage) {
+		t.Fatal("the new package is not in place under the running name")
+	}
+	if !bytes.Equal(read(filepath.Join(previous, filepath.Base(exe))), packagedExe(t)) {
+		t.Fatal("the old package was not kept aside under its own name")
+	}
+	if string(read(filepath.Join(root, "ffmpeg.exe"))) != "old ffmpeg" {
+		t.Fatal("a file beside the package was touched")
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 3 { // the package, ffmpeg.exe, .previous
+		t.Fatalf("%d entries in the install directory", len(entries))
+	}
 }
 
 func TestArtifactNamesFollowTheRelease(t *testing.T) {
@@ -59,7 +173,7 @@ func TestArtifactNamesFollowTheRelease(t *testing.T) {
 		name, checksums, prov string
 	}{
 		{Install{Layout: LayoutBundle, GOOS: "darwin", GOARCH: "arm64"}, "Masseuse.ai-0.11.0.dmg", "checksums-darwin.txt", "darwin.intoto.jsonl"},
-		{Install{Layout: LayoutPackage, GOOS: "windows", GOARCH: "amd64"}, "Masseuse.ai-0.11.0-windows.zip", "checksums-windows.txt", "windows.intoto.jsonl"},
+		{Install{Layout: LayoutPackage, GOOS: "windows", GOARCH: "amd64"}, "Masseuse.exe", "checksums-windows.txt", "windows.intoto.jsonl"},
 		{Install{Layout: LayoutArchive, GOOS: "linux", GOARCH: "amd64"}, "masseuse-camlink_0.11.0_linux_amd64.tar.gz", "checksums.txt", "multiple.intoto.jsonl"},
 		{Install{Layout: LayoutArchive, GOOS: "linux", GOARCH: "arm", GOARM: "7"}, "masseuse-camlink_0.11.0_linux_armv7.tar.gz", "checksums.txt", "multiple.intoto.jsonl"},
 		{Install{Layout: LayoutArchive, GOOS: "windows", GOARCH: "arm64"}, "masseuse-camlink_0.11.0_windows_arm64.zip", "checksums.txt", "multiple.intoto.jsonl"},

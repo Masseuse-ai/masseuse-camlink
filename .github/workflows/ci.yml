@@ -140,7 +140,7 @@ jobs:
           cache: true
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: go test on Windows
-        run: go test -count=1 -v -run 'TestOpenWithoutBluetooth|TestScanEndsOnDeadline' ./internal/ble/ && go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/ ./internal/awake/ ./internal/ble/ ./internal/estim/... ./internal/update/
+        run: go test -count=1 -v -run 'TestOpenWithoutBluetooth|TestScanEndsOnDeadline' ./internal/ble/ && go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/ ./internal/awake/ ./internal/ble/ ./internal/estim/... ./internal/update/ ./internal/payload/ ./internal/pesig/... ./packaging/windows/pack/
       - name: The committed resource objects are current
         run: |
           sh packaging/windows/make-syso.sh
@@ -161,21 +161,26 @@ jobs:
           grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
           grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
           grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
-      - name: The zip, with a stand-in ffmpeg
+      - name: The package, with a stand-in ffmpeg
+        # packaging/windows/pack appends the payload; cmd/pestrip takes it
+        # off again and must give the connector's hash back. Copied to a
+        # directory of its own, the package unpacks its payload under the
+        # state directory and finds the helper there.
         run: |
           cp dist/masseuse-camlink.exe dist/ffmpeg-windows/ffmpeg.exe
           printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg-windows/licenses/README
           sh packaging/units/fetch.sh "$(tr -d '[:space:]' < packaging/units/VERSION)" windows amd64 dist/units
-          sh packaging/windows/build-zip.sh -v 0.0.0 -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -u dist/units -o dist
-          7z l -ba dist/Masseuse.ai-0.0.0-windows.zip | tr -d '\r' | grep -q ' units.camlink-unit-.*\.exe$'
-          7z l -ba dist/Masseuse.ai-0.0.0-windows.zip | tr -d '\r' | grep -q ' Masseuse.ai.exe$'
-          7z l -ba dist/Masseuse.ai-0.0.0-windows.zip | tr -d '\r' | grep -q ' README.txt$'
-          mkdir extracted && (cd extracted && 7z x -y ../dist/Masseuse.ai-0.0.0-windows.zip > /dev/null)
-          extracted/Masseuse.ai.exe --version
-          sha256sum dist/masseuse-camlink.exe extracted/Masseuse.ai.exe | cut -d' ' -f1 | uniq | wc -l | grep -q '^1$'
-          # The package's connector finds the helpers under units\ beside it.
-          extracted/Masseuse.ai.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/probe-state")" -estim-ble off estim probe > probe.txt 2>&1 || true
+          go run ./packaging/windows/pack -v 0.0.0 -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -u dist/units -o dist/Masseuse.exe | tee pack.txt
+          grep -q ' units/camlink-unit-.*\.exe$' pack.txt
+          grep -q ' README.txt$' pack.txt
+          test "$(go run ./cmd/pestrip -sha256 dist/Masseuse.exe)" = "$(sha256sum dist/masseuse-camlink.exe | cut -d' ' -f1)"
+          go run ./cmd/pestrip -payload dist/payload-check dist/Masseuse.exe > /dev/null
+          cmp dist/ffmpeg-windows/ffmpeg.exe dist/payload-check/ffmpeg.exe
+          alone="${RUNNER_TEMP}/alone"; mkdir -p "$alone" && cp dist/Masseuse.exe "$alone/"
+          "$alone/Masseuse.exe" --version
+          "$alone/Masseuse.exe" -state-dir "$(cygpath -w "${RUNNER_TEMP}/probe-state")" -estim-ble off estim probe > probe.txt 2>&1 || true
           grep -F 'Unit drivers: Mastago (built in) + 1 helper(s)' probe.txt || { cat probe.txt; exit 1; }
+          ls "${RUNNER_TEMP}/probe-state/bin/"*/units/camlink-unit-*.exe
 
   vulncheck:
     runs-on: ubuntu-latest

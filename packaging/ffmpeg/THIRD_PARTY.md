@@ -1,10 +1,11 @@
 # Third-party software in the Masseuse.ai downloads
 
-The Mac app (`Masseuse.app`) and the Windows package
-(`Masseuse.ai-<version>-windows.zip`) carry, beside the connector, an
-`ffmpeg` program (`Contents/Helpers/ffmpeg` in the app; `ffmpeg.exe` beside
-`Masseuse.ai.exe` in the zip) so that the computer's camera and microphone
-can be sent without installing anything else. The connector itself is
+The Mac app (`Masseuse.app`) and the Windows package (`Masseuse.exe`)
+carry, beside the connector, an `ffmpeg` program (`Contents/Helpers/ffmpeg`
+in the app; `ffmpeg.exe` inside `Masseuse.exe` as its payload, unpacked
+under `%LOCALAPPDATA%\masseuse-camlink\bin\` when it runs) so that the
+computer's camera and microphone can be sent without installing anything
+else. The connector itself is
 FemLed's and Apache-2.0 (`LICENSE`, `NOTICE`); the ffmpeg program is built
 from the following upstream sources, unmodified, by
 `packaging/ffmpeg/build.sh`.
@@ -54,8 +55,9 @@ workflow run that built each download, and each download's provenance
 Inside the Mac app, `Contents/Resources/licenses/` holds the texts as they
 come from the tarballs built: `ffmpeg-COPYING.LGPLv2.1` and
 `ffmpeg-LICENSE.md` for FFmpeg, `opus-COPYING` for Opus; this file is
-`Contents/Resources/THIRD_PARTY.md`. In the Windows zip the same texts are in
-`licenses/` and this file is `THIRD_PARTY.md`, beside the program.
+`Contents/Resources/THIRD_PARTY.md`. In the Windows package the same texts
+are in the payload as `licenses/` and this file as `THIRD_PARTY.md`,
+unpacked beside `ffmpeg.exe`.
 
 ## Source offer (LGPL 2.1, section 6)
 

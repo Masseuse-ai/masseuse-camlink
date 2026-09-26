@@ -20,9 +20,10 @@ type State struct {
 	// Failed lists release tags whose verification or installation failed
 	// and when, so one is not tried again for a day.
 	Failed map[string]time.Time `json:"failed,omitempty"`
-	// Previous is the install the last update moved aside (Masseuse.previous.app,
-	// .previous/, masseuse-camlink.previous), removed once the new program
-	// has proven itself; From is the tag it was.
+	// Previous is the install the last update moved aside (a bundle under
+	// the state directory's previous/, .previous/ for the other layouts:
+	// Installer.PreviousName), removed once the new program has proven
+	// itself; From is the tag it was.
 	Previous string `json:"previous,omitempty"`
 	From     string `json:"from,omitempty"`
 	// Installed is the tag the last update put in place and when: the new

@@ -8,7 +8,8 @@ import (
 	"os/exec"
 )
 
-// stage unpacks the zip (the package's or the archive's).
+// stage unpacks the archive's zip (the package is one file and is staged
+// by stagePackage).
 func (i *Installer) stage(_ context.Context, s *Staged, dir string) (string, error) {
 	if i.Install.Layout == LayoutBundle {
 		return "", errors.New("update: no application bundles on this system")

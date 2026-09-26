@@ -10,7 +10,7 @@ import (
 )
 
 // On Windows the program is a console application: opened from Explorer
-// (Masseuse.ai.exe in the zip), Windows gives it a console window of its
+// (Masseuse.exe, the download), Windows gives it a console window of its
 // own, so there is nothing to hand off to as the macOS bundle does. Two
 // things make that window a fit place to read the pairing code: it carries
 // the program's name, and it stays open when the program stops with an

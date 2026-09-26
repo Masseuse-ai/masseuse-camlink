@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/FemLed/masseuse-camlink/internal/payload"
 )
 
 // Installer puts a verified download in place of the running install and
@@ -79,16 +81,22 @@ const MaxUnpacked = 1 << 30
 
 // Stage unpacks the artifact into dir (created; removed on failure),
 // verifies it as the platform does (the bundle's code signature and
-// Gatekeeper verdict on macOS; the archive's contents elsewhere) and runs
-// the new program's --version, which must name the tag. It returns the
-// staged root: the new Masseuse.app, or the directory holding the new
-// files.
+// Gatekeeper verdict on macOS; the archive's contents elsewhere; the
+// payload's presence for the Windows package) and runs the new program's
+// --version, which must name the tag. It returns the staged root: the new
+// Masseuse.app, or the directory holding the new files.
 func (i *Installer) Stage(ctx context.Context, s *Staged, dir string) (string, error) {
 	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("update: %w", err)
 	}
-	root, err := i.stage(ctx, s, dir)
+	var root string
+	var err error
+	if i.Install.Layout == LayoutPackage {
+		root, err = i.stagePackage(s, dir)
+	} else {
+		root, err = i.stage(ctx, s, dir)
+	}
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return "", err
@@ -133,8 +141,28 @@ func (i *Installer) checkVersion(ctx context.Context, exe, tag string) error {
 	return nil
 }
 
-// stageFiles unpacks an archive or the Windows zip into dir and makes the
-// program executable; the staged root is dir itself.
+// stagePackage stages the Windows package: the download is the one file,
+// copied into dir under the package's name (the download stays where it
+// is, for a start that is interrupted to find it again). It must carry a
+// payload: a bare connector under the package's name would leave the
+// install without ffmpeg and the helpers.
+func (i *Installer) stagePackage(s *Staged, dir string) (string, error) {
+	data, err := os.ReadFile(s.Path)
+	if err != nil {
+		return "", fmt.Errorf("update: %w", err)
+	}
+	exe := filepath.Join(dir, PackageExe)
+	if err := os.WriteFile(exe, data, 0o755); err != nil {
+		return "", fmt.Errorf("update: %w", err)
+	}
+	if !payload.Carries(exe) {
+		return "", fmt.Errorf("update: %s is not the Windows package: it carries no ffmpeg and no helpers", s.Name)
+	}
+	return dir, nil
+}
+
+// stageFiles unpacks an archive into dir and makes the program executable;
+// the staged root is dir itself.
 func (i *Installer) stageFiles(s *Staged, dir string) (string, error) {
 	if err := Unpack(s.Path, dir, MaxUnpacked); err != nil {
 		return "", err

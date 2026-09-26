@@ -41,20 +41,28 @@ window back. (The `darwin_*` archives still carry the bare binary for
 people who run it from Terminal; run from anywhere but Terminal, macOS
 refuses a bare binary however it is signed, which is what the app is for.)
 
-**Windows.** The download is `Masseuse.ai-X.Y.Z-windows.zip`. Extract it
-anywhere and open `Masseuse.ai.exe`; `ffmpeg.exe` is in the same folder, so
-there is nothing else to install. A console window titled Masseuse.ai opens
-with the program running in it, as on a Mac. The package is not yet signed
-with a Windows certificate, so the first time Windows asks whether to run an
-app it does not recognize: *More info*, then *Run anyway*. Video is encoded
-by Windows' own Media Foundation H.264 encoder (the graphics chip's, or the
-software one every Windows edition carries except the N editions, which need
-Microsoft's *Media Feature Pack* from Settings, *Optional features*). The
-program serves the camera and microphone and, over the computer's
-Bluetooth, a stimulation unit (Windows 10 version 1703 or newer; see "Your
-stimulation device"). The `windows_*` archives carry the bare
-`masseuse-camlink.exe` for people who run it from a terminal with their own
-ffmpeg.
+**Windows.** The download is one file, `Masseuse.exe` (the Mac's bundle is
+`Masseuse.app` for the same reason: the program is Masseuse.ai, the file
+shows as Masseuse): save it anywhere and open it. It carries ffmpeg and
+the unit drivers inside itself and
+unpacks them under `%LOCALAPPDATA%\masseuse-camlink` the first time it
+runs, so there is nothing to extract and nothing else to install (releases
+before 0.13 were a zip, and opening the program from inside Explorer's zip
+preview left ffmpeg and the drivers behind in the zip; the one file has
+nothing to lose that way). A console window titled Masseuse.ai opens with
+the program running in it, as on a Mac. The package is signed by
+Principled Labs, Inc. with Azure Artifact Signing; while a release is
+still new to Microsoft, Windows may ask before the first start whether to
+run it: *More info*, then *Run anyway* (a release published without the
+signing credentials is unsigned and always asks). Video is encoded by
+Windows' own Media Foundation H.264 encoder (the graphics chip's, or the
+software one every Windows edition carries except the N editions, which
+need Microsoft's *Media Feature Pack* from Settings, *Optional features*).
+The program serves the camera and microphone and a stimulation unit: over
+the computer's Bluetooth (Windows 10 version 1703 or newer), or over a USB
+serial cable through a unit driver helper (see "Your stimulation device").
+The `windows_*` archives carry the bare `masseuse-camlink.exe` for people
+who run it from a terminal with their own ffmpeg.
 
 **Linux, and the bare binaries.** Unpack the archive anywhere and run
 `masseuse-camlink` from a terminal. To send the computer's camera it needs
@@ -85,9 +93,11 @@ Terminal. VERIFY.md, "The macOS binaries" and "The macOS app", show how to
 check the signer and how to compare them with a rebuild all the same
 (everything in the app but ffmpeg is byte for byte the published binaries;
 ffmpeg is built from pinned upstream sources by the same public workflow,
-`packaging/ffmpeg/THIRD_PARTY.md`). The Windows zip is the published
-`windows_amd64` binary under the name `Masseuse.ai.exe`, byte for byte, with
-an ffmpeg built the same way (VERIFY.md, "The Windows package").
+`packaging/ffmpeg/THIRD_PARTY.md`). The Windows `Masseuse.exe` is the
+published `windows_amd64` binary, byte for byte, followed by an ffmpeg
+built the same way and the helpers as its payload, then signed;
+`cmd/pestrip` takes the signature and the payload off and gives the
+published binary's hash (VERIFY.md, "The Windows package").
 
 ### Updates
 
@@ -369,8 +379,9 @@ read-back fails the command and puts the unit to zero.
 driver is in this repository. Drivers for further units are published by
 masseuse.ai as *unit driver helpers*: separate programs named
 `camlink-unit-<name>` that the download carries beside `ffmpeg`
-(`Contents/Helpers/units/` in the macOS application, `units\` in the
-Windows zip, `units/` next to the program in the other archives) and that
+(`Contents/Helpers/units/` in the macOS application, inside
+`Masseuse.exe` on Windows, unpacked to `units\` under the state
+directory, `units/` next to the program in the other archives) and that
 this program runs as child processes. They are not part of this repository
 and not open source; they are ordinary signed binaries anyone may inspect,
 listed with their checksums in a signed manifest the release verifies

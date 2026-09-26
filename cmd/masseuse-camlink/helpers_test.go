@@ -17,10 +17,10 @@ import (
 )
 
 func TestHelpersDirIsTheFlagOrTheBundlesPlace(t *testing.T) {
-	if got := helpersDir("none", "/x/masseuse-camlink"); got != "" {
+	if got := helpersDir("none", "/x/masseuse-camlink", ""); got != "" {
 		t.Fatalf("none = %q", got)
 	}
-	if got := helpersDir(" /opt/units ", "/x/masseuse-camlink"); got != "/opt/units" {
+	if got := helpersDir(" /opt/units ", "/x/masseuse-camlink", ""); got != "/opt/units" {
 		t.Fatalf("flag = %q", got)
 	}
 	// Paths are compared with the host's separators: filepath does the joining.

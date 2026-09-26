@@ -28,7 +28,8 @@ The connector looks for helpers in one directory:
 | where the connector runs | units directory |
 | --- | --- |
 | the macOS application (`Masseuse.app/Contents/MacOS/Masseuse`) | `Masseuse.app/Contents/Helpers/units/` |
-| anywhere else (the Windows zip, the archives, a `go build`) | `units/` next to the executable |
+| the Windows package (`Masseuse.exe`, the helpers inside it as a payload) | `bin\<id>\units\` under the state directory, where the payload is unpacked |
+| anywhere else (the archives, a `go build`) | `units/` next to the executable |
 
 `-estim-helpers <dir>` (environment `MASSEUSE_CAMLINK_HELPERS`) names
 another directory; `-estim-helpers none` runs without helpers. A directory
@@ -205,8 +206,9 @@ does not match (nothing is left in `<outdir>` then). Nothing in this
 repository needs a secret to build; the release workflow fetches and
 verifies on every runner that packs helpers (`.github/workflows/release.yml`),
 then bundles them: goreleaser packs `units/` into each archive
-(`.goreleaser.yaml`), `packaging/windows/build-zip.sh -u` packs `units\`
-into the Windows zip, and `packaging/macos/build-app.sh -u` copies the
+(`.goreleaser.yaml`), `packaging/windows/pack -u` signs nothing itself but
+packs the helpers, Authenticode-signed by the workflow just before, into
+the Windows package's payload as `units/`, and `packaging/macos/build-app.sh -u` copies the
 universal ones into `Contents/Helpers/units/`, where
 `packaging/macos/sign-notarize.sh` codesigns each (identifier
 `ai.masseuse.camlink.unit.<name>`, hardened runtime, no entitlements)

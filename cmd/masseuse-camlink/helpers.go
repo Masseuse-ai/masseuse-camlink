@@ -26,17 +26,22 @@ import (
 
 // The helpers flag: a directory, or "none".
 var estimHelpers = flag.String("estim-helpers", envOr("MASSEUSE_CAMLINK_HELPERS", ""),
-	`the directory of unit driver helpers (camlink-unit-*) to serve stimulation units from; "none" runs without any (default: Contents/Helpers/units in the application bundle, else units/ next to the program)`)
+	`the directory of unit driver helpers (camlink-unit-*) to serve stimulation units from; "none" runs without any (default: Contents/Helpers/units in the application bundle, the ones the Windows package carries, else units/ next to the program)`)
 
-// helpersDir is the directory to look in: the flag's, or the default place
-// for this program (bundledHelpersDir), or "" when helpers are off.
-func helpersDir(flagValue string, exe string) string {
+// helpersDir is the directory to look in: the flag's; else units/ in the
+// unpacked payload when this program is the Windows package (payload.go);
+// else the default place for this program (bundledHelpersDir); "" when
+// helpers are off.
+func helpersDir(flagValue string, exe string, payloadDir string) string {
 	v := strings.TrimSpace(flagValue)
 	if strings.EqualFold(v, "none") {
 		return ""
 	}
 	if v != "" {
 		return v
+	}
+	if payloadDir != "" {
+		return filepath.Join(payloadDir, "units")
 	}
 	return bundledHelpersDir(exe, runtime.GOOS)
 }
@@ -122,7 +127,7 @@ func helperFamilies(ctx context.Context, dir string, stateDir string, log *slog.
 // registry (once) and returns the console's line about them.
 func registerHelpers(ctx context.Context, stateDir string, log *slog.Logger) string {
 	exe, _ := os.Executable()
-	dir := helpersDir(*estimHelpers, exe)
+	dir := helpersDir(*estimHelpers, exe, payloadDir)
 	found := helperFamilies(ctx, dir, stateDir, log)
 	families = append(families, found...)
 	return helpersLine(dir, found)

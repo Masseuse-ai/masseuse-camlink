@@ -13,10 +13,11 @@
 // checksum that does not match, no disk space) leaves the running program
 // as it is and is reported once.
 //
-// Three install layouts are told apart from the program's own path: the
+// Three install layouts are told apart from the program's own file: the
 // macOS application bundle (Masseuse.app, updated from the disk image),
-// the Windows package (Masseuse.ai.exe with ffmpeg.exe and units\ beside
-// it, updated from the zip), and a bare archive install (the binary with
+// the Windows package (the one Masseuse.exe carrying ffmpeg.exe and the
+// helpers as its payload, internal/payload, updated from the release's
+// Masseuse.exe), and a bare archive install (the binary with
 // units/ beside it, updated from the goreleaser archive for the platform).
 package update
 
@@ -37,6 +38,7 @@ import (
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/attest"
+	"github.com/FemLed/masseuse-camlink/internal/payload"
 	"github.com/FemLed/masseuse-camlink/internal/provenance"
 )
 
@@ -69,8 +71,10 @@ const (
 	LayoutArchive Layout = iota
 	// LayoutBundle is the macOS application bundle, Masseuse.app.
 	LayoutBundle
-	// LayoutPackage is the Windows package: Masseuse.ai.exe with ffmpeg.exe
-	// and units\ beside it.
+	// LayoutPackage is the Windows package: one Masseuse.exe, ffmpeg.exe
+	// and the helpers inside it as a payload (internal/payload), unpacked
+	// under the state directory when it runs. Until v0.12 the package was
+	// a zip with those files beside an executable called Masseuse.ai.exe.
 	LayoutPackage
 )
 
@@ -96,12 +100,18 @@ type Install struct {
 	GOOS, GOARCH, GOARM string
 }
 
-// PackageExe is the Windows package's executable name (packaging/windows).
-const PackageExe = "Masseuse.ai.exe"
+// PackageExe is the Windows package's name on the release, and the name
+// the package is staged under (packaging/windows): Masseuse, the way the
+// Mac bundle is Masseuse.app, the program calling itself Masseuse.ai. The
+// running program may be called something else (a download renamed,
+// "Masseuse (1).exe"; Masseuse.ai.exe in an install that came through the
+// zip of releases before 0.13); Swap keeps the running name.
+const PackageExe = "Masseuse.exe"
 
-// Detect reads the layout off the executable's path: a bundle when it lies
-// in <name>.app/Contents/MacOS on darwin, the Windows package when it is
-// Masseuse.ai.exe, an archive install otherwise.
+// Detect reads the layout off the executable: a bundle when it lies in
+// <name>.app/Contents/MacOS on darwin, the Windows package when it carries
+// a payload (internal/payload; whatever it is called), an archive install
+// otherwise.
 func Detect(exe, goos, goarch string) Install {
 	in := Install{Exe: exe, GOOS: goos, GOARCH: goarch}
 	if goarch == "arm" {
@@ -113,7 +123,7 @@ func Detect(exe, goos, goarch string) Install {
 		strings.HasSuffix(filepath.Dir(filepath.Dir(dir)), ".app"):
 		in.Layout = LayoutBundle
 		in.Root = filepath.Dir(filepath.Dir(dir))
-	case goos == "windows" && strings.EqualFold(filepath.Base(exe), PackageExe):
+	case goos == "windows" && payload.Carries(exe):
 		in.Layout = LayoutPackage
 		in.Root = dir
 	default:
@@ -132,7 +142,7 @@ func (in Install) Artifact(tag string) (name, checksums, provenanceFile string) 
 	case LayoutBundle:
 		return "Masseuse.ai-" + version + ".dmg", "checksums-darwin.txt", "darwin.intoto.jsonl"
 	case LayoutPackage:
-		return "Masseuse.ai-" + version + "-windows.zip", "checksums-windows.txt", "windows.intoto.jsonl"
+		return PackageExe, "checksums-windows.txt", "windows.intoto.jsonl"
 	}
 	arch := in.GOARCH
 	if arch == "arm" && in.GOARM != "" {
