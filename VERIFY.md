@@ -11,7 +11,9 @@ carries:
 - container images at `ghcr.io/femled/masseuse-camlink`, signed keyless by
   digest, with SBOMs and their own SLSA container provenance.
 
-`scripts/verify-release.sh vX.Y.Z` runs all of the checks below.
+`sh scripts/verify-release.sh vX.Y.Z` runs the release checks below (1 to 3);
+`sh scripts/verify-enclave.sh` runs the enclave check (4). (Both are plain
+POSIX sh; the repository stores them without the executable bit.)
 
 ## 1. Signature
 
@@ -33,7 +35,8 @@ slsa-verifier verify-artifact masseuse-camlink_X.Y.Z_linux_amd64.tar.gz \
   --source-tag vX.Y.Z
 ```
 
-For the image:
+For the image (the digest is the one `docker pull` prints, or
+`docker buildx imagetools inspect ghcr.io/femled/masseuse-camlink:vX.Y.Z`):
 
 ```sh
 cosign verify ghcr.io/femled/masseuse-camlink@sha256:... \
@@ -42,6 +45,13 @@ cosign verify ghcr.io/femled/masseuse-camlink@sha256:... \
 slsa-verifier verify-image ghcr.io/femled/masseuse-camlink@sha256:... \
   --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
 ```
+
+The image signature needs cosign 3 or later: the release workflow signs
+with cosign 3, which stores the signature as a Sigstore bundle attached to
+the image (an OCI referrer, the `sha256-<digest>` tag on the registry)
+rather than the older `.sig` tag, and cosign 2 answers `no signatures
+found` even with `--new-bundle-format`. The checksum file's bundle in
+step 1 verifies with either major version.
 
 ## 3. Reproduce the binaries
 
@@ -95,7 +105,53 @@ Use `GOOS`/`GOARCH` (and `GOARM=7` for `linux_armv7`) to match the archive;
 Windows archives are zips and the binary is `masseuse-camlink.exe`. The
 container image holds the very same binaries as the archives.
 
-## 4. What the version string tells you
+## 4. The enclave your camera streams to
+
+The connector dials one kind of peer: a masseuse.ai video enclave whose
+Confidential Space attestation it has verified against the policy the
+service publishes at `https://masseuse.ai/api/tee-policy` (`internal/attest`;
+the checks are listed in `masseuse-video-tee/VERIFY.md`). The policy names
+the image digests an enclave may attest and, per digest, where it was built:
+
+```json
+"imageSources": {
+  "sha256:…": {
+    "repo": "ghcr.io/femled/masseuse-video-tee",
+    "tag": "v0.1.0",
+    "sourceUri": "github.com/FemLed/masseuse-video-tee"
+  }
+}
+```
+
+That repository's release workflow builds the image on GitHub Actions from
+the tagged commit, pushes it to the public registry with SLSA provenance
+and a keyless signature, and copies the same digest into the registry the
+enclave boots from. So the digest in the attestation, the digest in the
+public registry and the digest in the provenance are one value, and:
+
+```sh
+slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:<digest> \
+  --source-uri github.com/FemLed/masseuse-video-tee --source-tag v0.1.0
+cosign verify ghcr.io/femled/masseuse-video-tee@sha256:<digest> \
+  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-video-tee/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+proves that the code at that tag is what ran on the frames and the audio. The connector
+prints exactly this `slsa-verifier` line (`enclave source ... verify=`) each
+time it dials, with the digest it just verified; `sh scripts/verify-enclave.sh`
+runs both checks for every digest the policy currently allows, and says so
+when a digest has no published build (one from before the source was
+public). A digest that is not in the policy at all is one the connector
+would refuse.
+
+What this does not cover is the same as for the connector itself: that the
+source does what it says is a matter of reading it (`masseuse-video-tee`,
+`workload/`), and the analysis of the keypoints and vocalization labels the
+enclave derives runs in a module that repository pins by hash but does not
+publish (its `README.md`, "What happens to your video and audio").
+
+## 5. What the version string tells you
 
 `masseuse-camlink --version` prints this module's version and the Go
 toolchain from the binary's embedded build information, e.g.

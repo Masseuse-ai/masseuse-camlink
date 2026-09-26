@@ -63,6 +63,35 @@ The protocol between the connector, the enclave and the service is
 documented in [docs/PROTOCOL.md](docs/PROTOCOL.md). Security reports:
 [SECURITY.md](SECURITY.md).
 
+## Where your video goes
+
+The only place the connector sends your camera's stream is a masseuse.ai
+video enclave: a Google Cloud Confidential Space VM that decrypts the stream
+inside hardware-isolated memory, runs person detection and keypoint detection
+on the frames, classifies non-speech vocalizations in the audio track when
+the camera has a microphone, and discards both. The code that runs there is
+public: [FemLed/masseuse-video-tee](https://github.com/FemLed/masseuse-video-tee)
+holds every line that touches frames or audio, and its `README.md` says what
+leaves the enclave (numbers, never frames or sound).
+
+You do not have to take that on trust. Every enclave image is built by that
+repository's release workflow on GitHub Actions from a tagged commit, with
+SLSA provenance and a keyless signature, and the digest the enclave attests
+is the digest the workflow built. When the connector dials an enclave it
+logs three things:
+
+```
+enclave verified  image=sha256:… instance=… dbgstat=disabled-since-boot
+enclave source    image=sha256:… source=github.com/FemLed/masseuse-video-tee@v0.1.0 registry=ghcr.io/femled/masseuse-video-tee
+                  verify="slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:… --source-uri github.com/FemLed/masseuse-video-tee --source-tag v0.1.0"
+```
+
+Run the `verify` command (or `sh scripts/verify-enclave.sh`, which checks every
+digest the service currently allows) and `slsa-verifier` confirms, from the
+public registry, that this exact digest was produced by that repository at
+that tag. [VERIFY.md](VERIFY.md), "The enclave your camera streams to",
+walks through it.
+
 ## Build from source
 
 ```sh

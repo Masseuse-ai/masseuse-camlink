@@ -2,7 +2,7 @@
 // the connector may relay a camera to.
 //
 // It is a port of the checks the trainer makes before leasing a slot
-// (prostate-trainer/server/tee-attestation.js) and the standalone verifier
+// (masseuse-trainer/server/tee-attestation.js) and the standalone verifier
 // in masseuse-video-tee/verifier: fetch GET /attestation?nonce=<fresh> over
 // TLS, keep the leaf certificate that connection used, verify the
 // Confidential Space token (RS256 against Google's JWKS; issuer, audience,
@@ -55,11 +55,48 @@ type Policy struct {
 	RequireGpuCc        bool     `json:"requireGpuCc"`
 	ExpectedTrainerURL  string   `json:"expectedTrainerUrl"`
 	ImageSignatures     []string `json:"imageSignatures"`
-	Issuer              string   `json:"issuer"`
-	JWKSURL             string   `json:"jwksUrl"`
-	SWName              string   `json:"swname"`
-	HWModel             string   `json:"hwmodel"`
-	TeeSlotHostSuffixes []string `json:"teeSlotHostSuffixes"`
+	// ImageSources says where each allowed digest was built from: the public
+	// registry that holds the same digest with its SLSA provenance and
+	// keyless signature, the release tag, and the source repository the
+	// provenance names. A digest without an entry predates the published
+	// source; the connector says so rather than refusing, since the
+	// attestation itself still holds.
+	ImageSources        map[string]ImageSource `json:"imageSources"`
+	Issuer              string                 `json:"issuer"`
+	JWKSURL             string                 `json:"jwksUrl"`
+	SWName              string                 `json:"swname"`
+	HWModel             string                 `json:"hwmodel"`
+	TeeSlotHostSuffixes []string               `json:"teeSlotHostSuffixes"`
+}
+
+// ImageSource is the public build record of one image digest.
+type ImageSource struct {
+	Repo      string `json:"repo"`      // e.g. ghcr.io/femled/masseuse-video-tee
+	Tag       string `json:"tag"`       // the release tag, e.g. v0.1.0
+	SourceURI string `json:"sourceUri"` // e.g. github.com/FemLed/masseuse-video-tee
+}
+
+// String is "<sourceUri>@<tag>", the source revision the digest was built from.
+func (s ImageSource) String() string { return s.SourceURI + "@" + s.Tag }
+
+// VerifyCommand is the one-line check anyone can run against the digest:
+// slsa-verifier confirms the provenance attached to the image in the public
+// registry names this source at this tag, and the digest is the one the
+// enclave attested (VERIFY.md, "The enclave your camera streams to").
+func (s ImageSource) VerifyCommand(digest string) string {
+	return fmt.Sprintf("slsa-verifier verify-image %s@%s --source-uri %s --source-tag %s", s.Repo, digest, s.SourceURI, s.Tag)
+}
+
+func isDigest(d string) bool {
+	if !strings.HasPrefix(d, "sha256:") || len(d) != 7+64 {
+		return false
+	}
+	for _, c := range d[7:] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // Validate fills defaults and rejects a policy that could not pin anything.
@@ -68,8 +105,22 @@ func (p *Policy) Validate() error {
 		return errors.New("policy names no image digests")
 	}
 	for _, d := range p.AllowedImageDigests {
-		if !strings.HasPrefix(d, "sha256:") || len(d) != 7+64 {
+		if !isDigest(d) {
 			return fmt.Errorf("policy digest %q is not sha256:<64 hex>", d)
+		}
+	}
+	for d, s := range p.ImageSources {
+		if !isDigest(d) {
+			return fmt.Errorf("policy imageSources key %q is not sha256:<64 hex>", d)
+		}
+		if s.Repo == "" || strings.ContainsAny(s.Repo, " @:\n") || !strings.Contains(s.Repo, "/") {
+			return fmt.Errorf("policy imageSources[%s].repo %q is not a registry path", d, s.Repo)
+		}
+		if !strings.HasPrefix(s.Tag, "v") || strings.ContainsAny(s.Tag, " \n") {
+			return fmt.Errorf("policy imageSources[%s].tag %q is not a release tag", d, s.Tag)
+		}
+		if s.SourceURI == "" || strings.Contains(s.SourceURI, "://") || strings.ContainsAny(s.SourceURI, " \n") || !strings.Contains(s.SourceURI, "/") {
+			return fmt.Errorf("policy imageSources[%s].sourceUri %q is not a source URI", d, s.SourceURI)
 		}
 	}
 	if p.Issuer == "" {
@@ -125,6 +176,7 @@ func (e *PolicyError) Error() string {
 type Result struct {
 	Origin       string
 	ImageDigest  string
+	Source       *ImageSource // the policy's build record for ImageDigest; nil when it has none
 	InstanceID   string
 	DbgStat      string
 	Leaf         *x509.Certificate
@@ -264,6 +316,9 @@ func (v *Verifier) Verify(ctx context.Context, origin string) (*Result, error) {
 	res.SPKISHA256 = sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 	res.TLSSpkiNonce = base64.RawURLEncoding.EncodeToString(res.SPKISHA256[:])
 	res.ImageDigest = nestedString(claims.Submods, "container", "image_digest")
+	if s, ok := v.Policy.ImageSources[res.ImageDigest]; ok {
+		res.Source = &s
+	}
 	res.InstanceID = nestedString(claims.Submods, "gce", "instance_id")
 	res.DbgStat = claims.DbgStat
 	res.TokenExpiry = time.Unix(claims.Expiry, 0)

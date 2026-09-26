@@ -9,7 +9,8 @@
 #   6. (optional, needs Go) so does the connector in the linux/amd64 archive.
 #
 # usage: scripts/verify-release.sh vX.Y.Z [download dir]
-# needs: curl, sha256sum (or shasum), cosign, slsa-verifier; go optional.
+# needs: curl, sha256sum (or shasum), cosign (3 or later for the image),
+# slsa-verifier; docker or crane and go optional.
 set -eu
 
 REPO="FemLed/masseuse-camlink"
@@ -56,12 +57,21 @@ awk '{print $2}' checksums.txt | while read -r f; do
   echo "    ok  $f"
 done
 
-if command -v docker >/dev/null 2>&1 || command -v crane >/dev/null 2>&1; then
+if ! command -v docker >/dev/null 2>&1 && ! command -v crane >/dev/null 2>&1; then
+  echo "==> 4. container image: skipped (no docker or crane)"
+elif [ "$(cosign version 2>&1 | sed -n 's/^GitVersion: *v\([0-9]*\).*/\1/p')" -lt 3 ] 2>/dev/null; then
+  # The release workflow signs the image with cosign 3, which attaches the
+  # signature as a Sigstore bundle (an OCI referrer); cosign 2 cannot read
+  # it and reports "no signatures found".
+  echo "==> 4. container image: skipped (cosign 3 or later is needed for the image signature; $(cosign version 2>&1 | sed -n 's/^GitVersion: *//p') found)"
+else
   echo "==> 4. container image"
   if command -v crane >/dev/null 2>&1; then
     digest=$(crane digest "$IMAGE:$tag")
   else
-    digest=$(docker buildx imagetools inspect "$IMAGE:$tag" --format '{{ .Manifest.Digest }}')
+    # The digest of the index is the hash of its bytes; --raw prints them
+    # exactly, where --format templates differ between buildx versions.
+    digest="sha256:$(docker buildx imagetools inspect --raw "$IMAGE:$tag" | $SHA | cut -d' ' -f1)"
   fi
   echo "    $IMAGE@$digest"
   cosign verify "$IMAGE@$digest" \
@@ -71,17 +81,18 @@ if command -v docker >/dev/null 2>&1 || command -v crane >/dev/null 2>&1; then
   slsa-verifier verify-image "$IMAGE@$digest" \
     --source-uri "github.com/$REPO" --source-tag "$tag" >/dev/null
   echo "    ok  provenance"
-else
-  echo "==> 4. container image: skipped (no docker or crane)"
 fi
 
 if command -v go >/dev/null 2>&1; then
   echo "==> 5. rebuild the gateway from the module proxy and compare (VERIFY.md 3)"
   export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GOFLAGS=
   # A scratch GOPATH so the cross-compiled binary has a known home (GOBIN is
-  # not allowed for cross builds); the module cache stays shared.
+  # not allowed for cross builds); the module cache stays shared, so it is
+  # resolved before GOPATH is overridden (a shell applies the assignments
+  # before a command left to right).
   work="$(mktemp -d)"
-  GOPATH="$work/gopath" GOMODCACHE="$(go env GOMODCACHE)" GOOS=linux GOARCH=amd64 \
+  modcache="$(go env GOMODCACHE)"
+  GOPATH="$work/gopath" GOMODCACHE="$modcache" GOOS=linux GOARCH=amd64 \
     go install -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
     "github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@$tag"
   built=$(find "$work/gopath/bin" -type f -name masseuse-camlink-gateway | head -n 1)
@@ -110,6 +121,7 @@ if command -v go >/dev/null 2>&1; then
     echo "    MISMATCH: rebuilt $rebuilt, in archive $published" >&2
     exit 1
   fi
+  chmod -R u+w "$work" 2>/dev/null || true
   rm -rf "$work"
 else
   echo "==> 5-6. rebuild: skipped (no go)"

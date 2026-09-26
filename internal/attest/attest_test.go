@@ -22,8 +22,10 @@ import (
 
 const (
 	testDigest  = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	testTrainer = "https://prostate-trainer.example.run.app"
+	testTrainer = "https://masseuse-trainer.example.run.app"
 )
+
+var testSource = ImageSource{Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "v0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"}
 
 // fakeSlot is an enclave that mints tokens the way Confidential Space does,
 // signed by a test key, with the nonce bindings a real slot adds.
@@ -144,9 +146,66 @@ func policyFor() *Policy {
 		RequireStable:       true,
 		RequireGpuCc:        true,
 		ExpectedTrainerURL:  testTrainer,
+		ImageSources:        map[string]ImageSource{testDigest: testSource},
 	}
 	_ = p.Validate()
 	return p
+}
+
+func TestImageSources(t *testing.T) {
+	fs := newFakeSlot(t)
+	res, err := verifierFor(fs, policyFor()).Verify(context.Background(), fs.origin())
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if res.Source == nil || *res.Source != testSource {
+		t.Fatalf("source %+v, want %+v", res.Source, testSource)
+	}
+	if got, want := res.Source.String(), "github.com/FemLed/masseuse-video-tee@v0.1.0"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	want := "slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@" + testDigest +
+		" --source-uri github.com/FemLed/masseuse-video-tee --source-tag v0.1.0"
+	if got := res.Source.VerifyCommand(res.ImageDigest); got != want {
+		t.Fatalf("VerifyCommand() = %q, want %q", got, want)
+	}
+
+	// A digest the policy has no build record for verifies with Source nil.
+	p := policyFor()
+	p.ImageSources = nil
+	res, err = verifierFor(fs, p).Verify(context.Background(), fs.origin())
+	if err != nil {
+		t.Fatalf("verify without sources: %v", err)
+	}
+	if res.Source != nil {
+		t.Fatalf("source %+v, want nil", res.Source)
+	}
+
+	// Validate rejects a malformed record; a well-formed one for another
+	// digest is fine.
+	for name, s := range map[string]ImageSource{
+		"no repo":       {Tag: "v0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"},
+		"repo with tag": {Repo: "ghcr.io/femled/masseuse-video-tee:v0.1.0", Tag: "v0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"},
+		"bare tag":      {Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "0.1.0", SourceURI: "github.com/FemLed/masseuse-video-tee"},
+		"url source":    {Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "v0.1.0", SourceURI: "https://github.com/FemLed/masseuse-video-tee"},
+		"no source":     {Repo: "ghcr.io/femled/masseuse-video-tee", Tag: "v0.1.0"},
+	} {
+		p := policyFor()
+		p.ImageSources = map[string]ImageSource{testDigest: s}
+		if err := p.Validate(); err == nil {
+			t.Errorf("%s: accepted %+v", name, s)
+		}
+	}
+	p = policyFor()
+	p.ImageSources = map[string]ImageSource{"latest": testSource}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "imageSources key") {
+		t.Fatalf("non-digest key: %v", err)
+	}
+	p = policyFor()
+	p.ImageSources = map[string]ImageSource{"sha256:" + strings.Repeat("ab", 32): testSource}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("record for another digest: %v", err)
+	}
 }
 
 func verifierFor(fs *fakeSlot, p *Policy) *Verifier {
@@ -362,6 +421,7 @@ func TestFetchPolicy(t *testing.T) {
 		"requireGpuCc":        true,
 		"expectedTrainerUrl":  testTrainer,
 		"imageSignatures":     []string{},
+		"imageSources":        map[string]any{testDigest: map[string]string{"repo": testSource.Repo, "tag": testSource.Tag, "sourceUri": testSource.SourceURI}},
 		"issuer":              DefaultIssuer,
 		"jwksUrl":             DefaultJWKSURL,
 		"swname":              DefaultSWName,
@@ -385,6 +445,15 @@ func TestFetchPolicy(t *testing.T) {
 	}
 	if !p.AllowDebug || p.RequireStable || len(p.TeeSlotHostSuffixes) != 1 || p.JWKSURL != DefaultJWKSURL {
 		t.Fatalf("policy %+v", p)
+	}
+	if p.ImageSources[testDigest] != testSource {
+		t.Fatalf("imageSources %+v", p.ImageSources)
+	}
+	badSource := map[string]any{"allowedImageDigests": []string{testDigest}, "imageSources": map[string]any{testDigest: map[string]string{"repo": "ghcr.io/femled/masseuse-video-tee", "tag": "latest"}}}
+	srv5 := serve(badSource)
+	defer srv5.Close()
+	if _, err := FetchPolicy(context.Background(), srv5.Client(), srv5.URL); err == nil {
+		t.Fatal("accepted a malformed image source")
 	}
 
 	bad := map[string]any{"allowedImageDigests": []string{"latest"}}
