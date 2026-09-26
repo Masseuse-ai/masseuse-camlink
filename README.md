@@ -153,6 +153,21 @@ and back up once it has been clear for a while (see below). Leave the
 program running in the background, or set it up as a service; nothing else
 is needed.
 
+While it runs, the computer does not go to sleep on its own. A laptop
+left at the foot of the bed is not touched while the session's enclave
+boots, and on battery macOS and Windows would put it to sleep a few
+minutes after the last touch, stopping the camera and the microphone and
+dropping the Bluetooth link to the unit; so the program holds the system's
+own "stay awake" for as long as it runs (a power assertion on macOS,
+`pmset -g assertions` lists it; a power request on Windows, `powercfg
+/requests`; a logind inhibitor on Linux, `systemd-inhibit --list`), and
+says so on its first lines. The screen may still go dark, which the camera
+does not need; closing the lid still sleeps the computer, so leave it open.
+The hold ends with the program, however it ends. `-allow-sleep` runs
+without it; a computer running the program as a service on battery will
+otherwise never idle-sleep, which is the point on a laptop set up for
+sessions and a battery cost anywhere else.
+
 ## Use a camera on your network
 
 ```sh

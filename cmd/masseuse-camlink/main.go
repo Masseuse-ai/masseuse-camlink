@@ -37,13 +37,14 @@ import (
 
 func main() {
 	var (
-		service  = flag.String("service", envOr("MASSEUSE_CAMLINK_SERVICE", "https://masseuse.ai"), "the masseuse.ai service")
-		stateDir = flag.String("state-dir", envOr("MASSEUSE_CAMLINK_STATE_DIR", defaultStateDir()), "where the identity key, pairings and camera choice live")
-		logLevel = flag.String("log-level", "info", "debug, info, warn or error")
-		version  = flag.Bool("version", false, "print the version and exit")
-		console  = flag.Bool("console", false, "run in this terminal even when started from the macOS application bundle")
-		appMode  = flag.Bool("app", false, "do as the macOS application bundle does when opened: run the program in a new Terminal window")
-		sf       sourceFlags
+		service    = flag.String("service", envOr("MASSEUSE_CAMLINK_SERVICE", "https://masseuse.ai"), "the masseuse.ai service")
+		stateDir   = flag.String("state-dir", envOr("MASSEUSE_CAMLINK_STATE_DIR", defaultStateDir()), "where the identity key, pairings and camera choice live")
+		logLevel   = flag.String("log-level", "info", "debug, info, warn or error")
+		version    = flag.Bool("version", false, "print the version and exit")
+		console    = flag.Bool("console", false, "run in this terminal even when started from the macOS application bundle")
+		appMode    = flag.Bool("app", false, "do as the macOS application bundle does when opened: run the program in a new Terminal window")
+		allowSleep = flag.Bool("allow-sleep", false, "let the computer go to sleep on its own while this runs (the camera, the microphone and the unit stop with it)")
+		sf         sourceFlags
 	)
 	flag.StringVar(&sf.camera, "camera", "", "the computer's camera to send: its number in the devices listing, or (part of) its name; default the first")
 	flag.StringVar(&sf.mic, "mic", "", "the microphone to send with it: number or name; none for video only; default the first")
@@ -157,6 +158,11 @@ func main() {
 	if n := len(id.PairedHashes()); n > 0 {
 		fmt.Printf("Paired with %d phone(s). Sessions that use this camera connect automatically.\n", n)
 	}
+	// The computer stays awake for as long as this runs (awake.go): a
+	// laptop left at the foot of the bed would otherwise idle-sleep while
+	// the enclave boots, taking the camera, the microphone and the unit's
+	// Bluetooth link with it.
+	defer keepAwake(*allowSleep, logger)()
 
 	httpClient := &http.Client{}
 	mgr := &manager{

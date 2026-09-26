@@ -78,7 +78,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: go test on macOS
-        run: go test -count=1 ./cmd/... ./internal/capture/ ./internal/machosig/ ./internal/ble/
+        run: go test -count=1 ./cmd/... ./internal/capture/ ./internal/machosig/ ./internal/ble/ ./internal/awake/
       - name: Unsigned bundle and disk image
         run: |
           mkdir -p dist/ffmpeg/licenses dist/ffmpeg/sources
@@ -131,7 +131,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: go test on Windows
-        run: go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/
+        run: go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/ ./internal/awake/
       - name: The committed resource objects are current
         run: |
           sh packaging/windows/make-syso.sh
