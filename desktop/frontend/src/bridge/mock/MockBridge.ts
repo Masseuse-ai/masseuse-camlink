@@ -1,8 +1,10 @@
 // A connector made of a script: it plays a scenario's events on their
 // timers, and answers the window's commands the way the real connector
 // will (a new camera chosen is reported as the source; a unit selected is
-// let go of and the new one connected; an update check runs and reports).
-// The page cannot tell it from the connector, which is the point.
+// let go of and the new one connected; an update check runs and reports),
+// and stands in for the shell where the shell answers (the system's
+// question about the camera and the microphone). The page cannot tell it
+// from the connector, which is the point.
 
 import type { Bridge, ConnectorCommand, ConnectorEvent, Descriptor, FaceCamera, Share, Unit } from '../types';
 import { SHARE_ADDRESS, descriptorFor, disconnected, shareOffered } from './fixtures';
@@ -10,6 +12,10 @@ import type { Scenario } from './scenarios';
 
 type Handler = (event: ConnectorEvent) => void;
 type DevicesEvent = Extract<ConnectorEvent, { type: 'devices' }>;
+type MediaEvent = Extract<ConnectorEvent, { type: 'media' }>;
+
+/** How long the mock's person takes to answer the system's two prompts; long enough to see the card while they are up. */
+const PROMPTS_ANSWERED_MS = 5000;
 
 export class MockBridge implements Bridge {
     private handlers = new Set<Handler>();
@@ -27,6 +33,9 @@ export class MockBridge implements Bridge {
     private connectorVersion = 'v0.13.0';
     // The last source report, so a change to one view keeps the other.
     private source: Extract<ConnectorEvent, { type: 'source' }> | null = null;
+    // The shell's word on the camera and the microphone, when the scenario
+    // has one; null is a scenario that never speaks of it (nothing shown).
+    private media: MediaEvent | null = null;
 
     constructor(private readonly scenario: Scenario) {}
 
@@ -64,6 +73,9 @@ export class MockBridge implements Bridge {
                 break;
             case 'source':
                 this.source = event;
+                break;
+            case 'media':
+                this.media = event;
                 break;
         }
         for (const h of this.handlers) h(event);
@@ -158,6 +170,24 @@ export class MockBridge implements Bridge {
                 this.later(100, { type: 'update', state: 'checking', text: 'Looking for a newer release…' });
                 this.later(1800, { type: 'update', state: 'current', text: `Up to date: ${this.connectorVersion} is the latest release.` });
                 return;
+
+            case 'request_media_access': {
+                // As macOS answers: while the standing is not determined the
+                // prompts go up and the mock's person allows both a few
+                // seconds later; answered already, the standing answer comes
+                // back at once, no prompt. A scenario without a word on it
+                // has nothing to answer.
+                const current = this.media;
+                if (!current) return;
+                const undetermined = current.camera === 'notDetermined' || current.mic === 'notDetermined';
+                const answer: MediaEvent = {
+                    type: 'media',
+                    camera: current.camera === 'notDetermined' ? 'authorized' : current.camera,
+                    mic: current.mic === 'notDetermined' ? 'authorized' : current.mic,
+                };
+                this.later(undetermined ? PROMPTS_ANSWERED_MS : 100, answer);
+                return;
+            }
 
             case 'quit':
                 return;

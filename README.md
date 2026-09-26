@@ -41,8 +41,10 @@ same program and can go). The window opens with the pairing code; ffmpeg
 and the unit drivers are included in the app, so there is nothing else to
 install. Leave the window open while you use it; closing it stops the
 program, and opening the app again while it runs only brings the window
-forward. The system asks for the camera, the microphone and Bluetooth in
-the application's name the first time each is used. The connector alone
+forward. The window asks for the camera and the microphone, in the
+application's name, when you reach the Cameras and microphone step (or, on
+a computer already paired, as soon as it opens); the system asks for
+Bluetooth the first time it is used. The connector alone
 runs in Terminal as `Masseuse.app/Contents/MacOS/masseuse-camlink -console`
 (the `darwin_*` archives carry the same bare binary; run from anywhere but
 Terminal, macOS refuses a bare binary however it is signed, which is what
@@ -238,19 +240,26 @@ and back up once it has been clear for a while (see below). Leave the
 program running in the background, or set it up as a service; nothing else
 is needed.
 
-The first time a session turns the camera on, the system asks whether
-Masseuse.ai may use the camera and the microphone; allow both. If the
-camera's light never comes on and the window says the camera is on but no
-picture is being sent (after ten seconds the connector says so too, and
-why it thinks so), the system has refused it: on a Mac, System Settings ›
-Privacy & Security › Camera, and Microphone, must list Masseuse and allow
-it; on Windows, Settings › Privacy & security › Camera, *Let desktop apps
-access your camera*, must be on, and the same under Microphone. v0.16.0
-and v0.17.0 of the Mac app could not ask at all (the window was signed
-without the camera and microphone entitlements macOS requires of the
-application that runs ffmpeg, so the refusal was silent and Masseuse never
-appeared in that list); the update to the next release fixes that, and the
-question is asked at the first session after it.
+On a Mac the window asks whether Masseuse.ai may use the camera and the
+microphone as soon as the Cameras and microphone step opens (or, on a
+computer already paired, when the window opens on Ready), so the two
+questions come while you are at the computer and not during a session,
+when the screen may be dark; allow both. A card under the title says the
+questions are up and asks again on request; refused, it says macOS is
+blocking the camera and opens System Settings › Privacy & Security, where
+Camera, and Microphone, must list Masseuse and allow it (the card goes by
+itself a few seconds after the switch). On Windows, and when the connector
+runs alone in a terminal, the system asks the first time a session turns
+the camera on. Whichever system: if the camera's light never comes on and
+the window says the camera is on but no picture is being sent (after ten
+seconds the connector says so too, and why it thinks so), the system has
+refused it: on a Mac the settings above; on Windows, Settings › Privacy &
+security › Camera, *Let desktop apps access your camera*, must be on, and
+the same under Microphone. v0.16.0 and v0.17.0 of the Mac app could not ask
+at all (the window was signed without the camera and microphone
+entitlements macOS requires of the application that runs ffmpeg, so the
+refusal was silent and Masseuse never appeared in that list); v0.18.0
+fixed that, and from v0.19.0 the question is put up front.
 
 While it runs, the computer does not go to sleep on its own. A laptop
 left at the foot of the bed is not touched while the session's enclave

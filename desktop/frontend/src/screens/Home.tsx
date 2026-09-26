@@ -1,9 +1,13 @@
 // Ready: what this computer offers a session, and what the session is
 // doing with it. Idle, it waits; in a session, the camera link and its
 // rates, the unit's standing, and the proof of the enclave the picture
-// goes to, the three lines the connector logs made readable. On the grid
-// (ui/Page.tsx): the phones as the screen's control beside the title, the
-// four choices as cards on three columns each, the session on all twelve.
+// goes to, the three lines the connector logs made readable. A computer
+// paired on an earlier run opens here and skips the steps, so on a Mac
+// this is also where the system is asked for the camera and the microphone
+// if it has not been (ui/MediaAccess), and where a refusal is said with
+// the way back. On the grid (ui/Page.tsx): the phones as the screen's
+// control beside the title, the four choices as cards on three columns
+// each, the session on all twelve.
 
 import { Camera, Mic, MicOff, ShieldCheck, SlidersHorizontal, Smartphone, TriangleAlert, Zap } from 'lucide-react';
 
@@ -13,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { faceViewOf, useAppState, useDispatch, type Step } from '../bridge/store';
 import type { CameraStats } from '../bridge/types';
 import { Card, CardLabel } from '../ui/Card';
+import { MediaAccessAlert, mediaStanding, useMediaAsk } from '../ui/MediaAccess';
 import { Page } from '../ui/Page';
 import { Scene } from '../ui/Scene';
 import { StatusChip, type Tone } from '../ui/StatusChip';
@@ -82,10 +87,20 @@ function SummaryCard({ icon: Icon, label, value, note, badge, step, tab, disable
 }
 
 export function Home() {
-    const { source, unit, link, camera, faceCamera, phones, online } = useAppState();
+    const state = useAppState();
+    const { source, unit, link, camera, faceCamera, phones, online } = state;
     const dispatch = useDispatch();
     const processed = faceViewOf(source) === 'processed';
     const share = source?.share;
+
+    // On a Mac, the system's question about the camera and the microphone,
+    // asked here if it has not been answered yet (a paired computer opens
+    // on this screen).
+    useMediaAsk();
+    // The shell's definite word when macOS is blocking the camera or the
+    // microphone; it says more than the connector's guess below, so it
+    // stands in for it.
+    const mediaBlocked = mediaStanding(state) === 'blocked';
 
     const inSession = link.state === 'active';
     const stats: CameraStats | undefined = camera.stats;
@@ -184,6 +199,7 @@ export function Home() {
                 {inSession ? (
                     <div className="grid-12 min-h-0 flex-1">
                         <div className="col-span-7 flex min-w-0 flex-col justify-center gap-3">
+                            <MediaAccessAlert />
                             {stats ? (
                                 <>
                                     <Meter label="Video" value={stats.videoBps} ceiling={2_500_000} tone={stats.congested ? 'amber' : 'rose'} />
@@ -207,7 +223,7 @@ export function Home() {
                                     ))}
                                 </div>
                             ) : null}
-                            {notSending ? (
+                            {notSending && !mediaBlocked ? (
                                 <Alert variant="warn">
                                     <TriangleAlert />
                                     <AlertTitle>Camera on, but no picture is being sent</AlertTitle>
@@ -233,6 +249,7 @@ export function Home() {
                 ) : (
                     <div className="grid-12 min-h-0 flex-1">
                         <div className="col-span-7 flex min-w-0 flex-col justify-center gap-3">
+                            <MediaAccessAlert />
                             {link.state === 'on-hold' ? (
                                 <Alert variant="neutral">
                                     <TriangleAlert />

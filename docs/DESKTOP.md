@@ -21,9 +21,13 @@ Two programs, one download.
   lines, the way the connector speaks to its unit driver helpers
   (docs/UNITS.md). The shell holds no key, no pairing, no camera and no
   unit: it shows what the connector reports and passes on what the person
-  chooses. It needs signing; it does not need to be reproducible for the
-  download to be verifiable, because the program that matters is the
-  connector inside it, byte for byte the published binary.
+  chooses. One thing is its own: on a Mac it is the process the system
+  holds responsible for the camera and the microphone its grandchild ffmpeg
+  opens, so it is the shell that asks the system for them
+  (`desktop/permissions_darwin.go`), on the Cameras screen, while the
+  person is there. It needs signing; it does not need to be reproducible
+  for the download to be verifiable, because the program that matters is
+  the connector inside it, byte for byte the published binary.
 
 ```
 phone app  <->  masseuse.ai service  <->  connector  -->  attested enclave
@@ -101,9 +105,9 @@ the reducer's `ui/go` and `hello` in `frontend/src/bridge/store.tsx`).
 | Screen | What it shows | States |
 | --- | --- | --- |
 | **Pair** | Under the heading, the line on what the code does ("The code securely connects your masseuse to this computer."). The code, large, in the cells the phone's code input draws, with a ring under it that is wiped clockwise over the code's ten-minute life, as an authenticator app draws one, and the time left in words beside the ring ("Code rotates in 9 minutes and 5 seconds", counting down by the second); the three things to do on the phone, one line each. | fresh code (nothing leads on until a phone pairs); the last minute (ring, code and the words in ember; the code's cells breathing, the ring still); not yet reachable (empty cells, "Reaching masseuse.ai…"); a lapsed code waiting for the next (empty cells); a phone just paired (straight on to the camera; the check on Pair in the bar is the confirmation); back here after pairing in this run (the way on is the camera); pairing another phone from Ready; a computer paired on an earlier run opens on Ready instead |
-| **Cameras and microphone** | Two tabs, one per view the room shows; under the heading, for Behind you, a line on what the camera behind the person watches and what the face alone accounts for. **Behind you**: this computer's cameras as ffmpeg lists them, each a card with what it is (built in, USB, virtual camera, Continuity Camera), and last in the list "A camera on your network", which opens inline to the RTSPS address and an optional certificate pin; the microphones, with "No microphone" last. A virtual camera such as OBS's carries the word that it shows what its program outputs. The picture itself (size, rate, bit rate, encoder) is the connector's and the enclave's to manage between them and is not offered; nothing on the screen names the encoding. **Your face**: which picture the room shows as the person's face and streams on: *Your phone's camera* (the default: "As captured; nothing passes through this computer") or *OBS Studio* (advanced, "Apply filters or use a dedicated front-facing camera"), which opens three steps: "Pull your phone's camera into OBS Studio", marked optional (the loopback address with a copy button; or a dedicated camera on the computer as OBS's source instead, only step 2's camera going back to masseuse.ai), "Apply filters in OBS Studio, then select your post-processed front-facing camera" (this computer's cameras, virtual ones first; the camera chosen behind the person greyed), and "Enable it in https://masseuse.ai" (under Setup on the phone: *Show the computer's picture as my face*, and *Send my phone's picture to the computer* if step 1 was used). The page says nothing of the loop's latency or of what the analysis reads (the room keeps reading the phone's own picture): that is plumbing, not the person's concern. | Behind you: the usual; looking (the cards' shapes until the connector's first answer); no camera the connector can serve (in the first run, Continue waits, "Connect a camera to continue."); a virtual camera chosen; a remembered device not connected (the stand-in shown, the missing one greyed and named); no camera; locked while a session has the camera; a network camera. Your face: the phone's camera; processed and setting up (the address up, the phone not sending, no virtual camera yet); processed and ready (the phone's picture arriving, OBS Virtual Camera chosen); the face camera also chosen behind you; locked while the room shows OBS's picture; an older connector (no share or face in its report: one line, nothing to choose) |
+| **Cameras and microphone** | Two tabs, one per view the room shows; under the heading, for Behind you, a line on what the camera behind the person watches and what the face alone accounts for. **Behind you**: this computer's cameras as ffmpeg lists them, each a card with what it is (built in, USB, virtual camera, Continuity Camera), and last in the list "A camera on your network", which opens inline to the RTSPS address and an optional certificate pin; the microphones, with "No microphone" last. A virtual camera such as OBS's carries the word that it shows what its program outputs. The picture itself (size, rate, bit rate, encoder) is the connector's and the enclave's to manage between them and is not offered; nothing on the screen names the encoding. **Your face**: which picture the room shows as the person's face and streams on: *Your phone's camera* (the default: "As captured; nothing passes through this computer") or *OBS Studio* (advanced, "Apply filters or use a dedicated front-facing camera"), which opens three steps: "Pull your phone's camera into OBS Studio", marked optional (the loopback address with a copy button; or a dedicated camera on the computer as OBS's source instead, only step 2's camera going back to masseuse.ai), "Apply filters in OBS Studio, then select your post-processed front-facing camera" (this computer's cameras, virtual ones first; the camera chosen behind the person greyed), and "Enable it in https://masseuse.ai" (under Setup on the phone: *Show the computer's picture as my face*, and *Send my phone's picture to the computer* if step 1 was used). The page says nothing of the loop's latency or of what the analysis reads (the room keeps reading the phone's own picture): that is plumbing, not the person's concern. | Behind you: the usual; looking (the cards' shapes until the connector's first answer); no camera the connector can serve (in the first run, Continue waits, "Connect a camera to continue."); a virtual camera chosen; a remembered device not connected (the stand-in shown, the missing one greyed and named); no camera; locked while a session has the camera; a network camera; on a Mac, the system not yet asked for the camera and the microphone (the window asks as the screen opens and the card says so while the two prompts are up, with "Allow camera and microphone" to ask again); macOS blocking the camera, the microphone or both (the card names what is blocked, points at Privacy & Security and opens it; a switch made there shows within seconds). Your face: the phone's camera; processed and setting up (the address up, the phone not sending, no virtual camera yet); processed and ready (the phone's picture arriving, OBS Virtual Camera chosen); the face camera also chosen behind you; locked while the room shows OBS's picture; an older connector (no share or face in its report: one line, nothing to choose) |
 | **Unit** | The units found (Bluetooth or USB serial by their family), the one served, the one another program has open; the served unit's standing (held at zero or armed, battery, level, bound). With none found, the units masseuse.ai works with, each with its maker's mark, as the phone's "Which units work?" sheet lists them (Mastogo units and the DG-Lab Coyote over Bluetooth, the E-Stim Systems 2B and the ErosTek MK-312BT over a serial link cable), with the trademark line; with units found, the same list behind "Which units work?". | looking, none yet (in the first run, Done waits for a unit); one connected; several; another program has it open; Bluetooth permission needed (macOS); Bluetooth off; disconnected, by reason (idle, battery, button, link); armed by a session (switching waits) |
-| **Ready** | What this computer offers (behind you, microphone, your face, unit, each with Change) and what the session is doing: waiting; the camera link active with its rates and the enclave's proof (release, commit, source, registry, signer: the three `enclave …` log lines made readable); with the face through OBS, a Face meter and the loop's three hops (the phone's picture to this computer, OBS's picture back, shown as the face); congested; on hold; closed. | idle; session active; face processed through OBS and live; congested; on hold; update downloaded and waiting; updates off; without a unit |
+| **Ready** | What this computer offers (behind you, microphone, your face, unit, each with Change) and what the session is doing: waiting; the camera link active with its rates and the enclave's proof (release, commit, source, registry, signer: the three `enclave …` log lines made readable); with the face through OBS, a Face meter and the loop's three hops (the phone's picture to this computer, OBS's picture back, shown as the face); congested; on hold; closed. | idle; session active; face processed through OBS and live; congested; camera on but no picture sent (the connector's reason); on hold; update downloaded and waiting; updates off; without a unit; on a Mac, the system not yet asked for the camera and the microphone (a computer paired on an earlier run opens here and skips the steps, so the window asks here, with the same card as Cameras); macOS blocking the camera or the microphone (the shell's definite card, in place of the connector's no-picture guess during a session) |
 | **Blocked** | Whole-window: the program cannot run as it is, and the one thing to do. | already running in another window; the connector stopped (its last lines); the state folder cannot be written |
 | **About** | A dialog from the application menu: the program, versions (connector and window), the identity's first characters, the state folder, the links (how it stays private, verify this download, report a security issue, the source). | |
 
@@ -187,6 +191,20 @@ Events, connector to shell:
 | `notice` | `level` (`info`, `warn`, `error`), `text` | anything else printed |
 | `blocked` | `kind` (`already-running`, `state-dir-unwritable`), `detail`; sent at once, the program ends | the exits |
 
+Two events in the same stream are the shell's own, not the connector's
+(`desktop/connector.go`): `blocked` with `kind: connector-stopped` and the
+connector's last lines as `detail`, when the child ends on its own; and
+`media`, `camera` and `mic` each `notDetermined`, `restricted`, `denied` or
+`authorized` (macOS's AVAuthorizationStatus in words; Windows and Linux
+always `authorized`), said before the connector's `hello` and again
+whenever the standing changes: a prompt answered, or a switch in System
+Settings, which the shell reads every few seconds (`desktop/permissions.go`,
+`permissions_darwin.go`). The page asks for the prompts through the shell's
+`RequestMediaAccess` (the bridge's `request_media_access`) the first time
+Cameras or Ready opens while either is `notDetermined`, and opens System
+Settings › Privacy & Security through `OpenPrivacySettings`
+(`frontend/src/ui/MediaAccess.tsx`).
+
 Commands, shell to connector: `{"type":"list_devices"}`;
 `{"type":"set_source","choice":{…}}` with the source flags as fields
 (`camera`, `mic`, `videoSize`, `fps`, `bitrate`, `encoder`, or `url` and
@@ -254,7 +272,19 @@ The bindings are generated as TypeScript with interfaces
    or even asked about (`packaging/macos/device.entitlements`, on the
    shell and on ffmpeg; v0.16.0 and v0.17.0 signed the shell without them
    and the camera stayed off, silently; `assess.sh entitlements` now gates
-   every bundle). `Masseuse.exe` as the shell
+   every bundle). Being that process, the shell also puts the question
+   itself, through AVFoundation (`desktop/permissions_darwin.go`, the
+   module's one cgo file of its own), when the Cameras screen opens or,
+   on a computer paired before, when the window opens on Ready: the
+   system's two prompts come while the person is at the computer choosing
+   devices, not at the first session, when the room may be dark and no one
+   is looking at the Mac; the grant covers ffmpeg later. Refused, the
+   window says so and opens Privacy & Security; the connector's
+   ten-second "no picture" report (`internal/capture`, `stallTrouble`)
+   stays as the fallback for whatever else keeps a picture from coming.
+   The dev bundle's plists (`desktop/build/darwin`) carry the two usage
+   strings for it, since macOS ends a process that asks without them.
+   `Masseuse.exe` as the shell
    (GUI subsystem, `desktop/rsrc_windows_amd64.syso`) with the connector
    added to the payload (`packaging/windows/pack -s`). The shell is built
    per platform in the release (`macos-26` universal, `windows-2022`), the
@@ -302,6 +332,13 @@ Gatekeeper and SmartScreen prompts):
   OBS Studio for the face view, pick a unit; the phone sees the choices
   (the source report). The ready screen shows the link active during a
   session.
+- On a Mac with the application's grants reset (`tccutil reset Camera
+  ai.masseuse.camlink`, and `Microphone`): the two system prompts appear
+  as the Cameras step opens, in the application's name, with the card
+  under the title while they are up; allowed, the card goes and the
+  session's camera comes on with no further question. Refused, the card
+  says macOS is blocking it and its button opens Privacy & Security;
+  switched on there, the card goes within a few seconds.
 - Quit during a session: the question appears; *Keep running* keeps it;
   *Quit* ends the session, the camera goes off, the unit is released, and
   no `masseuse-camlink` process is left (`pgrep`, Task Manager).

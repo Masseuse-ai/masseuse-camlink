@@ -23,7 +23,14 @@ the connector writes is relayed to the page as the Wails event `connector`
 and the last of each kind kept for a page that mounts later (`Snapshot`);
 the page's requests are the typed methods (`ListDevices`, `SetSource`,
 `SelectUnit`, `UpdateNow`, `Quit`, `Restart`) written to its standard
-input. Its standard error is the log, `desktop.log` under the state
+input. Two methods are the shell's own: on a Mac it is the process the
+system holds responsible for the camera and the microphone ffmpeg opens,
+so `RequestMediaAccess` puts the system's two questions itself
+(`permissions_darwin.go`, AVFoundation, the module's one cgo file of its
+own; a stub elsewhere) and `OpenPrivacySettings` opens Privacy &
+Security; the standing goes to the page as the `media` event, before the
+connector's first line and on every change (`permissions.go`). Its
+standard error is the log, `desktop.log` under the state
 directory (Help, "Show the log"). Quitting sends `quit` and waits a bounded
 few seconds; while a session has the camera or the unit armed, the person
 is asked first. When the connector has installed an update it ends with
@@ -61,7 +68,11 @@ runs the window around a connector with those flags.
 
 `wails3 task common:update:build-assets` regenerates the platform assets
 under `build/` from `build/config.yml`; it also recreates `build/ios/`,
-which is removed again (the shell is desktop only). On Windows the
+which is removed again (the shell is desktop only), and it drops the
+`NSCameraUsageDescription` and `NSMicrophoneUsageDescription` strings
+from `build/darwin/Info.plist` and `Info.dev.plist`, which are put back:
+macOS ends a process that asks for the camera without them, and a local
+build asks (`permissions_darwin.go`). On Windows the
 resources linked into the program (the icon, the strings Explorer shows,
 the manifest) are the committed `rsrc_windows_amd64.syso`, made by
 `packaging/windows/make-syso.sh` from `winres.json` here; `wails3 task

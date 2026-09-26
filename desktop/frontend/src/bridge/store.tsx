@@ -6,7 +6,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type Dispatch, type ReactNode, type RefObject } from 'react';
 
-import { CODE_TTL_MS, type Bridge, type CameraStats, type ConnectorEvent, type Descriptor, type Device, type EnclaveProof, type FaceCamera, type Hello, type LinkState, type Share, type Substitution, type Unit, type UpdateState } from './types';
+import { CODE_TTL_MS, type Bridge, type CameraStats, type ConnectorEvent, type Descriptor, type Device, type EnclaveProof, type FaceCamera, type Hello, type LinkState, type MediaPermission, type Share, type Substitution, type Unit, type UpdateState } from './types';
 
 export type Platform = 'darwin' | 'windows' | 'linux';
 
@@ -68,6 +68,8 @@ export interface AppState {
     unitsScanning: boolean;
     unit: Descriptor | null;
     bluetooth: 'ok' | 'permission' | 'off';
+    /** The system's standing on the camera and the microphone, the shell's word (macOS's); null until it has spoken. */
+    media: { camera: MediaPermission; mic: MediaPermission } | null;
     update: { state: UpdateState; tag?: string; text: string };
     notices: Notice[];
     blocked: { kind: 'already-running' | 'connector-stopped' | 'state-dir-unwritable'; detail?: string } | null;
@@ -79,6 +81,8 @@ export interface AppState {
     /** The first run is done: home is the base, and the steps are reached from it to change a choice. */
     setupDone: boolean;
     aboutOpen: boolean;
+    /** The system has been asked for the camera and the microphone once in this run of the page (ui/MediaAccess.tsx); the Allow button asks again. */
+    mediaAsked: boolean;
 }
 
 export const initialState: AppState = {
@@ -98,6 +102,7 @@ export const initialState: AppState = {
     unitsScanning: false,
     unit: null,
     bluetooth: 'ok',
+    media: null,
     update: { state: 'current', text: '' },
     notices: [],
     blocked: null,
@@ -105,6 +110,7 @@ export const initialState: AppState = {
     cameraTab: 'behind',
     setupDone: false,
     aboutOpen: false,
+    mediaAsked: false,
 };
 
 export type Action =
@@ -115,6 +121,7 @@ export type Action =
     | { type: 'ui/notice'; level: Notice['level']; text: string }
     | { type: 'ui/dismiss'; id: number }
     | { type: 'ui/shell'; shell: AppState['shell'] }
+    | { type: 'ui/media-asked' }
     | { type: 'ui/reset'; state: AppState };
 
 let noticeSeq = 1;
@@ -149,6 +156,8 @@ export function reducer(state: AppState, action: Action): AppState {
             return { ...state, notices: state.notices.filter((n) => n.id !== action.id) };
         case 'ui/shell':
             return { ...state, shell: action.shell };
+        case 'ui/media-asked':
+            return { ...state, mediaAsked: true };
         case 'event':
             return applyEvent(state, action.event);
     }
@@ -201,6 +210,8 @@ function applyEvent(state: AppState, ev: ConnectorEvent): AppState {
             return { ...state, unit: ev.descriptor };
         case 'bluetooth':
             return { ...state, bluetooth: ev.state };
+        case 'media':
+            return { ...state, media: { camera: ev.camera, mic: ev.mic } };
         case 'update': {
             // The state lives in the application menu; a change worth a
             // word (downloaded, installing, refused) is said once as well.

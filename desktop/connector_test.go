@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -182,6 +184,54 @@ func TestServiceReportsAConnectorThatStopped(t *testing.T) {
 	}
 	if !s.shouldQuit() {
 		t.Fatal("quit refused with no session")
+	}
+}
+
+func TestMediaStanding(t *testing.T) {
+	// The words are AVAuthorizationStatus's by value; anything else reads
+	// as not determined, the standing that is harmless to ask about.
+	for status, want := range map[int]string{0: mediaNotDetermined, 1: mediaRestricted, 2: mediaDenied, 3: mediaAuthorized, 7: mediaNotDetermined} {
+		if got := mediaWord(status); got != want {
+			t.Errorf("mediaWord(%d) = %q, want %q", status, got, want)
+		}
+	}
+	// Whatever this system says of the test binary, it says it in those
+	// words (a Mac answers for the process responsible for the test; the
+	// other systems always say authorized).
+	words := map[string]bool{mediaNotDetermined: true, mediaRestricted: true, mediaDenied: true, mediaAuthorized: true}
+	camera, mic := mediaAuthStatus()
+	if !words[camera] || !words[mic] {
+		t.Fatalf("mediaAuthStatus() = %q, %q", camera, mic)
+	}
+	if mediaWatched != (runtime.GOOS == "darwin") {
+		t.Fatalf("mediaWatched %v on %s", mediaWatched, runtime.GOOS)
+	}
+	// The first word always goes to the page and into the snapshot, the
+	// same word again does not, a change does; the snapshot keeps the last.
+	s := newConnectorService()
+	s.log = slog.New(slog.DiscardHandler)
+	if !s.reportMedia(mediaNotDetermined, mediaNotDetermined) {
+		t.Fatal("the first word did not go")
+	}
+	if s.reportMedia(mediaNotDetermined, mediaNotDetermined) {
+		t.Fatal("the same word went twice")
+	}
+	if !s.reportMedia(mediaAuthorized, mediaDenied) {
+		t.Fatal("a change did not go")
+	}
+	snap := s.Snapshot()
+	if len(snap) != 1 || snap[0]["type"] != "media" || snap[0]["camera"] != mediaAuthorized || snap[0]["mic"] != mediaDenied {
+		t.Fatalf("snapshot %v", snap)
+	}
+	// The watcher ends with its context (the application's, at shutdown).
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); s.watchMedia(ctx) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watcher outlived its context")
 	}
 }
 

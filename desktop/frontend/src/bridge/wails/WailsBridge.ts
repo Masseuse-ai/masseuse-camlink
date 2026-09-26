@@ -50,6 +50,10 @@ export class WailsBridge implements Bridge {
                 return ConnectorService.SelectUnit(command.id);
             case 'update_now':
                 return ConnectorService.UpdateNow();
+            case 'request_media_access':
+                // The shell's own, not the connector's: the system's prompts
+                // for the camera and the microphone; the answer is a media event.
+                return ConnectorService.RequestMediaAccess();
             case 'quit':
                 return ConnectorService.Quit();
         }

@@ -144,6 +144,17 @@ export async function showLog(): Promise<void> {
     if (inWails()) await ConnectorService.ShowLog();
 }
 
+/**
+ * Opens the system's settings where the camera and the microphone are
+ * allowed to Masseuse.ai: on a Mac, System Settings › Privacy & Security,
+ * on the Camera pane while the camera is not allowed, else the Microphone
+ * pane. Nothing in a browser. (The ask itself goes through the bridge,
+ * `request_media_access`, so the mock can answer it.)
+ */
+export async function openPrivacySettings(): Promise<void> {
+    if (inWails()) await ConnectorService.OpenPrivacySettings();
+}
+
 export type MenuAction = 'about' | 'check-updates';
 
 /** Listens for the native menu's requests (main.go emits them as "menu" events). */

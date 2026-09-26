@@ -3,7 +3,7 @@
 // The scenario panel (src/dev) lists them; `?scenario=<id>` opens one.
 
 import type { AppState, Platform, Step } from '../store';
-import { CODE_TTL_MS, type ConnectorEvent, type Descriptor, type Device, type Unit } from '../types';
+import { CODE_TTL_MS, type ConnectorEvent, type Descriptor, type Device, type MediaPermission, type Unit } from '../types';
 import { CODE, cameras, descriptorFor, disconnected, enclave, expiresIn, faceThrough, hello, mics, shareArriving, shareListening, shareOffered, stateDirs, units } from './fixtures';
 
 export interface Timed {
@@ -65,6 +65,9 @@ function device(descriptor: Descriptor): ConnectorEvent {
 
 /** A code with `minutes` of its ten-minute life left (the service's CODE_TTL_MS). */
 const code = (minutes: number, value = CODE): ConnectorEvent => ({ type: 'code', code: value, expiresAt: expiresIn(minutes), ttlMs: CODE_TTL_MS });
+
+/** The shell's word on the camera and the microphone (macOS); the real shell says it before the connector's hello, so it goes first. */
+const media = (camera: MediaPermission, mic: MediaPermission = camera): Timed => ({ at: 0, event: { type: 'media', camera, mic } });
 
 /** The connector's first moments: hello, the service answering, the devices, the camera chosen, the units seen. */
 function opening(over: { phones?: number; platform?: Platform; cams?: Device[]; mics?: Device[]; src?: ConnectorEvent; units?: Unit[]; unit?: Descriptor | null; updates?: 'on' | 'off'; updatesNote?: string } = {}): Timed[] {
@@ -215,6 +218,32 @@ export const scenarios: Scenario[] = [
             phones: 1,
             src: { type: 'source', kind: 'camera', label: 'rtsps://192.168.1.20:322/live', ready: true, shape: 'h264 video, aac audio', url: 'rtsps://camera:••••••••@192.168.1.20:322/live', share: shareOffered, face: null },
         }),
+    },
+    {
+        id: 'camera-permission-ask',
+        group: 'Cameras and microphone',
+        title: 'macOS asks for the camera and microphone',
+        note: 'Not answered yet: the window asks as the screen opens and says so while the two prompts are up; this mock’s person allows both after five seconds, and the card goes.',
+        step: 'camera',
+        script: [media('notDetermined'), ...opening({ phones: 1 })],
+    },
+    {
+        id: 'camera-permission-denied',
+        group: 'Cameras and microphone',
+        title: 'macOS is blocking the camera and microphone',
+        note: 'Refused at the prompt, or switched off in System Settings since: the card points at Privacy & Security and opens it; asking brings no prompt.',
+        step: 'camera',
+        setupDone: true,
+        script: [media('denied'), ...opening({ phones: 1 })],
+    },
+    {
+        id: 'camera-permission-mic-denied',
+        group: 'Cameras and microphone',
+        title: 'macOS is blocking the microphone only',
+        note: 'The camera allowed, the microphone refused: the card names the one that is blocked.',
+        step: 'camera',
+        setupDone: true,
+        script: [media('authorized', 'denied'), ...opening({ phones: 1 })],
     },
 
     // Your face
@@ -437,6 +466,37 @@ export const scenarios: Scenario[] = [
                 },
             },
             { at: 4600, event: { type: 'notice', level: 'warn', text: 'Camera on but not sending yet: the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it.' } },
+        ],
+    },
+    {
+        id: 'home-permission-ask',
+        group: 'Ready',
+        title: 'Ready on a paired computer, macOS not yet asked',
+        note: 'A computer paired on an earlier run skips the steps, so the window asks here; this mock’s person allows both after five seconds.',
+        step: 'home',
+        setupDone: true,
+        script: [media('notDetermined'), ...opening({ phones: 1 })],
+    },
+    {
+        id: 'home-permission-denied',
+        group: 'Ready',
+        title: 'Session active, macOS is blocking the camera',
+        note: 'The shell knows the camera is refused, so its definite card stands where the connector’s guess (home-no-picture) would; the chip still says no picture.',
+        step: 'home',
+        setupDone: true,
+        script: [
+            media('denied'),
+            ...opening({ phones: 1 }),
+            { at: 1800, event: { type: 'link', state: 'active', enclave } },
+            { at: 2000, event: { type: 'camera', on: true } },
+            {
+                at: 3000,
+                event: {
+                    type: 'camera',
+                    on: true,
+                    stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0, reason: 'the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it' },
+                },
+            },
         ],
     },
     {

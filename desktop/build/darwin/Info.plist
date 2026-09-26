@@ -22,9 +22,17 @@
 		<string>0.1.0</string>
 		<key>LSMinimumSystemVersion</key>
 		<string>12.0.0</string>
+		<!-- The shell asks for the camera and the microphone itself
+		     (permissions_darwin.go); macOS ends a process that asks without
+		     these strings. The same words as the shipped bundle's
+		     (packaging/macos/Info.plist). -->
+		<key>NSCameraUsageDescription</key>
+		<string>Masseuse.ai sends this camera's picture to your masseuse during a session.</string>
 		<key>NSHighResolutionCapable</key>
 		<string>true</string>
 		<key>NSHumanReadableCopyright</key>
 		<string>Copyright 2026 FemLed. Apache License 2.0.</string>
+		<key>NSMicrophoneUsageDescription</key>
+		<string>Masseuse.ai sends this microphone's sound to your masseuse during a session.</string>
 	</dict>
 </plist>

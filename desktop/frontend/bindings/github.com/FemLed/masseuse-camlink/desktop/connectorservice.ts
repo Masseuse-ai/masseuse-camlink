@@ -5,7 +5,9 @@
  * ConnectorService is the window's side of the link to masseuse-camlink.
  * Its exported methods are what the page can ask for; Wails generates the
  * TypeScript for them (frontend/bindings). What the connector reports comes
- * the other way, as "connector" events the page listens to.
+ * the other way, as "connector" events the page listens to; the shell's
+ * own words go the same way (the connector stopped, "blocked"; the
+ * system's standing on the camera and the microphone, "media").
  * 
  * The service starts the connector as a child on ServiceStartup
  * (cmd/masseuse-camlink -ipc, docs/DESKTOP.md section 3), relays the JSON
@@ -49,11 +51,36 @@ export function OpenLink(name: string): $CancellablePromise<void> {
 }
 
 /**
+ * OpenPrivacySettings opens the system's settings where the camera and the
+ * microphone are allowed to this application: on a Mac, System Settings ›
+ * Privacy & Security, on the Camera pane while the camera is not allowed
+ * and on the Microphone pane otherwise. Nothing elsewhere.
+ */
+export function OpenPrivacySettings(): $CancellablePromise<void> {
+    return $Call.ByID(3539469259);
+}
+
+/**
  * Quit ends the program: the camera goes off and the unit is released on
  * the way out, as with the window's close button.
  */
 export function Quit(): $CancellablePromise<void> {
     return $Call.ByID(3866359469);
+}
+
+/**
+ * RequestMediaAccess asks the system for the camera and the microphone:
+ * on a Mac the two prompts in turn, while the standing is not determined
+ * (a refusal is answered at once, without a prompt; System Settings is the
+ * way back, OpenPrivacySettings). It returns at once, and the answer is a
+ * "media" event once both are answered. One ask runs at a time: asked
+ * again while the prompts are up, nothing more happens, the answer to the
+ * first covers it. The page asks when the Cameras screen opens (or Ready,
+ * on a computer paired before) and on its Allow button; elsewhere than a
+ * Mac there is nothing to ask and the standing is authorized.
+ */
+export function RequestMediaAccess(): $CancellablePromise<void> {
+    return $Call.ByID(328903251);
 }
 
 /**

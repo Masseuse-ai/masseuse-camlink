@@ -7,9 +7,12 @@
 // like) is a choice like any other, with a word about where its picture
 // comes from. The picture itself (size, rate, bit rate, encoder) is the
 // connector's and the enclave's to manage between them; the window offers
-// no say in it. On the grid (ui/Page.tsx): the two views as the screen's
-// control beside the title, the two lists on six columns each, the way on
-// in the footer with, in the first run, a word on what it waits for.
+// no say in it. On a Mac, opening this screen is when the system is asked
+// whether Masseuse.ai may use the camera and the microphone (ui/MediaAccess),
+// so the question comes while the person is here choosing them and not at
+// the first session. On the grid (ui/Page.tsx): the two views as the
+// screen's control beside the title, the two lists on six columns each, the
+// way on in the footer with, in the first run, a word on what it waits for.
 
 import { Camera as CameraIcon, ChevronRight, HouseWifi, Layers, Lock, Mic, Smartphone, TriangleAlert, Video } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -28,6 +31,7 @@ import { faceViewOf, useAppState, useBridge, useDeviceListing, useDispatch, type
 import type { SourceChoice } from '../bridge/types';
 import { CHOICE_ROW, CHOICE_ROW_DISABLED, Card, CardLabel, ROW, Well } from '../ui/Card';
 import { DeviceCard, MissingDeviceCard, NoMicCard, isVirtualCamera, natureOf } from '../ui/DeviceCard';
+import { MediaAccessAlert, useMediaAsk } from '../ui/MediaAccess';
 import { Page } from '../ui/Page';
 import { FaceView } from './FaceView';
 
@@ -65,6 +69,9 @@ export function Camera() {
     // the screen says it is looking rather than that there is nothing.
     useDeviceListing(true);
     const looking = devices === null && !devicesError;
+    // On a Mac, the system's question about the camera and the microphone,
+    // asked as this screen opens if it has not been answered yet.
+    useMediaAsk();
 
     // Behind you.
     const [cam, setCam] = useState<string | null>(source?.kind === 'camera' ? NETWORK : (source?.camera ?? null));
@@ -203,6 +210,7 @@ export function Camera() {
                 <div className="col-span-12 flex min-h-0 flex-col">
                     {/* Notices over the lists, on the full width; nothing without one. */}
                     <div className="mb-4 flex flex-col gap-3 empty:hidden">
+                        <MediaAccessAlert />
                         {locked ? (
                             <Alert variant="neutral">
                                 <Lock />

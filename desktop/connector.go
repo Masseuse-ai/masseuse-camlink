@@ -25,7 +25,9 @@ import (
 // ConnectorService is the window's side of the link to masseuse-camlink.
 // Its exported methods are what the page can ask for; Wails generates the
 // TypeScript for them (frontend/bindings). What the connector reports comes
-// the other way, as "connector" events the page listens to.
+// the other way, as "connector" events the page listens to; the shell's
+// own words go the same way (the connector stopped, "blocked"; the
+// system's standing on the camera and the microphone, "media").
 //
 // The service starts the connector as a child on ServiceStartup
 // (cmd/masseuse-camlink -ipc, docs/DESKTOP.md section 3), relays the JSON
@@ -62,6 +64,9 @@ type ConnectorService struct {
 	// relaunch is set when the connector ended with the relaunch code:
 	// main starts the program again once the window has closed.
 	relaunch atomic.Bool
+	// mediaAsking is set while the system's prompts for the camera and
+	// the microphone are up (RequestMediaAccess): one ask at a time.
+	mediaAsking atomic.Bool
 	// logFile is where the connector's standard error goes.
 	logFile *logFile
 	// args are what the connector is started with after the fixed flags:
@@ -82,8 +87,9 @@ func newConnectorService() *ConnectorService {
 const connectorEvent = "connector"
 
 // snapshotKinds are the events kept for a page that mounts late, in the
-// order they are replayed.
-var snapshotKinds = []string{"hello", "update", "source", "online", "code", "paired", "link", "camera", "face", "units", "device", "blocked"}
+// order they are replayed. "media" is the shell's own (permissions.go),
+// said before the connector's first line.
+var snapshotKinds = []string{"media", "hello", "update", "source", "online", "code", "paired", "link", "camera", "face", "units", "device", "blocked"}
 
 func init() {
 	application.RegisterEvent[map[string]any](connectorEvent)
@@ -147,6 +153,13 @@ func (s *ConnectorService) ServiceStartup(ctx context.Context, _ application.Ser
 	log.SetOutput(out)
 	s.log.Info("shell: starting", "version", shellVersion(), "os", runtime.GOOS, "stateDir", s.stateDir)
 	s.start()
+	// The system's standing on the camera and the microphone, the shell's
+	// own word, kept in the snapshot for the page and current while the
+	// program runs (permissions.go, watchMedia).
+	s.reportMedia(mediaAuthStatus())
+	if mediaWatched {
+		go s.watchMedia(ctx)
+	}
 	return nil
 }
 
@@ -388,6 +401,69 @@ func (s *ConnectorService) Restart() error {
 	}
 	s.start()
 	return nil
+}
+
+// RequestMediaAccess asks the system for the camera and the microphone:
+// on a Mac the two prompts in turn, while the standing is not determined
+// (a refusal is answered at once, without a prompt; System Settings is the
+// way back, OpenPrivacySettings). It returns at once, and the answer is a
+// "media" event once both are answered. One ask runs at a time: asked
+// again while the prompts are up, nothing more happens, the answer to the
+// first covers it. The page asks when the Cameras screen opens (or Ready,
+// on a computer paired before) and on its Allow button; elsewhere than a
+// Mac there is nothing to ask and the standing is authorized.
+func (s *ConnectorService) RequestMediaAccess() error {
+	if !s.mediaAsking.CompareAndSwap(false, true) {
+		return nil
+	}
+	go func() {
+		defer s.mediaAsking.Store(false)
+		s.reportMedia(requestMediaAccess())
+	}()
+	return nil
+}
+
+// OpenPrivacySettings opens the system's settings where the camera and the
+// microphone are allowed to this application: on a Mac, System Settings ›
+// Privacy & Security, on the Camera pane while the camera is not allowed
+// and on the Microphone pane otherwise. Nothing elsewhere.
+func (s *ConnectorService) OpenPrivacySettings() error {
+	return openPrivacySettings(mediaAuthStatus())
+}
+
+// reportMedia says the standing on the camera and the microphone to the
+// page when it differs from what was last said; the first word always
+// goes. Returns whether a word went.
+func (s *ConnectorService) reportMedia(camera, mic string) bool {
+	s.mu.Lock()
+	last, said := s.last["media"]
+	s.mu.Unlock()
+	if said && last["camera"] == camera && last["mic"] == mic {
+		return false
+	}
+	s.log.Info("shell: camera and microphone access", "camera", camera, "mic", mic)
+	s.report(mediaEvent(camera, mic))
+	return true
+}
+
+// mediaWatchInterval is how often watchMedia reads the standing.
+const mediaWatchInterval = 3 * time.Second
+
+// watchMedia keeps reading the standing while the program runs, so a
+// switch made in System Settings shows in the window within seconds and
+// without a restart. Each read is one cheap question to the system; only
+// a change is said.
+func (s *ConnectorService) watchMedia(ctx context.Context) {
+	t := time.NewTicker(mediaWatchInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.reportMedia(mediaAuthStatus())
+		}
+	}
 }
 
 // Quit ends the program: the camera goes off and the unit is released on

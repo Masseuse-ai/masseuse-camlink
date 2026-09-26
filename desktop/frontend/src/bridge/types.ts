@@ -139,7 +139,18 @@ export interface CameraStats {
 
 export type UpdateState = 'current' | 'checking' | 'staged' | 'installing' | 'failed' | 'off';
 
-/** Everything the connector tells the window. */
+/**
+ * The system's standing on this computer's camera or microphone for
+ * Masseuse.ai: macOS's AVAuthorizationStatus in words (desktop/permissions.go).
+ * `notDetermined` has not been asked yet and asking brings the prompt;
+ * `denied` was refused at the prompt or switched off in System Settings
+ * since, and asking brings nothing (Privacy & Security is the way back);
+ * `restricted` is a profile's or parental controls' and cannot be changed
+ * here. Windows and Linux always say `authorized`.
+ */
+export type MediaPermission = 'notDetermined' | 'restricted' | 'denied' | 'authorized';
+
+/** Everything the connector tells the window, and the shell's own words in the same stream (`media`, `blocked connector-stopped`). */
 export type ConnectorEvent =
     | { type: 'hello'; hello: Hello }
     | { type: 'online'; online: boolean }
@@ -187,16 +198,24 @@ export type ConnectorEvent =
     | { type: 'units'; units: Unit[]; scanning: boolean }
     | { type: 'device'; descriptor: Descriptor }
     | { type: 'bluetooth'; state: 'ok' | 'permission' | 'off' }
+    | {
+          /** The shell's word on the camera and the microphone (desktop/connector.go, reportMedia): first before the connector's hello, then whenever the standing changes, a prompt answered or a switch in System Settings. */
+          type: 'media';
+          camera: MediaPermission;
+          mic: MediaPermission;
+      }
     | { type: 'update'; state: UpdateState; tag?: string; text: string }
     | { type: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
     | { type: 'blocked'; kind: 'already-running' | 'connector-stopped' | 'state-dir-unwritable'; detail?: string };
 
-/** Everything the window asks of the connector. */
+/** Everything the window asks of the connector, and of the shell in the same breath (`request_media_access`, `quit`). */
 export type ConnectorCommand =
     | { type: 'list_devices' }
     | { type: 'set_source'; choice: SourceChoice }
     | { type: 'select_unit'; id: string }
     | { type: 'update_now' }
+    /** The shell's: ask the system for the camera and the microphone (macOS's prompts); the answer is a `media` event. */
+    | { type: 'request_media_access' }
     | { type: 'quit' };
 
 /** The link to the connector, whichever end is behind it. */
