@@ -41,18 +41,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/attest"
-	"github.com/FemLed/masseuse-camlink/internal/payload"
-	"github.com/FemLed/masseuse-camlink/internal/provenance"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/attest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/provenance"
 )
 
 // Defaults for this repository's releases.
 const (
 	// DefaultReleasesURL is where the release assets live; "latest/download/"
 	// and "download/<tag>/" hang off it.
-	DefaultReleasesURL = "https://github.com/FemLed/masseuse-camlink/releases"
+	DefaultReleasesURL = "https://github.com/Masseuse-ai/masseuse-camlink/releases"
 	// SourceURI is the repository whose release workflow signs the releases.
-	SourceURI = "github.com/FemLed/masseuse-camlink"
+	SourceURI = "github.com/Masseuse-ai/masseuse-camlink"
 	// MaxArtifactSize bounds one download (the DMG is the largest, tens of MB).
 	MaxArtifactSize = 512 << 20
 	// SpaceMargin is free space kept beyond what the update itself needs.
@@ -243,6 +243,10 @@ type Staged struct {
 type Client struct {
 	// ReleasesURL is DefaultReleasesURL, or a stand-in in tests.
 	ReleasesURL string
+	// Source is the repository whose release workflow signed what
+	// ReleasesURL serves: SourceURI, or, in tests over releases recorded
+	// from the project's previous home, that home.
+	Source string
 	// HTTP is the client used; nil means a default with sane timeouts.
 	HTTP *http.Client
 	// Verifier checks the Sigstore bundles: a provenance.Verifier whose
@@ -259,6 +263,13 @@ type Client struct {
 	// means the platform's own.
 	FreeSpace func(path string) (uint64, error)
 	Logger    *slog.Logger
+}
+
+func (c *Client) source() string {
+	if c.Source != "" {
+		return c.Source
+	}
+	return SourceURI
 }
 
 func (c *Client) releasesURL() string {
@@ -366,7 +377,7 @@ func (c *Client) Check(ctx context.Context) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("update: fetching the latest release's signature: %w", err)
 	}
-	sig, err := c.verifier().VerifyBlob(ctx, checksums, bundle, provenance.BlobSigner{SourceURI: SourceURI})
+	sig, err := c.verifier().VerifyBlob(ctx, checksums, bundle, provenance.BlobSigner{SourceURI: c.source()})
 	if err != nil {
 		return nil, fmt.Errorf("update: the latest release's checksums do not verify: %w", err)
 	}
@@ -388,7 +399,7 @@ func (c *Client) Check(ctx context.Context) (*Release, error) {
 // artifact. Only then is the file given its name.
 func (c *Client) Download(ctx context.Context, rel *Release) (*Staged, error) {
 	name, checksumsName, provName := c.Install.Artifact(rel.Tag)
-	signer := provenance.BlobSigner{SourceURI: SourceURI, Tag: rel.Tag}
+	signer := provenance.BlobSigner{SourceURI: c.source(), Tag: rel.Tag}
 	checksums := rel.Checksums
 	if checksumsName != "checksums.txt" {
 		list, err := c.fetch(ctx, c.tagURL(rel.Tag, checksumsName), 1<<20)

@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/identity"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/identity"
 )
 
 // Dial is the service's instruction to open a tunnel.

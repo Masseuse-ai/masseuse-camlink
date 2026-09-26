@@ -3,8 +3,8 @@ package estim_test
 import (
 	"testing"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago"
 )
 
 func TestKindsAreKnownAndStable(t *testing.T) {

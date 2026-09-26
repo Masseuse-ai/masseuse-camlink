@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
 // How long the Host gives a helper to answer `hello` after starting it.

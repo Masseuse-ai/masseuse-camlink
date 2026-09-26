@@ -5,7 +5,7 @@ import (
 	"debug/pe"
 	"testing"
 
-	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig/petest"
 )
 
 // The synthetic image is a PE the standard library agrees about, so what

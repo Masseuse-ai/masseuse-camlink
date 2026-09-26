@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
-	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig/petest"
 )
 
 // packageExe writes a Windows package to dir: a synthetic connector with

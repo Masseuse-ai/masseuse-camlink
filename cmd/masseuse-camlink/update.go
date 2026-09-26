@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/attest"
-	"github.com/FemLed/masseuse-camlink/internal/buildinfo"
-	"github.com/FemLed/masseuse-camlink/internal/update"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/attest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/buildinfo"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/update"
 )
 
 // The program keeps itself current (internal/update, README "Updates"): a

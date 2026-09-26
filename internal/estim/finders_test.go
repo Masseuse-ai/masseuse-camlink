@@ -8,7 +8,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
 // stubFinder answers Find with a fixed result and Describe with its name.

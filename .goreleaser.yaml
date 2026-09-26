@@ -5,11 +5,11 @@
 #
 #   - the connector archives (darwin and windows, amd64 and arm64): goreleaser
 #     builds them in proxy mode (a scratch module named after the build id
-#     requiring github.com/FemLed/masseuse-camlink at the tag), so the binary
+#     requiring github.com/Masseuse-ai/masseuse-camlink at the tag), so the binary
 #     embeds this module's version and sum.golang.org hash;
 #   - the raw gateway binaries: produced by the release workflow with the one
 #     command the enclave image and anyone else can repeat,
-#     `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@vX.Y.Z`,
+#     `go install github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink-gateway@vX.Y.Z`,
 #     and handed to goreleaser as extra files so they are listed in
 #     checksums.txt, signed and covered by the provenance like everything
 #     else. (A goreleaser proxy build embeds a different main module and
@@ -135,7 +135,7 @@ signs:
 
 release:
   github:
-    owner: FemLed
+    owner: Masseuse-ai
     name: masseuse-camlink
   prerelease: auto
   extra_files:

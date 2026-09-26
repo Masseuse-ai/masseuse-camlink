@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"

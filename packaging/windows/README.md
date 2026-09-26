@@ -108,7 +108,7 @@ subscription; billing starts with the account), an organization identity
 validation for Principled Labs, Inc. (the certificate carries the
 validated legal name and address), a Public Trust certificate profile, an
 app registration with a **federated credential** for GitHub Actions whose
-subject is `repo:FemLed/masseuse-camlink:environment:release` (the
+subject is `repo:Masseuse-ai/masseuse-camlink:environment:release` (the
 `windows-app` job runs in the `release` environment for exactly this; the
 environment needs no protection rules), and that application given the
 role *Artifact Signing Certificate Profile Signer* on the account. Without

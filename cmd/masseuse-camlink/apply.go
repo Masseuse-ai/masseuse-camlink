@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/share"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/share"
 )
 
 // The sources at run time. At startup main.go builds the offers from the

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/FemLed/masseuse-camlink/internal/pesig"
-	"github.com/FemLed/masseuse-camlink/internal/pesig/petest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig/petest"
 )
 
 var entries = []Entry{

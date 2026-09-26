@@ -7,7 +7,7 @@
 
 import { Events } from '@wailsio/runtime';
 
-import { ConnectorService } from '../../../bindings/github.com/FemLed/masseuse-camlink/desktop';
+import { ConnectorService } from '../../../bindings/github.com/Masseuse-ai/masseuse-camlink/desktop';
 import type { Bridge, ConnectorCommand, ConnectorEvent } from '../types';
 
 export class WailsBridge implements Bridge {

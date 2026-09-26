@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
 )
 
 type fakeReshaper struct{ rates []string }

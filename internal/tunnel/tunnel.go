@@ -22,10 +22,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/FemLed/masseuse-camlink/internal/attest"
-	"github.com/FemLed/masseuse-camlink/internal/frame"
-	"github.com/FemLed/masseuse-camlink/internal/identity"
-	"github.com/FemLed/masseuse-camlink/internal/mux"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/attest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/frame"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/identity"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/mux"
 )
 
 // Subprotocol is the WebSocket subprotocol both ends require.

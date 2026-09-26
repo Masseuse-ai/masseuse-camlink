@@ -11,9 +11,9 @@ import (
 
 func TestParseRepository(t *testing.T) {
 	good := map[string]Repository{
-		"ghcr.io/femled/masseuse-video-tee": {Host: "ghcr.io", Path: "femled/masseuse-video-tee"},
-		"localhost:5000/x":                  {Host: "localhost:5000", Path: "x"},
-		"us-central1-docker.pkg.dev/p/r/i":  {Host: "us-central1-docker.pkg.dev", Path: "p/r/i"},
+		"ghcr.io/masseuse-ai/masseuse-video-tee": {Host: "ghcr.io", Path: "masseuse-ai/masseuse-video-tee"},
+		"localhost:5000/x":                       {Host: "localhost:5000", Path: "x"},
+		"us-central1-docker.pkg.dev/p/r/i":       {Host: "us-central1-docker.pkg.dev", Path: "p/r/i"},
 	}
 	for in, want := range good {
 		got, err := ParseRepository(in)

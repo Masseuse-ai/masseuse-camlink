@@ -46,7 +46,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/FemLed/masseuse-camlink/internal/pesig"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/pesig"
 )
 
 const (

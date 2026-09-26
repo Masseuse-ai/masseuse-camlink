@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/attest"
-	"github.com/FemLed/masseuse-camlink/internal/gateway"
-	"github.com/FemLed/masseuse-camlink/internal/identity"
-	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
-	"github.com/FemLed/masseuse-camlink/internal/serve"
-	"github.com/FemLed/masseuse-camlink/internal/tunnel"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/attest"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/gateway"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/identity"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/rendezvous"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/tunnel"
 )
 
 // pinAttester stands in for Confidential Space: the gateway's own key is

@@ -7,7 +7,7 @@ package buildinfo
 import "runtime/debug"
 
 // ModulePath is this module's path.
-const ModulePath = "github.com/FemLed/masseuse-camlink"
+const ModulePath = "github.com/Masseuse-ai/masseuse-camlink"
 
 // Version is the version of this module in the running binary: the main
 // module's version for `go install ...@vX.Y.Z`; this module's version as a

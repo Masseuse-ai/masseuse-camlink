@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/provenance"
-	"github.com/FemLed/masseuse-camlink/internal/update"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/provenance"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/update"
 )
 
 // acceptAll stands in for the Sigstore checks (tested in internal/provenance

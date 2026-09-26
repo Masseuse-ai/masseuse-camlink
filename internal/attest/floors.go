@@ -62,14 +62,19 @@ type Floors struct {
 // launcher reports in image_signatures[].key_id (masseuse-video-tee,
 // VERIFY.md).
 var Production = Floors{
-	Issuer:               DefaultIssuer,
-	JWKSURL:              DefaultJWKSURL,
-	SWName:               DefaultSWName,
-	HWModel:              DefaultHWModel,
-	ImageSignatures:      []string{"cfb085b950e93abb8332cede62fa50df662ef9aebb1533b2ae0bf1403ea4f811"},
-	MinRelease:           "v0.4.0",
-	RequireStable:        true,
-	RequireGpuCc:         true,
+	Issuer:          DefaultIssuer,
+	JWKSURL:         DefaultJWKSURL,
+	SWName:          DefaultSWName,
+	HWModel:         DefaultHWModel,
+	ImageSignatures: []string{"cfb085b950e93abb8332cede62fa50df662ef9aebb1533b2ae0bf1403ea4f811"},
+	MinRelease:      "v0.4.0",
+	RequireStable:   true,
+	RequireGpuCc:    true,
+	// Where the enclave image that runs today was built and published: the
+	// enclave's source moved to github.com/Masseuse-ai/masseuse-video-tee, and
+	// these two values follow the first image released from there, together
+	// with the policy the service publishes; until then they name the image
+	// that is attested, not the repository that holds its code.
 	SourceURI:            "github.com/FemLed/masseuse-video-tee",
 	ImageRepo:            "ghcr.io/femled/masseuse-video-tee",
 	TeeSlotHostSuffixes:  []string{".tee.masseuse.ai"},

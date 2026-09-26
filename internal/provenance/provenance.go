@@ -55,7 +55,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/tuf"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 
-	"github.com/FemLed/masseuse-camlink/internal/oci"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/oci"
 )
 
 // The public Sigstore trust root (Fulcio, Rekor, the CT logs and the
@@ -84,8 +84,8 @@ type Expect struct {
 	Digest    string // sha256:<hex>, the attested image digest
 	Release   string // vX.Y.Z, the attested TEE_IMAGE_VERSION
 	Commit    string // the attested TEE_IMAGE_COMMIT (40 hex), or ""
-	Repo      string // the public registry holding the digest, e.g. ghcr.io/femled/masseuse-video-tee
-	SourceURI string // the repository whose release workflow built it, e.g. github.com/FemLed/masseuse-video-tee
+	Repo      string // the public registry holding the digest, e.g. ghcr.io/masseuse-ai/masseuse-video-tee
+	SourceURI string // the repository whose release workflow built it, e.g. github.com/Masseuse-ai/masseuse-video-tee
 }
 
 var (

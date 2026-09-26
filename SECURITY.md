@@ -3,7 +3,7 @@
 ## Reporting
 
 Report vulnerabilities privately through GitHub's
-[security advisory form](https://github.com/FemLed/masseuse-camlink/security/advisories/new)
+[security advisory form](https://github.com/Masseuse-ai/masseuse-camlink/security/advisories/new)
 for this repository. Do not open a public issue for a vulnerability. Reports
 are acknowledged within three business days.
 

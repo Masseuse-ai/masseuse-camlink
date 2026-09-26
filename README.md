@@ -19,7 +19,7 @@ the stream goes from your computer to the enclave inside TLS.
 On the computer in the room, open [masseuse.ai/app](https://masseuse.ai/app):
 it offers the download for that computer (Mac or Windows), and the app on
 your phone can send it the address. The same files are on the
-[releases page](https://github.com/FemLed/masseuse-camlink/releases).
+[releases page](https://github.com/Masseuse-ai/masseuse-camlink/releases).
 
 The downloads are called **Masseuse.ai**: that is the one name a person
 sees, on the disk image, the window and the permission prompts (the Mac
@@ -83,8 +83,10 @@ unpack anywhere and run `masseuse-camlink`. It needs ffmpeg the same way:
 Without ffmpeg the program still runs and can send a home network camera
 (`-camera-url`).
 
-With Go installed, `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink@latest`
-builds the same code from the module proxy.
+With Go installed, `go install github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink@latest`
+builds the same code from the module proxy (for a release up to v0.24.0,
+use the module path those releases declare: VERIFY.md, "Which identity
+signed a release").
 
 Every release is reproducible and signed; see [VERIFY.md](VERIFY.md). The
 connector in every download is the published binary, byte for byte, and
@@ -538,7 +540,7 @@ video enclave: a Google Cloud Confidential Space VM that decrypts the stream
 inside hardware-isolated memory, runs person detection and keypoint detection
 on the frames, classifies non-speech vocalizations in the audio track when
 there is a microphone, and discards both. The code that runs there is
-public: [FemLed/masseuse-video-tee](https://github.com/FemLed/masseuse-video-tee)
+public: [Masseuse-ai/masseuse-video-tee](https://github.com/Masseuse-ai/masseuse-video-tee)
 holds every line that touches frames or audio, and its `README.md` says what
 leaves the enclave (numbers, never frames or sound).
 
@@ -573,9 +575,9 @@ When the connector dials an enclave it logs three things:
 
 ```
 enclave verified    image=sha256:… signer=cfb085b9… instance=… dbgstat=disabled-since-boot release=vX.Y.Z commit=…
-enclave source      image=sha256:… source=github.com/FemLed/masseuse-video-tee@vX.Y.Z registry=ghcr.io/femled/masseuse-video-tee
-                    verify="slsa-verifier verify-image ghcr.io/femled/masseuse-video-tee@sha256:… --source-uri github.com/FemLed/masseuse-video-tee --source-tag vX.Y.Z"
-enclave provenance  image=sha256:… release=vX.Y.Z commit=… signed_by=https://github.com/FemLed/masseuse-video-tee/.github/workflows/release.yml@refs/tags/vX.Y.Z signature_log_index=… builder=https://github.com/slsa-framework/slsa-github-generator/… provenance_log_index=…
+enclave source      image=sha256:… source=github.com/Masseuse-ai/masseuse-video-tee@vX.Y.Z registry=ghcr.io/masseuse-ai/masseuse-video-tee
+                    verify="slsa-verifier verify-image ghcr.io/masseuse-ai/masseuse-video-tee@sha256:… --source-uri github.com/Masseuse-ai/masseuse-video-tee --source-tag vX.Y.Z"
+enclave provenance  image=sha256:… release=vX.Y.Z commit=… signed_by=https://github.com/Masseuse-ai/masseuse-video-tee/.github/workflows/release.yml@refs/tags/vX.Y.Z signature_log_index=… builder=https://github.com/slsa-framework/slsa-github-generator/… provenance_log_index=…
 ```
 
 The third line is the connector doing, from the public registry and the

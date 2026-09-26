@@ -5,7 +5,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/FemLed/masseuse-camlink/internal/payload"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/payload"
 )
 
 // The Windows package carries ffmpeg.exe, the unit driver helpers and the

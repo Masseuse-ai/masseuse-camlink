@@ -25,7 +25,7 @@
             "FileDescription": "Masseuse.ai for your computer",
             "ProductName": "Masseuse.ai",
             "LegalCopyright": "Copyright 2026 FemLed. Apache License 2.0.",
-            "Comments": "The Masseuse.ai window, around masseuse-camlink, the connector that sends this computer's camera to a masseuse.ai session. Source and releases: github.com/FemLed/masseuse-camlink"
+            "Comments": "The Masseuse.ai window, around masseuse-camlink, the connector that sends this computer's camera to a masseuse.ai session. Source and releases: github.com/Masseuse-ai/masseuse-camlink"
           }
         }
       }

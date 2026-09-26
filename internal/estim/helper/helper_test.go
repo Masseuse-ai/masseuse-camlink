@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/ble"
-	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/estim/helper"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago/fakeunit"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/ble"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/helper"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago/fakeunit"
 )
 
 // TestMain doubles as the helper program for the spawned-process test: run

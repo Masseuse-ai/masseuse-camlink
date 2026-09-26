@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/serve"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
 )
 
 // Rungs are the bit rates the Adapter moves between, as fractions of the

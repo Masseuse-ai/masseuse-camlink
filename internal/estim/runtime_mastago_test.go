@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/ble"
-	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago/fakeunit"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/ble"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago/fakeunit"
 )
 
 // unitRuntime is a Runtime over one fake unit, with the driver's timings

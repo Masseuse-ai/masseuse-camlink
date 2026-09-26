@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mastago/fakeunit"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/mastago/fakeunit"
 )
 
 // The Session's protocol with the service, over a fake Mastago unit

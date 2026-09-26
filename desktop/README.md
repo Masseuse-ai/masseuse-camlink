@@ -9,7 +9,7 @@ helpers. The design, the screens, their states and copy, the event and
 command model between the two, and what is built in which phase are in
 [docs/DESKTOP.md](../docs/DESKTOP.md).
 
-This is a Go module of its own (`github.com/FemLed/masseuse-camlink/desktop`),
+This is a Go module of its own (`github.com/Masseuse-ai/masseuse-camlink/desktop`),
 so the connector's `go.mod` never learns about the window toolkit.
 
 ## How it runs

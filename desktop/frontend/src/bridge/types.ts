@@ -5,7 +5,7 @@
 // mock (./mock) produces them today. `SourceChoice` is the shell's, from
 // the generated bindings, so the two never drift.
 
-import type { SourceChoice } from '../../bindings/github.com/FemLed/masseuse-camlink/desktop';
+import type { SourceChoice } from '../../bindings/github.com/Masseuse-ai/masseuse-camlink/desktop';
 
 export type { SourceChoice };
 
@@ -73,7 +73,7 @@ export interface EnclaveProof {
     image: string;
     release: string;
     commit: string;
-    /** github.com/FemLed/masseuse-video-tee@vX.Y.Z */
+    /** the enclave image's source repository at its release tag, e.g. github.com/<owner>/masseuse-video-tee@vX.Y.Z */
     source: string;
     registry: string;
     signedBy: string;

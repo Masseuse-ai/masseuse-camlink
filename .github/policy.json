@@ -1,0 +1,11 @@
+{
+  "previousHomeAllowed": [
+    "VERIFY.md",
+    "scripts/verify-release.sh",
+    "internal/attest/*",
+    "internal/provenance/*_test.go",
+    "internal/update/*_test.go",
+    "internal/provenance/testdata/**",
+    "desktop/frontend/src/bridge/mock/*"
+  ]
+}

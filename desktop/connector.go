@@ -520,11 +520,11 @@ func (s *ConnectorService) Quit() {
 // the page can only ever open these.
 var links = map[string]string{
 	"learn-more":     "https://masseuse.ai/app",
-	"privacy":        "https://github.com/FemLed/masseuse-camlink#how-it-stays-private",
-	"verify":         "https://github.com/FemLed/masseuse-camlink/blob/main/VERIFY.md",
-	"security":       "https://github.com/FemLed/masseuse-camlink/blob/main/SECURITY.md",
-	"source":         "https://github.com/FemLed/masseuse-camlink",
-	"releases":       "https://github.com/FemLed/masseuse-camlink/releases",
+	"privacy":        "https://github.com/Masseuse-ai/masseuse-camlink#how-it-stays-private",
+	"verify":         "https://github.com/Masseuse-ai/masseuse-camlink/blob/HEAD/VERIFY.md",
+	"security":       "https://github.com/Masseuse-ai/masseuse-camlink/blob/HEAD/SECURITY.md",
+	"source":         "https://github.com/Masseuse-ai/masseuse-camlink",
+	"releases":       "https://github.com/Masseuse-ai/masseuse-camlink/releases",
 	"privacy-policy": "https://masseuse.ai/privacy",
 	"terms":          "https://masseuse.ai/terms",
 }

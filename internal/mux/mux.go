@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/frame"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/frame"
 )
 
 // MaxInbound is the most undelivered bytes a stream may hold before it is

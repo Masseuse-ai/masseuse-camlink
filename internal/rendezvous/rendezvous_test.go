@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/identity"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/identity"
 )
 
 type recorder struct {

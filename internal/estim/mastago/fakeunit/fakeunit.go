@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/ble"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/ble"
 )
 
 // Unit is one simulated unit.

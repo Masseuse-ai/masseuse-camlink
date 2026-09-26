@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FemLed/masseuse-camlink/internal/estim"
+	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
 // What the program tells the person goes through a reporter. The console

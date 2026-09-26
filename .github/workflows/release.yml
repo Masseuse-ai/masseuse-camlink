@@ -36,7 +36,7 @@ jobs:
         # there first; this also warms the proxy for the reproduce job.
         run: |
           for i in $(seq 1 20); do
-            if GOPROXY=https://proxy.golang.org GONOSUMDB= GOFLAGS= go list -m "github.com/FemLed/masseuse-camlink@${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            if GOPROXY=https://proxy.golang.org GONOSUMDB= GOFLAGS= go list -m "github.com/Masseuse-ai/masseuse-camlink@${GITHUB_REF_NAME}" >/dev/null 2>&1; then
               exit 0
             fi
             sleep 15
@@ -57,7 +57,7 @@ jobs:
           mkdir -p gateway-bin
           for arch in amd64 arm64; do
             GOOS=linux GOARCH="$arch" go install -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-              "github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@${GITHUB_REF_NAME}"
+              "github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink-gateway@${GITHUB_REF_NAME}"
             src="$(go env GOPATH)/bin/linux_${arch}/masseuse-camlink-gateway"
             [ -f "$src" ] || src="$(go env GOPATH)/bin/masseuse-camlink-gateway"
             cp "$src" "gateway-bin/masseuse-camlink-gateway_${version}_linux_${arch}"
@@ -144,7 +144,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           for arch in amd64 arm64; do
             GOOS=linux GOARCH="$arch" go install -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-              "github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink-gateway@${GITHUB_REF_NAME}"
+              "github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink-gateway@${GITHUB_REF_NAME}"
             bin="$(go env GOPATH)/bin/linux_${arch}/masseuse-camlink-gateway"
             [ -f "$bin" ] || bin="$(go env GOPATH)/bin/masseuse-camlink-gateway"
             sum=$(sha256sum "$bin" | cut -d' ' -f1)
@@ -165,9 +165,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir connector && cd connector
           printf 'module connector\n' > go.mod
-          go get "github.com/FemLed/masseuse-camlink@${GITHUB_REF_NAME}"
+          go get "github.com/Masseuse-ai/masseuse-camlink@${GITHUB_REF_NAME}"
           GOOS=windows GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-            -o masseuse-camlink.exe github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink
+            -o masseuse-camlink.exe github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink
           sum=$(sha256sum masseuse-camlink.exe | cut -d' ' -f1)
           echo "rebuilt windows/amd64 connector ${sum}"
           cd ..
@@ -192,11 +192,11 @@ jobs:
           cd connector
           for arch in arm64 amd64; do
             GOOS=darwin GOARCH="$arch" go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-              -o "rebuilt_darwin_${arch}" github.com/FemLed/masseuse-camlink/cmd/masseuse-camlink
+              -o "rebuilt_darwin_${arch}" github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink
             gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
               --pattern "masseuse-camlink_${version}_darwin_${arch}.tar.gz" --clobber
             tar -xzOf "masseuse-camlink_${version}_darwin_${arch}.tar.gz" masseuse-camlink > "published_darwin_${arch}"
-            go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@${GITHUB_REF_NAME}" -sha256 \
+            go run "github.com/Masseuse-ai/masseuse-camlink/cmd/machostrip@${GITHUB_REF_NAME}" -sha256 \
               "rebuilt_darwin_${arch}" "published_darwin_${arch}" | tee "stripped_${arch}.txt"
             test "$(cut -d' ' -f1 < "stripped_${arch}.txt" | uniq | wc -l)" -eq 1
             raw=$(sha256sum "published_darwin_${arch}" | cut -d' ' -f1)
@@ -255,7 +255,7 @@ jobs:
           before=$(sha256sum install/masseuse-camlink.exe | cut -d' ' -f1)
           out=$(install/masseuse-camlink.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/state-2")" update)
           echo "$out"
-          echo "$out" | grep -q "^A newer release: ${GITHUB_REF_NAME} (running v0.10.0), signed by https://github.com/FemLed/masseuse-camlink/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}"
+          echo "$out" | grep -q "^A newer release: ${GITHUB_REF_NAME} (running v0.10.0), signed by https://github.com/Masseuse-ai/masseuse-camlink/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}"
           echo "$out" | grep -q "^Downloaded and verified masseuse-camlink_${GITHUB_REF_NAME#v}_windows_amd64.zip .*provenance by https://github.com/slsa-framework/slsa-github-generator/"
           echo "$out" | grep -q "^Updated to ${GITHUB_REF_NAME}\."
           test "$(install/masseuse-camlink.exe --version | cut -d' ' -f1)" = "${GITHUB_REF_NAME}"
@@ -315,7 +315,7 @@ jobs:
             sleep 15
           done
           cosign verify-blob --bundle checksums.txt.sigstore.json \
-            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
+            --certificate-identity-regexp '^https://github.com/Masseuse-ai/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
           grep -E "_darwin_(arm64|amd64)\.tar\.gz$" checksums.txt | shasum -a 256 -c -
           for arch in arm64 amd64; do
@@ -685,7 +685,7 @@ jobs:
           # [.] rather than \. : Git Bash rewrites a backslash in an argument to
           # a native program (cosign) as a path separator, \. becoming /.
           cosign verify-blob --bundle checksums.txt.sigstore.json \
-            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
+            --certificate-identity-regexp '^https://github.com/Masseuse-ai/masseuse-camlink/[.]github/workflows/release[.]yml@refs/tags/v' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
           grep -E "_windows_amd64\.zip$" checksums.txt | sha256sum -c -
           7z e -y -o. "masseuse-camlink_${version}_windows_amd64.zip" masseuse-camlink.exe > /dev/null
