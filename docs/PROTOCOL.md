@@ -407,80 +407,110 @@ with the picture can be read.
 
 ## 7. Stimulation device link
 
-A connector also serves the electrical stimulation device plugged into the
+A connector also serves an electrical stimulation device reachable from the
 same computer, if it is one the connector supports. Nothing turns this on: a
-supported device found on a USB serial adapter is held released and, once a
-session on the paired phone uses this connector, is attached to that session
+supported device that is switched on is found, held released and, once a
+session on the paired phone uses this connector, attached to that session
 for as long as it lasts. The service's control plane decides what the device
 does; the connector holds it to fixed bounds and fails closed.
 
-Supported today: the ErosTek MK-312BT over its serial link cable (an FTDI
-adapter; 19200 baud, 8N1). The design is device-neutral: a driver speaks one
-device's protocol, and other devices can follow.
+The reference device is the Mastago TENS unit (the `MASTOGO G-xxxx`
+Bluetooth Low Energy unit; `kind` `mastago`): one output channel,
+intensity 0..25, 32 programs fixed in its firmware, a countdown, electrode
+contact detection, one power range. The design is device-neutral: a driver
+speaks one device's protocol and a finder looks for one device family; the
+program tries its registered families in order (`cmd/masseuse-camlink/
+drivers.go`), and a private build may register more.
 
 ### 7.1 Finding the device
 
-The connector lists the USB serial adapters the system publishes
-(`/dev/cu.usbserial*` and the system profiler on macOS, `/sys/class/tty` on
-Linux, the registry on Windows) and probes them, FTDI parts first. A probe
-listens before it speaks: an idle MK-312BT beacons `0x07` continuously, so
-the device is recognized without a byte being written to a port that may
-belong to something else. A silent port is spoken to only when the adapter
-is an FTDI part (or was named with `-estim-port`), and then with two sync
-bytes: a device still holding an old session key answers at once and is
-reported as needing a power cycle; an empty port costs one short try.
-`masseuse-camlink estim probe` runs the same scan once and prints the
-device's status.
+The Mastago is found over Bluetooth Low Energy, in pure Go so the releases
+stay reproducible: CoreBluetooth through the Objective-C runtime on macOS,
+BlueZ over D-Bus on Linux; Windows has no backend yet and reports no
+device. The finder looks first among the peripherals the system already
+holds a connection to that offer the unit's service (`FFF0`): on macOS a
+unit the vendor's own app has open is shared with the connector without
+that app being touched, and such a unit answers in well under a second. It
+then scans for about four seconds for a unit advertising by name
+(`MASTOGO…`) or by that service, and connects to the first one. Either way
+the unit is only taken as found when it answers a program query
+(`AT+CMODE?`). `-estim-ble G-12AB` (the unit's own suffix, its full
+advertised name or the system's identifier for it) pins the search to one
+unit; `-estim-ble off` leaves Bluetooth alone. `masseuse-camlink estim
+probe` describes what each registered family can see, runs the same search
+once and prints the device's status.
 
-A session key agreed with the device is kept in the state directory
-(`mk312-key`, mode 0600) so a connector that restarts mid-session resumes
-the device instead of needing it power-cycled; the key is forgotten when the
-device is unkeyed at close.
+On macOS the first Bluetooth use asks the person, once, to allow the
+program (the terminal it runs in) to use Bluetooth; refused, or with
+Bluetooth switched off, the connector logs so once and keeps trying every
+health tick, with no device reported.
+
+The unit speaks `\r\n`-terminated AT lines over one GATT service (`FFF0`:
+write `FFF5`, notifications `FFF4`), one command at a time with at least
+100 ms between writes and a 3 s reply timeout; partial lines are
+reassembled. Its own reports (a heartbeat, an intensity changed at its
+buttons, electrode contact changing, its countdown ending, and the reason
+it is switching itself off) are folded into the status the connector
+reports. The connector holds no pairing state for it.
 
 ### 7.2 What the connector holds to
 
 Whatever the service asks:
 
-- Channel A only; Channel B is written to zero before and after every
-  command.
-- Level at most the session's maximum (`device_settings.levelMax`, 85
-  until the session sets one) on the device's 0..99 scale, moved one step
-  per quarter second with a read-back at every step; `adjust_level` moves
-  at most 5 and never past the maximum.
-- Tempo (the device's MultiAdjust) 0..100 percent of the loaded pattern's
-  range; `adjust_ma` moves at most 10.
-- Patterns from a fixed allow-list of the device's own pattern numbers
-  (`0x76..0x7B`, `0x80..0x84`); the connector names none of them.
-- The power range is normal while released and, while armed, the
-  session's choice of normal or high (`device_settings.powerMode`, high
-  until the session sets one); the low range is never selected.
+- One channel (`a`); the wire's `levelB` is reported as 0.
+- Intensity at most the session's maximum (`device_settings.levelMax`, 15
+  until the session sets one) on the unit's 0..25 scale, moved one step
+  per 0.4 s with a read-back at every step; `adjust_level` moves at most 5
+  and never past the maximum. Output is started before the first step
+  above zero and stopped (paused) when zero is reached; a downward move
+  is one write. A step the unit refuses because the electrodes are not on
+  the skin fails the command where it is (the session releases, as after
+  every failed command).
+- Programs from the unit's own numbering, 0..31 (`capabilities.modes`);
+  the connector names none of them. A program change pauses the output,
+  as the unit's own controller does, and the connector brings the
+  intensity the session had back with a ramp.
+- No tempo control: `set_ma` and `adjust_ma` are refused
+  (`capabilities.tempo` false).
+- One power range: `device_settings.powerMode` is accepted and has no
+  effect (`capabilities.powerModes` empty).
+- The countdown is the arm window: arming writes it (`AT+CDCLK`), every
+  renewal of the arm window brings it up again, and a release leaves it
+  where it is. If the connector dies with the unit armed the unit stops by
+  itself when the countdown runs out.
+- A release is output paused and the intensity written to zero, in that
+  order; a unit that refuses the zero because the electrodes are off is
+  accepted as released once it confirms it is paused.
 
 Settings: the two bounds above that are the session's (`powerMode`,
 `levelMax`) arrive as a `device_settings` control for the attached session
 and are held for that session alone; a detach, or another session
-attaching, restores the defaults (high, 85). A change while armed that the
-device cannot take in place - a different power range, or a maximum below
-the level the device is at - releases the device (outputs to zero) and the
-connector arms again, in the new range; any other change applies at once.
-A `device_settings` control with a power range other than the two, a
-maximum off the scale, or a `sessionId` other than the attached session's
-is refused whole. The connector reports what it holds (`device_settings`
-up) after every attach and every change, accepted or not.
+attaching, restores the defaults (`capabilities.levelMaxDefault` when the
+device names one, and the one range the device has). A change while armed
+that the device cannot take in place - a different power range on a device
+with several, or a maximum below the level the device is at - releases the
+device (outputs to zero) and the connector arms again within the new
+bounds; any other change applies at once. A `device_settings` control with
+a power range other than `normal` or `high`, a maximum off the scale, or a
+`sessionId` other than the attached session's is refused whole. The
+connector reports what it holds (`device_settings` up) after every attach
+and every change, accepted or not.
 
 Arming: the device is armed when the service attaches a live session
 (`companion_attached`); the attach is the consent, given on the phone. The
 arm lasts at most 30 minutes and is renewed by every `heartbeat_ack`. The
-connector releases the device (outputs to zero, front panel live, normal
-power) and revokes the arm when the session detaches or is cleared, when
-15 s pass without a heartbeat acknowledgment, when the arm window runs out,
-when any command fails, when the device stops answering, and when the
-connector exits (Ctrl-C, a signal). A release sets a latch that only the
-next attach clears; a running level ramp stops at its next step. One
-actuation runs at a time; a second is refused. The device is read in full
-every 5 s while idle; a device that stops answering is released as far as
-it can be, closed and forgotten, and its status reports every
-safety-relevant field as null, which the service refuses to act on. A
-device that reappears is picked up released and unarmed.
+connector releases the device (output stopped and at zero, the device's
+own controls live) and revokes the arm when the session detaches or is
+cleared, when 15 s pass without a heartbeat acknowledgment, when the arm
+window runs out, when any command fails, when the device stops answering,
+and when the connector exits (Ctrl-C, a signal). A release sets a latch
+that only the next attach clears; a running level ramp stops at its next
+step. One actuation runs at a time; a second is refused. The device is read
+in full every 5 s while idle; a device that stops answering, or announces
+it is switching itself off, is released as far as it can be, closed and
+forgotten, and its status reports every safety-relevant field as null,
+which the service refuses to act on, with the reason in `error`. A device
+that reappears is picked up released and unarmed.
 
 ### 7.3 Messages
 
@@ -503,7 +533,15 @@ it changes:
 
 | type | fields | when |
 |---|---|---|
-| `device` | `kind`, `label`, `connected`, `capabilities` `{levelMax, channels, modes, tempo}` | a device is found or lost |
+| `device` | `kind`, `label`, `connected`, `capabilities` | a device is found or lost |
+
+`capabilities` is `{levelMax, channels, modes, tempo}` and, when they
+apply, `powerModes` (the ranges a session may arm the device in; absent
+for a device with one), `levelMaxDefault` (the maximum until a session sets
+one), `timer` (the device has a countdown the connector arms to the arm
+window) and `loadDetect` (the device reports electrode contact). For the
+Mastago: `{levelMax: 25, channels: ["a"], modes: [0..31], tempo: false,
+levelMaxDefault: 15, timer: true, loadDetect: true}`.
 
 `kind` names the device family and is what the service keys its behaviour
 on. The names are fixed in `internal/estim/estim.go` (`Kinds`) whether or
@@ -511,17 +549,18 @@ not this program carries a driver for the family:
 
 | `kind` | device | driver in this program |
 |---|---|---|
-| `mk312bt` | ErosTek MK-312BT, serial link | yes |
+| `mastago` | Mastago TENS unit, Bluetooth Low Energy | yes |
 | `estim-2b` | E-Stim Systems 2B, serial link | not yet |
 | `dglabs-coyote` | DG-Lab Coyote, Bluetooth Low Energy | not yet |
 | `tens` | any other transcutaneous electrical nerve stimulation unit | not yet |
 
-A service that receives a `kind` outside this table should treat the
-descriptor as malformed.
+A private build may carry drivers for further kinds; the service validates
+kinds against its own table and treats a descriptor with a `kind` it does
+not know as malformed.
 
-`capabilities.levelMax` is the device's own scale (99 for the MK-312BT):
-the most a session's `levelMax` may be. What a command may set is bounded
-by the session's setting within it (section 7.2).
+`capabilities.levelMax` is the top of the device's own scale (25 for the
+Mastago): the most a session's `levelMax` may be. What a command may set
+is bounded by the session's setting within it (section 7.2).
 
 Down (service to connector, as `estim` events):
 
@@ -529,28 +568,43 @@ Down (service to connector, as `estim` events):
 |---|---|
 | `{"type":"control","payload":{"type":"companion_attached","sessionId",...}}` | attach to the session, report state and settings, arm |
 | `{"type":"control","payload":{"type":"device_settings","sessionId","powerMode","levelMax"}}` | take the session's settings (7.2), report them; release and arm again when the device cannot take the change in place |
-| `{"type":"control","payload":{"type":"mk312_command","commandId","sessionId","command":{"verb",...}}}` | run the command (below), acknowledge, report state |
+| `{"type":"control","payload":{"type":"device_command","commandId","sessionId","command":{"verb",...}}}` | run the command (below), acknowledge, report state |
 | `{"type":"heartbeat_ack","serverTime"}` | renew the arm |
 | `{"type":"detach","reason"}` | release and detach without replying |
 
-Command verbs: `status`; `release`; `set_mode {mode}` (a pattern number);
-`set_level {channel:"a", level}`; `adjust_level {channel:"a", delta}`;
-`set_ma {percent}`; `adjust_ma {delta}`. A command whose `sessionId` is not
-the attached session is refused (`release` excepted). `status` in every
-message above is the device reading: `connected`, `port`, `mode` (pattern
-number), `levelA`, `levelB`, `power`, `batteryPercent`, `adcOverride`,
-`levelMA`, `maMin`, `maMax`, `maPercent`, `maPotOverride`, and the loaded
-pattern's modulation state (`gateValue`, `modeRampValue`, `routineTimer`,
-`sequence*`, and for each of the width, frequency and intensity blocks the
-value, floor, ceiling, signed step, phase percent and direction, null when
-the pattern leaves the block pinned). A telemetry frame is `atMs`,
-`monotonicS`, `skipped`, `skipReason` and, when not skipped, `mode`,
-`levelA`, `levelMA`, `maPercent` and the same modulation state.
+Command verbs: `status`; `release`; `set_mode {mode}` (a program number
+from `capabilities.modes`); `set_level {channel:"a", level}`;
+`adjust_level {channel:"a", delta}`; `set_ma {percent}`; `adjust_ma
+{delta}` (the last two only for a device with `capabilities.tempo`). A
+command whose `sessionId` is not the attached session is refused (`release`
+excepted).
+
+`status` in every message above is the device reading. Its field names are
+shared by every kind: `connected`, `port` (the system's identifier for the
+device), `mode` (program number), `levelA`, `levelB`, `power`,
+`batteryPercent`, `adcOverride`, `levelMA`, `maMin`, `maMax`, `maPercent`,
+`maPotOverride`, and, for a device that has them, `outputting` (the device
+is delivering its program; false while paused), `loadDetected` (the
+electrodes are on the skin) and `timerRemainingS` (its countdown). A
+single-channel device reports `levelB` 0 and the two override flags false;
+one without a tempo control leaves the `MA` fields null; one whose programs
+are fixed in firmware (the Mastago) reports no modulation state, while a
+pattern-based device adds the loaded pattern's (`gateValue`,
+`modeRampValue`, `routineTimer`, `sequence*`, and for each of the width,
+frequency and intensity blocks the value, floor, ceiling, signed step,
+phase percent and direction, null when the pattern leaves the block
+pinned). `connected`, `levelA`, `levelB`, `adcOverride` and `maPotOverride`
+are the safety-relevant fields: null in any of them (a device that stopped
+answering) is a reading the service must not act on. A telemetry frame is
+`atMs`, `monotonicS`, `skipped`, `skipReason` and, when not skipped, the
+same per-device fields at 2 Hz: for the Mastago `mode`, `levelA`,
+`outputting`, `loadDetected` and `timerRemainingS` (the countdown counted
+down locally between full readings).
 
 **Trust.** The service signs nothing to the connector; the connector trusts
 the authenticated event stream it already holds for camera dials. What the
 service can do through it is bounded by the connector, in the open: the
-caps, the arm window, the fail-closed rules and the allow-list above are
+caps, the arm window, the fail-closed rules and the program list above are
 this program's, and its releases are reproducible (VERIFY.md). The person
 at the computer stops everything with Ctrl-C, by ending the session on the
-phone, or with the device's own power switch.
+phone, or with the device's own power button.

@@ -21,7 +21,7 @@ const profilerOutput = `{
               "_name" : "FT232R USB UART",
               "manufacturer" : "FTDI",
               "product_id" : "0x6001",
-              "serial_num" : "AB0JQ5W9",
+              "serial_num" : "A1B2C3D4",
               "vendor_id" : "0x0403  (Future Technology Devices International Limited)"
             }
           ]
@@ -39,7 +39,7 @@ const profilerOutput = `{
 
 func TestDarwinCandidatesMatchProfilerBySerial(t *testing.T) {
 	dev := t.TempDir()
-	for _, name := range []string{"cu.usbserial-AB0JQ5W9", "cu.usbserial-110", "cu.Bluetooth-Incoming-Port", "tty.usbserial-AB0JQ5W9"} {
+	for _, name := range []string{"cu.usbserial-A1B2C3D4", "cu.usbserial-110", "cu.Bluetooth-Incoming-Port", "tty.usbserial-A1B2C3D4"} {
 		if err := os.WriteFile(filepath.Join(dev, name), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +64,7 @@ func TestDarwinCandidatesMatchProfilerBySerial(t *testing.T) {
 	}
 	sortCandidates(cands)
 	ftdi := cands[0]
-	if ftdi.Path != filepath.Join(dev, "cu.usbserial-AB0JQ5W9") || ftdi.VendorID != FTDIVendor || ftdi.ProductID != 0x6001 || ftdi.Serial != "AB0JQ5W9" || ftdi.Product != "FT232R USB UART" {
+	if ftdi.Path != filepath.Join(dev, "cu.usbserial-A1B2C3D4") || ftdi.VendorID != FTDIVendor || ftdi.ProductID != 0x6001 || ftdi.Serial != "A1B2C3D4" || ftdi.Product != "FT232R USB UART" {
 		t.Fatalf("ftdi candidate = %+v", ftdi)
 	}
 	if !ftdi.FTDI() || !ftdi.Likely() {

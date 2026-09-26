@@ -20,6 +20,11 @@
 // the Go linker wrote, stripping a Developer ID signature written over it,
 // and passing an unsigned darwin/amd64 binary through all yield the same
 // bytes.
+//
+// A universal binary (the application bundle's executable, both
+// architectures behind a fat header) is taken apart by Slices and stripped
+// slice by slice by StripAll, so each architecture compares with its own
+// rebuild.
 package machosig
 
 import (
@@ -64,8 +69,12 @@ var ErrNotMachO = errors.New("machosig: not a 64-bit Mach-O executable")
 // with no signature and nothing but tables in __LINKEDIT (the unsigned
 // binaries the Go linker writes for darwin/amd64) is returned unchanged, so
 // signed and unsigned binaries can be passed through the same way before
-// comparing them.
+// comparing them. data is one architecture's Mach-O; a universal binary is
+// refused with ErrUniversal and taken apart by StripAll.
 func Strip(data []byte) ([]byte, error) {
+	if IsUniversal(data) {
+		return nil, ErrUniversal
+	}
 	if len(data) < headerSize || binary.LittleEndian.Uint32(data) != magic64 {
 		return nil, ErrNotMachO
 	}

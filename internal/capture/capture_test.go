@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -28,9 +29,14 @@ import (
 
 // TestMain doubles as the fake ffmpeg: the test binary re-executed with
 // CAPTURE_FAKE_FFMPEG set behaves like ffmpeg publishing to the intake.
+// With CAPTURE_REAL_FFMPEG_WRAP set instead it stands in for a real ffmpeg
+// long enough to swap the camera for a test source (realffmpeg_test.go).
 func TestMain(m *testing.M) {
 	if os.Getenv("CAPTURE_FAKE_FFMPEG") == "1" {
 		os.Exit(fakeFFmpeg(os.Args[1:]))
+	}
+	if real := os.Getenv(realFFmpegEnv + "_WRAP"); real != "" {
+		os.Exit(execFFmpeg(real, lavfiInputs(os.Args[1:])))
 	}
 	os.Exit(m.Run())
 }
@@ -431,6 +437,77 @@ func TestFindFFmpegMissing(t *testing.T) {
 	}
 }
 
+// TestBundledFFmpeg: the ffmpeg shipped with the program is found in a
+// macOS bundle's Contents/Helpers and beside the executable anywhere, and
+// nowhere else.
+func TestBundledFFmpeg(t *testing.T) {
+	app := filepath.Join("/Applications", "masseuse-camlink.app", "Contents")
+	appExe := filepath.Join(app, "MacOS", "masseuse-camlink")
+	helper := filepath.Join(app, "Helpers", "ffmpeg")
+	folderExe := filepath.Join("/Users", "me", "masseuse-camlink", "masseuse-camlink")
+	winExe := filepath.Join("C:", "camlink", "masseuse-camlink.exe")
+	has := func(paths ...string) func(string) bool {
+		return func(p string) bool {
+			for _, want := range paths {
+				if p == want {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	for _, tc := range []struct {
+		name, exe, goos string
+		exists          func(string) bool
+		want            string
+	}{
+		{"bundle helper", appExe, "darwin", has(helper), helper},
+		{"bundle, helper preferred over a neighbour", appExe, "darwin", has(helper, filepath.Join(app, "MacOS", "ffmpeg")), helper},
+		{"bundle without ffmpeg", appExe, "darwin", has(), ""},
+		{"beside the executable on a Mac", folderExe, "darwin", has(filepath.Join(filepath.Dir(folderExe), "ffmpeg")), filepath.Join(filepath.Dir(folderExe), "ffmpeg")},
+		{"beside the executable on Linux", folderExe, "linux", has(filepath.Join(filepath.Dir(folderExe), "ffmpeg")), filepath.Join(filepath.Dir(folderExe), "ffmpeg")},
+		{"beside the executable on Windows", winExe, "windows", has(filepath.Join(filepath.Dir(winExe), "ffmpeg.exe")), filepath.Join(filepath.Dir(winExe), "ffmpeg.exe")},
+		{"Windows wants the .exe", winExe, "windows", has(filepath.Join(filepath.Dir(winExe), "ffmpeg")), ""},
+		{"a Helpers directory is only a bundle's", folderExe, "linux", has(filepath.Join("/Users", "me", "Helpers", "ffmpeg")), ""},
+	} {
+		if got := bundledFFmpeg(tc.exe, tc.goos, tc.exists); got != tc.want {
+			t.Errorf("%s: bundledFFmpeg(%q, %s) = %q, want %q", tc.name, tc.exe, tc.goos, got, tc.want)
+		}
+	}
+}
+
+// TestFindFFmpegBeside runs the real lookup with a stand-in placed beside a
+// copy of the test binary's own path: the neighbour wins over PATH.
+func TestFindFFmpegBeside(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := filepath.Dir(exe)
+	name := "ffmpeg"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	beside := filepath.Join(dir, name)
+	if _, err := os.Stat(beside); err == nil {
+		t.Skipf("%s exists already", beside)
+	}
+	if err := os.WriteFile(beside, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Skipf("cannot write beside the test binary: %v", err)
+	}
+	defer os.Remove(beside)
+	got, err := FindFFmpeg("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := filepath.EvalSymlinks(beside); err == nil {
+		beside = resolved
+	}
+	if got != beside {
+		t.Fatalf("FindFFmpeg = %q, want the neighbour %q", got, beside)
+	}
+}
+
 // playback is what a reader saw: packets by count, the latest video
 // payload, whether video sequence numbers ever skipped, and how far behind
 // this computer's clock the stream's sender reports timed the latest video
@@ -517,6 +594,13 @@ func testSource(t *testing.T, opts Options) (*serve.Server, *Source) {
 	t.Helper()
 	t.Setenv("CAPTURE_FAKE_FFMPEG", "1")
 	t.Setenv("CAPTURE_FAKE_CLOCK_BEHIND_MS", "800")
+	return testSourceWith(t, opts, os.Args[0])
+}
+
+// testSourceWith is a darwin Source on the given ffmpeg: the test binary as
+// the fake (testSource) or as the wrapper of a real one (realffmpeg_test.go).
+func testSourceWith(t *testing.T, opts Options, ffmpeg string) (*serve.Server, *Source) {
+	t.Helper()
 	srv, err := serve.New(serve.Config{StateDir: t.TempDir(), Logger: quiet(), DescribeWait: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -524,7 +608,7 @@ func testSource(t *testing.T, opts Options) (*serve.Server, *Source) {
 	t.Cleanup(srv.Close)
 	cam := Device{Kind: Video, ID: "0", Name: "Insta360 Link"}
 	mic := Device{Kind: Audio, ID: "1", Name: "Yeti Stereo Microphone"}
-	src := newSource(srv, opts, quiet(), "darwin", os.Args[0], cam, &mic)
+	src := newSource(srv, opts, quiet(), "darwin", ffmpeg, cam, &mic)
 	src.earlyExit = 2 * time.Second
 	t.Cleanup(src.Stop)
 	return srv, src

@@ -220,3 +220,151 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  macos-app:
+    # The Mac download (packaging/macos/README.md): masseuse-camlink.app,
+    # universal, with ffmpeg inside, in a disk image; app and image signed
+    # with the Developer ID, notarized and stapled. The bundle's executable
+    # is the two darwin binaries goreleaser published, verified against the
+    # signed checksums.txt and joined with lipo, so the reproduce job's
+    # result carries over: this job checks that the bundle's slices strip to
+    # the very same bytes. ffmpeg is the one component not rebuilt byte for
+    # byte; it is built here from pinned upstream tarballs
+    # (packaging/ffmpeg/build.sh) and covered by darwin.intoto.jsonl.
+    needs: goreleaser
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: write # the disk image, checksums-darwin.txt and the source tarballs
+      id-token: write # keyless signing (Fulcio)
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: The published darwin archives, verified
+        # Nothing from the release is used before checksums.txt's keyless
+        # signature and the archives' hashes have been checked.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p published dist && cd published
+          for i in $(seq 1 20); do
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              --pattern checksums.txt --pattern checksums.txt.sigstore.json \
+              --pattern "masseuse-camlink_${version}_darwin_arm64.tar.gz" \
+              --pattern "masseuse-camlink_${version}_darwin_amd64.tar.gz" && break
+            sleep 15
+          done
+          cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+          grep -E "_darwin_(arm64|amd64)\.tar\.gz$" checksums.txt | shasum -a 256 -c -
+          for arch in arm64 amd64; do
+            mkdir "$arch" && tar -xzf "masseuse-camlink_${version}_darwin_${arch}.tar.gz" -C "$arch" masseuse-camlink
+          done
+          lipo -create -output ../dist/masseuse-camlink arm64/masseuse-camlink amd64/masseuse-camlink
+          echo "universal connector: $(lipo -archs ../dist/masseuse-camlink)"
+      - name: Tools for the ffmpeg build
+        id: tools
+        run: |
+          command -v nasm >/dev/null || brew install nasm
+          command -v pkg-config >/dev/null || brew install pkgconf
+          echo "image=${ImageOS:-macos}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: ffmpeg-cache
+        with:
+          path: dist/ffmpeg
+          # The recipe and the runner image decide the bytes; a change to
+          # either rebuilds. The work tree is not kept.
+          key: ffmpeg-${{ hashFiles('packaging/ffmpeg/**') }}-${{ steps.tools.outputs.image }}
+      - name: Build ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: sh packaging/ffmpeg/build.sh -o dist/ffmpeg -w "${RUNNER_TEMP}/ffmpeg-work"
+      - name: The bundled ffmpeg runs the connector's own encoding chain
+        # internal/capture's real-ffmpeg test: a Source on this binary, the
+        # connector's exact arguments, a test picture and tone instead of a
+        # camera, the stream read back.
+        run: |
+          lipo -archs dist/ffmpeg/ffmpeg | grep -q x86_64 || { echo "ffmpeg is not universal" >&2; exit 1; }
+          CAPTURE_REAL_FFMPEG="${PWD}/dist/ffmpeg/ffmpeg" go test -count=1 -run 'TestRealFFmpegPublishes' -v ./internal/capture/
+      - name: Assemble the bundle
+        run: sh packaging/macos/build-app.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink -f dist/ffmpeg -o dist
+      - name: Sign, notarize and staple the bundle
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          # Referenced so the runner masks the certificate's subject wherever
+          # a tool might print it; the scripts themselves never do.
+          MACOS_SIGN_SUBJECT: ${{ secrets.MACOS_SIGN_SUBJECT }}
+        run: sh packaging/macos/sign-notarize.sh app dist/masseuse-camlink.app
+      - name: Gatekeeper accepts the bundle
+        run: sh packaging/macos/assess.sh app dist/masseuse-camlink.app
+      - name: The bundle's executable is the archives' binaries
+        # Signature stripped, each slice of the universal binary is byte for
+        # byte the archive's binary for that architecture, which the
+        # reproduce job ties to the proxy rebuild.
+        run: |
+          go run ./cmd/machostrip -sha256 dist/masseuse-camlink.app/Contents/MacOS/masseuse-camlink | tee bundle.txt
+          for arch in arm64 amd64; do
+            thin=$(go run ./cmd/machostrip -sha256 "published/${arch}/masseuse-camlink" | cut -d' ' -f1)
+            grep -qF "${thin}  dist/masseuse-camlink.app/Contents/MacOS/masseuse-camlink (${arch})" bundle.txt ||
+              { echo "the bundle's ${arch} slice is not the published darwin/${arch} binary" >&2; exit 1; }
+            echo "the bundle's ${arch} slice is the published darwin/${arch} binary (${thin})"
+          done
+      - name: Disk image, signed, notarized and stapled
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_SIGN_SUBJECT: ${{ secrets.MACOS_SIGN_SUBJECT }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sh packaging/macos/build-dmg.sh -a dist/masseuse-camlink.app -v "$version" -o dist
+          sh packaging/macos/sign-notarize.sh dmg "dist/masseuse-camlink_${version}_darwin_all.dmg"
+          sh packaging/macos/assess.sh dmg "dist/masseuse-camlink_${version}_darwin_all.dmg"
+      - name: checksums-darwin.txt, signed keyless
+        # The image and the ffmpeg source tarballs (the LGPL source offer,
+        # packaging/ffmpeg/THIRD_PARTY.md), hashed and signed like
+        # checksums.txt.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cp dist/ffmpeg/sources/*.tar.* dist/
+          cd dist
+          shasum -a 256 "masseuse-camlink_${version}_darwin_all.dmg" ffmpeg-*.tar.xz opus-*.tar.gz > checksums-darwin.txt
+          cat checksums-darwin.txt
+          cosign sign-blob --yes --bundle checksums-darwin.txt.sigstore.json checksums-darwin.txt
+      - name: Upload to the release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+            "dist/masseuse-camlink_${version}_darwin_all.dmg" \
+            dist/checksums-darwin.txt dist/checksums-darwin.txt.sigstore.json \
+            dist/ffmpeg-*.tar.xz dist/opus-*.tar.gz
+      - name: Subjects for provenance
+        id: hashes
+        run: echo "hashes=$(base64 < dist/checksums-darwin.txt | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+  provenance-darwin:
+    needs: macos-app
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.macos-app.outputs.hashes }}
+      provenance-name: darwin.intoto.jsonl
+      upload-assets: true

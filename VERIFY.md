@@ -9,11 +9,18 @@ carries:
 - `multiple.intoto.jsonl`: SLSA v1 provenance for every artifact, produced by
   the SLSA generic generator in a separate, isolated job;
 - container images at `ghcr.io/femled/masseuse-camlink`, signed keyless by
-  digest, with SBOMs and their own SLSA container provenance.
+  digest, with SBOMs and their own SLSA container provenance;
+- `masseuse-camlink_X.Y.Z_darwin_all.dmg`: the Mac download, the application
+  bundle in a disk image, built by a second job of the same workflow after
+  the archives are published; listed with the ffmpeg source tarballs in
+  `checksums-darwin.txt`, signed the same way
+  (`checksums-darwin.txt.sigstore.json`), with its own provenance
+  `darwin.intoto.jsonl`.
 
-The connectors in the `darwin_*` archives are in addition signed with an
-Apple Developer ID and notarized ("The macOS binaries" below says how to
-check the signer and how to compare them with a rebuild regardless).
+The connectors in the `darwin_*` archives, the application bundle and the
+disk image are in addition signed with an Apple Developer ID and notarized
+("The macOS binaries" and "The macOS app" below say how to check the signer
+and how to compare them with a rebuild regardless).
 
 `sh scripts/verify-release.sh vX.Y.Z` runs the release checks below (1 to 3);
 `sh scripts/verify-enclave.sh` runs the enclave check (4). (Both are plain
@@ -167,6 +174,77 @@ replacement certificate will be listed here alongside this one, with the
 first release it signs, before it is used. The signature says who published
 the binary and that Apple's notary service scanned it; what the binary does
 is established by the rebuild above, not by the signature.
+
+### The macOS app
+
+The Mac download, `masseuse-camlink_X.Y.Z_darwin_all.dmg`, holds
+`masseuse-camlink.app`. Its executable is the two darwin binaries above
+joined into one universal binary with `lipo`, and beside it, in
+`Contents/Helpers/ffmpeg`, an ffmpeg built from pinned upstream sources so
+that the app needs no install step (`packaging/ffmpeg/THIRD_PARTY.md`). The
+release workflow's `macos-app` job (`.github/workflows/release.yml`) builds
+the bundle on a macOS runner from the archives it has just published, after
+verifying them against the signed `checksums.txt`, and signs, notarizes and
+staples the app and then the image (`packaging/macos/`).
+
+The image and the ffmpeg source tarballs have their own checksum file,
+signed and attested like the first:
+
+```sh
+cosign verify-blob \
+  --bundle checksums-darwin.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums-darwin.txt
+shasum -a 256 -c checksums-darwin.txt
+slsa-verifier verify-artifact masseuse-camlink_X.Y.Z_darwin_all.dmg \
+  --provenance-path darwin.intoto.jsonl \
+  --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
+```
+
+The app's executable is the published binaries, and so the rebuild: strip
+the universal binary and each architecture's hash is the hash of the
+stripped archive binary for that architecture (and of the rebuild).
+`machostrip` takes a universal binary apart by itself and prints one line
+per architecture, named as the archives are:
+
+```sh
+hdiutil attach -readonly -nobrowse masseuse-camlink_X.Y.Z_darwin_all.dmg
+go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 \
+  /Volumes/masseuse-camlink/masseuse-camlink.app/Contents/MacOS/masseuse-camlink
+# two lines, "(arm64)" and "(amd64)": compare each with the stripped
+# archive binary or the rebuild of the previous section
+hdiutil detach /Volumes/masseuse-camlink
+```
+
+The `macos-app` job makes this comparison itself before it uploads
+anything, so a release whose bundle were not the published binaries would
+not have a bundle. ffmpeg is the one component of the bundle that is not
+rebuilt byte for byte: `packaging/ffmpeg/build.sh` at the tag is its
+recipe (pinned tarballs, hashes checked, LGPL configuration, the components
+listed in the script), the tarballs are attached to the release, and the
+provenance `darwin.intoto.jsonl` says which workflow run built the image it
+sits in. Anyone can rebuild ffmpeg with the script and put their own in the
+bundle's `Contents/Helpers/`; the connector runs the one it finds there.
+
+On a Mac, the signatures and the notarization tickets are checked the way
+the system checks them at a double-click; the release fails if any of these
+does not hold (`packaging/macos/assess.sh`):
+
+```sh
+codesign --verify --deep --strict --verbose=2 /Volumes/masseuse-camlink/masseuse-camlink.app
+spctl --assess --type execute -vv /Volumes/masseuse-camlink/masseuse-camlink.app
+xcrun stapler validate /Volumes/masseuse-camlink/masseuse-camlink.app
+codesign --verify --strict --verbose=2 masseuse-camlink_X.Y.Z_darwin_all.dmg
+spctl --assess --type open --context context:primary-signature -vv masseuse-camlink_X.Y.Z_darwin_all.dmg
+xcrun stapler validate masseuse-camlink_X.Y.Z_darwin_all.dmg
+```
+
+Both `spctl` verdicts are `accepted` with `source=Notarized Developer ID`;
+`codesign -dvv` on the app and on `Contents/Helpers/ffmpeg` shows the same
+`TeamIdentifier=B8Z4RP3846` and `flags=0x10000(runtime)` as the bare
+binaries, signed by the certificate listed above. `scripts/verify-release.sh`
+runs all of this as step 8 when the release carries `checksums-darwin.txt`.
 
 ## 4. The enclave your camera streams to
 

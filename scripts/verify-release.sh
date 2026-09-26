@@ -9,7 +9,12 @@
 #   6. (optional, needs Go) so does the connector in the linux/amd64 archive,
 #   7. (optional, needs Go) so do the darwin connectors once their Apple
 #      signature is stripped from both sides; on a Mac, the signature itself
-#      is checked (team id, certificate fingerprint, notarization).
+#      is checked (team id, certificate fingerprint, notarization),
+#   8. when the release carries the macOS app (checksums-darwin.txt): its
+#      checksum file's signature, the disk image's and the ffmpeg source
+#      tarballs' hashes and provenance; on a Mac, that the app's executable
+#      is the archives' binaries (signature stripped, per architecture) and
+#      Gatekeeper's own verdict on the app and the image.
 #
 # usage: scripts/verify-release.sh vX.Y.Z [download dir]
 # needs: curl, sha256sum (or shasum), cosign (3 or later for the image),
@@ -179,6 +184,76 @@ if command -v go >/dev/null 2>&1; then
   rm -rf "$work"
 else
   echo "==> 5-7. rebuild: skipped (no go)"
+fi
+
+# The macOS app (VERIFY.md 3, "The macOS app"): a second checksum file for
+# the disk image and the ffmpeg source tarballs, signed and attested like
+# the first. Releases before it have no such file.
+if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/checksums-darwin.txt" 2>/dev/null; then
+  echo "==> 8. the macOS app: checksum signature, hashes and provenance"
+  fetch checksums-darwin.txt.sigstore.json
+  fetch darwin.intoto.jsonl
+  cosign verify-blob \
+    --bundle checksums-darwin.txt.sigstore.json \
+    --certificate-identity-regexp "$WORKFLOW_RE" \
+    --certificate-oidc-issuer "$ISSUER" \
+    checksums-darwin.txt
+  awk '{print $2}' checksums-darwin.txt | while read -r f; do fetch "$f"; done
+  $SHA -c checksums-darwin.txt
+  awk '{print $2}' checksums-darwin.txt | while read -r f; do
+    slsa-verifier verify-artifact "$f" \
+      --provenance-path darwin.intoto.jsonl \
+      --source-uri "github.com/$REPO" \
+      --source-tag "$tag" >/dev/null
+    echo "    ok  $f"
+  done
+  dmg="masseuse-camlink_${version}_darwin_all.dmg"
+  if [ "$(uname -s)" = "Darwin" ] && [ -s "$dmg" ]; then
+    echo "==> 8b. the app itself (this is a Mac)"
+    mount=$(hdiutil attach -readonly -nobrowse -noautoopen "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')
+    [ -n "$mount" ] || { echo "    the disk image did not mount" >&2; exit 1; }
+    app="$mount/masseuse-camlink.app"
+    if command -v go >/dev/null 2>&1; then
+      # The bundle's executable, stripped, is the archives' binaries stripped,
+      # architecture by architecture (and so the rebuild of step 7).
+      appwork="$(mktemp -d)"
+      go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$app/Contents/MacOS/masseuse-camlink" > "$appwork/bundle.txt"
+      for arch in arm64 amd64; do
+        archive="masseuse-camlink_${version}_darwin_${arch}.tar.gz"
+        [ -s "$archive" ] || { echo "    skipped $arch (no $archive)"; continue; }
+        tar -xzOf "$archive" masseuse-camlink > "$appwork/thin_$arch"
+        thin=$(go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$appwork/thin_$arch" | cut -d' ' -f1)
+        grep -q "^$thin  .* ($arch)\$" "$appwork/bundle.txt" \
+          || { echo "    MISMATCH: the app's $arch slice is not the published darwin/$arch binary" >&2; cat "$appwork/bundle.txt" >&2; hdiutil detach "$mount" -quiet; exit 1; }
+        echo "    ok  the app's $arch slice is the published darwin/$arch binary: $thin"
+      done
+      rm -rf "$appwork"
+    fi
+    # Gatekeeper's verdict, as at a double-click; the certificate's subject
+    # (spctl's origin line) is left out of the output.
+    codesign --verify --deep --strict "$app"
+    for f in "$app" "$app/Contents/Helpers/ffmpeg"; do
+      info=$(codesign -dvv "$f" 2>&1)
+      echo "$info" | grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" \
+        || { echo "    $f: signed by another team" >&2; hdiutil detach "$mount" -quiet; exit 1; }
+      echo "$info" | grep -q 'flags=0x10000(runtime)' \
+        || { echo "    $f: not signed with the hardened runtime" >&2; hdiutil detach "$mount" -quiet; exit 1; }
+    done
+    assess=$(spctl --assess --type execute -vv "$app" 2>&1 || true)
+    echo "$assess" | grep -q 'source=Notarized Developer ID' \
+      || { echo "    the app is not accepted as notarized:"; echo "$assess" | grep -v '^origin=' | sed 's/^/      /'; hdiutil detach "$mount" -quiet; exit 1; }
+    xcrun stapler validate -q "$app" || { echo "    no notarization ticket stapled to the app" >&2; hdiutil detach "$mount" -quiet; exit 1; }
+    hdiutil detach "$mount" -quiet
+    codesign --verify --strict "$dmg"
+    assess=$(spctl --assess --type open --context context:primary-signature -vv "$dmg" 2>&1 || true)
+    echo "$assess" | grep -q 'source=Notarized Developer ID' \
+      || { echo "    the disk image is not accepted as notarized:"; echo "$assess" | grep -v '^origin=' | sed 's/^/      /'; exit 1; }
+    xcrun stapler validate -q "$dmg" || { echo "    no notarization ticket stapled to the disk image" >&2; exit 1; }
+    echo "    ok  app and disk image: team $APPLE_TEAM_ID, hardened runtime, notarized, tickets stapled"
+  fi
+else
+  rm -f checksums-darwin.txt
+  echo "==> 8. the macOS app: none in this release (no checksums-darwin.txt)"
 fi
 
 echo "all checks passed for $tag"

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Template: build-app.sh replaces @VERSION@ with the release version. -->
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>masseuse-camlink</string>
+	<key>CFBundleExecutable</key>
+	<string>masseuse-camlink</string>
+	<key>CFBundleIconFile</key>
+	<string>masseuse-camlink</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.masseuse.camlink</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>masseuse-camlink</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- The app has no window of its own: opened, it hands the connector to
+	     a Terminal window and exits, so it must not appear in the Dock. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright 2026 FemLed. Apache License 2.0; bundled ffmpeg LGPL 2.1 (see THIRD_PARTY.md).</string>
+	<!-- Today the camera, microphone and Bluetooth are used by the connector
+	     running under Terminal, which asks in its own name; these are here
+	     for the day the app runs it itself. -->
+	<key>NSCameraUsageDescription</key>
+	<string>masseuse-camlink sends this camera's picture to your masseuse.ai session.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>masseuse-camlink sends this microphone's sound to your masseuse.ai session.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>masseuse-camlink drives your stimulation device (a TENS unit) over Bluetooth during a session.</string>
+</dict>
+</plist>

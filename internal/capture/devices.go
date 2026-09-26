@@ -38,14 +38,24 @@ type Device struct {
 // ErrNoFFmpeg is returned when ffmpeg cannot be found.
 var ErrNoFFmpeg = errors.New("capture: ffmpeg not found")
 
-// FindFFmpeg resolves the ffmpeg executable: path as given, or "ffmpeg" on
-// PATH plus the usual install locations.
+// FindFFmpeg resolves the ffmpeg executable: path as given; else the one
+// shipped beside this program, if any (the macOS application bundle carries
+// it in Contents/Helpers; a folder would carry it next to the executable);
+// else "ffmpeg" on PATH plus the usual install locations.
 func FindFFmpeg(path string) (string, error) {
 	if path != "" {
 		if p, err := exec.LookPath(path); err == nil {
 			return p, nil
 		}
 		return "", fmt.Errorf("%w at %s", ErrNoFFmpeg, path)
+	}
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		if p := bundledFFmpeg(exe, runtime.GOOS, isFile); p != "" {
+			return p, nil
+		}
 	}
 	if p, err := exec.LookPath("ffmpeg"); err == nil {
 		return p, nil
@@ -58,11 +68,39 @@ func FindFFmpeg(path string) (string, error) {
 		candidates = append(candidates, filepath.Join(la, "Microsoft", "WinGet", "Links", "ffmpeg.exe"))
 	}
 	for _, p := range candidates {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		if isFile(p) {
 			return p, nil
 		}
 	}
 	return "", ErrNoFFmpeg
+}
+
+// bundledFFmpeg is the ffmpeg shipped with the program at exe, or "": in a
+// macOS application bundle (exe in Contents/MacOS) it is
+// Contents/Helpers/ffmpeg; anywhere, ffmpeg (ffmpeg.exe on Windows) next to
+// the executable. exists says whether a path is a file.
+func bundledFFmpeg(exe, goos string, exists func(string) bool) string {
+	dir := filepath.Dir(exe)
+	name := "ffmpeg"
+	if goos == "windows" {
+		name += ".exe"
+	}
+	var candidates []string
+	if goos == "darwin" && filepath.Base(dir) == "MacOS" && filepath.Base(filepath.Dir(dir)) == "Contents" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(dir), "Helpers", name))
+	}
+	candidates = append(candidates, filepath.Join(dir, name))
+	for _, p := range candidates {
+		if exists(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func isFile(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 // InstallHint says how to install ffmpeg on this system.

@@ -30,24 +30,28 @@ are acknowledged within three business days.
   and pins the enclave's TLS key to the one bound into that attestation.
 - Its identity is an Ed25519 key stored with mode 0600 in its state
   directory. Deleting the directory revokes every pairing.
-- If a supported electrical stimulation device is plugged into the same
-  computer (today the ErosTek MK-312BT over its serial cable), the connector
-  relays the service's commands to it and its status back, over the same
-  authenticated channel it uses for camera dials; the camera tunnel carries
-  none of it. The connector holds the device to bounds the service cannot
-  change: Channel A only, one step per quarter second with a read-back,
-  patterns from a fixed allow-list, the level never past the device's own
-  99. Two bounds within those are the attached session's to set from the
-  phone and are restored to the defaults when it detaches: the power range
-  the device is armed in (normal or high; high by default) and the highest
-  level a command may set (85 by default). The device is armed only while a
-  session started on your phone is attached, for at most 30 minutes per
-  renewal, and is put back to zero (front panel live, normal power) when the
-  session ends, when the service goes 15 s without acknowledging a
-  heartbeat, when a command fails, when the device stops answering, and
-  when the connector exits. Ctrl-C and the device's own power switch stop it
-  at any time. The serial probe listens before it writes, so ports that
-  belong to other devices are not written to.
+- If a supported electrical stimulation device is within reach of the same
+  computer (the reference device is the Mastago TENS unit, over Bluetooth
+  Low Energy), the connector relays the service's commands to it and its
+  status back, over the same authenticated channel it uses for camera
+  dials; the camera tunnel carries none of it. The connector holds the
+  device to bounds the service cannot change: one channel, one intensity
+  step per 0.4 s with a read-back, programs from the device's own fixed
+  list, the intensity never past the device's own scale (25 on the
+  Mastago). The bounds within those are the attached session's to set from
+  the phone and are restored to the defaults when it detaches: the highest
+  intensity a command may set (15 of 25 by default on the Mastago) and, on
+  a device with several power ranges, the range it is armed in. The device
+  is armed only while a session started on your phone is attached, for at
+  most 30 minutes per renewal, and is put back to zero (output stopped, the
+  device's own controls live) when the session ends, when the service goes
+  15 s without acknowledging a heartbeat, when a command fails, when the
+  device stops answering, and when the connector exits. Arming also sets
+  the device's own countdown, where it has one, to the arm window, so the
+  device stops by itself if the connector dies. Ctrl-C and the device's own
+  power button stop it at any time. The Bluetooth finder connects only to a
+  peripheral that offers the device's own service or advertises its name,
+  and takes it as found only once it answers a program query.
 
 ## Supply chain
 

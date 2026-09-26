@@ -21,8 +21,9 @@ import (
 	"go.bug.st/serial"
 )
 
-// FTDIVendor is the USB vendor id of the FTDI parts in the serial cables the
-// supported devices ship with (FT232R 0403:6001, FT231X 0403:6015).
+// FTDIVendor is the USB vendor id of the FTDI parts (FT232R 0403:6001,
+// FT231X 0403:6015) found in the serial link cables stimulation devices
+// with a serial port ship with; a scan probes those adapters first.
 const FTDIVendor = 0x0403
 
 // Config is how a port is opened: 8 data bits, no parity, one stop bit, no
@@ -101,7 +102,7 @@ func (p *port) ResetInput() error { return p.Port.ResetInputBuffer() }
 
 // Candidate is a serial port that may lead to a device.
 type Candidate struct {
-	// Path opens it: /dev/cu.usbserial-AB0JQ5W9 on macOS, /dev/ttyUSB0 on
+	// Path opens it: /dev/cu.usbserial-A1B2C3D4 on macOS, /dev/ttyUSB0 on
 	// Linux, COM5 on Windows.
 	Path string
 	// VendorID and ProductID are the USB ids when the system publishes them;

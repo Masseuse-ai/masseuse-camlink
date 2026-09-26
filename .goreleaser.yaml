@@ -17,13 +17,21 @@
 #     .github/workflows/release.yml checks that these are.)
 #
 # The darwin connector binaries are additionally signed with FemLed's Apple
-# Developer ID (Team ID B8Z4RP3846) and notarized, so macOS runs them
-# without a Gatekeeper warning. The signature is the one per-build input:
-# `cmd/machostrip` removes it, and the rest of the binary is byte for byte
-# the proxy build (VERIFY.md, "The macOS binaries"; the `reproduce` job
+# Developer ID (Team ID B8Z4RP3846) and notarized, so macOS runs them from
+# Terminal without a Gatekeeper warning. The signature is the one per-build
+# input: `cmd/machostrip` removes it, and the rest of the binary is byte for
+# byte the proxy build (VERIFY.md, "The macOS binaries"; the `reproduce` job
 # checks this too). The signing identity and notary credentials come from
 # repository secrets; without them (a fork, a local snapshot) the step is
 # skipped and the darwin binaries ship unsigned.
+#
+# The Mac download itself is not goreleaser's: the release workflow's
+# `macos-app` job takes the two darwin archives published here, joins their
+# binaries into a universal `masseuse-camlink.app` with ffmpeg inside, signs,
+# notarizes and staples the app and the disk image around it
+# (`masseuse-camlink_<version>_darwin_all.dmg`), and adds them to the release
+# with `checksums-darwin.txt`, its signature bundle and `darwin.intoto.jsonl`
+# (packaging/macos/README.md; VERIFY.md, "The macOS app").
 version: 2
 project_name: masseuse-camlink
 
@@ -167,8 +175,17 @@ release:
     (`checksums.txt.sigstore.json`). `multiple.intoto.jsonl` is SLSA
     provenance for all of them. The container image
     `ghcr.io/femled/masseuse-camlink:{{ .Tag }}` is signed by digest and
-    carries an SBOM and its own provenance. See VERIFY.md for the commands
-    and for rebuilding the binaries byte for byte.
+    carries an SBOM and its own provenance.
+
+    **Mac users:** the download is `masseuse-camlink_{{ .Version }}_darwin_all.dmg`
+    (Apple silicon and Intel; open it, drag masseuse-camlink to Applications,
+    open it from there). It is added to this release by the workflow's
+    `macos-app` job a few minutes after the archives, signed with FemLed's
+    Apple Developer ID, notarized and stapled, with ffmpeg inside; it is
+    listed with the ffmpeg source tarballs in `checksums-darwin.txt`, signed
+    the same way (`checksums-darwin.txt.sigstore.json`), with provenance in
+    `darwin.intoto.jsonl`. See VERIFY.md for the commands and for rebuilding
+    the binaries byte for byte.
 
 changelog:
   use: github

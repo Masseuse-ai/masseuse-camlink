@@ -7,23 +7,23 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mk312"
 	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
-	"github.com/FemLed/masseuse-camlink/internal/serialport"
 )
 
-// estimLink serves the stimulation device plugged into this computer
-// (docs/PROTOCOL.md, section 7): it finds the device, holds it released
-// until the service attaches a live session, relays that session's bounded
-// commands and reports status and telemetry through the rendezvous client.
-// Nothing about it needs turning on: a supported device that is plugged in
-// is served for whatever session uses this connector.
+// estimLink serves the stimulation device reachable from this computer
+// (docs/PROTOCOL.md, section 7): it finds the device through the registered
+// device families (drivers.go), holds it released until the service
+// attaches a live session, relays that session's bounded commands and
+// reports status and telemetry through the rendezvous client. Nothing
+// about it needs turning on: a supported device that is switched on
+// nearby is served for whatever session uses this connector.
 type estimLink struct {
+	finders estim.Finders
 	rt      *estim.Runtime
 	session *estim.Session
 	client  *rendezvous.Client
@@ -35,37 +35,35 @@ type estimLink struct {
 	ctx      context.Context
 }
 
-// newEstimLink prepares the link. port, when set, names the one serial
-// port to use instead of scanning.
-func newEstimLink(stateDir, port string, log *slog.Logger, out func(string, ...any)) *estimLink {
+// newEstimLink prepares the link over the device families the flags leave
+// on.
+func newEstimLink(stateDir string, log *slog.Logger, out func(string, ...any)) *estimLink {
 	l := &estimLink{log: log, out: out}
-	store := mk312.FileKeyStore{Path: filepath.Join(stateDir, "mk312-key")}
-	l.rt = &estim.Runtime{
-		Connect: func(ctx context.Context) (estim.Driver, error) {
-			d, err := mk312.Scan(ctx, port, store, log)
-			if err != nil {
-				return nil, err
-			}
-			return d, nil
-		},
-		Log: log,
-	}
+	l.finders = deviceFinders(finderConfig{stateDir: stateDir, log: log})
+	l.rt = &estim.Runtime{Connect: l.finders.Find, Log: log}
 	l.rt.OnDevice = l.deviceChanged
 	l.session = &estim.Session{Runtime: l.rt, Uplink: l, Log: log}
 	return l
 }
 
 // run supervises the device and the session until ctx ends; both release
-// the device on the way out.
+// the device on the way out, and the finders let go of what they hold
+// (the Bluetooth central).
 func (l *estimLink) run(ctx context.Context) {
 	l.mu.Lock()
 	l.ctx = ctx
 	l.mu.Unlock()
+	if len(l.finders) == 0 {
+		l.log.Info("estim: every device family is switched off by the flags; no stimulation device is served")
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); l.rt.Run(ctx) }()
 	go func() { defer wg.Done(); l.session.Run(ctx) }()
 	wg.Wait()
+	if err := l.finders.Close(); err != nil {
+		l.log.Debug("estim: closing the device finders", "err", err)
+	}
 }
 
 // context is the link's lifetime, for work started by rendezvous events.
@@ -136,43 +134,30 @@ func (l *estimLink) sessionCleared(sessionID string) {
 	}
 }
 
-// probeEstim is the `estim probe` command: find the device, print what it
-// reports, and leave it released and unkeyed.
-func probeEstim(ctx context.Context, stateDir, port string, log *slog.Logger) int {
-	cands, err := serialport.Candidates(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "serial ports:", err)
+// probeEstim is the `estim probe` command: say what each device family can
+// see, find the device, print what it reports, and leave it released.
+func probeEstim(ctx context.Context, stateDir string, log *slog.Logger) int {
+	finders := deviceFinders(finderConfig{stateDir: stateDir, log: log})
+	defer func() { _ = finders.Close() }()
+	if len(finders) == 0 {
+		fmt.Fprintf(os.Stderr, "Every device family is switched off by the flags (%s).\n", strings.Join(familyNames(), ", "))
+		return 2
 	}
-	if port == "" {
-		if len(cands) == 0 {
-			fmt.Println("No USB serial adapter is connected.")
-			fmt.Println("Plug the device's link cable into this computer and switch the device on.")
-			return 1
-		}
-		fmt.Println("USB serial adapters:")
-		for _, c := range cands {
-			note := ""
-			if c.Likely() {
-				note = "  (will be probed)"
-			}
-			fmt.Printf("  %s%s\n", c, note)
-		}
-	}
-	store := mk312.FileKeyStore{Path: filepath.Join(stateDir, "mk312-key")}
-	pctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	pctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	drv, err := mk312.Scan(pctx, port, store, log)
+	if err := finders.Describe(pctx, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "probe:", err)
+	}
+	fmt.Println()
+	drv, err := finders.Find(pctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "probe:", err)
-		switch {
-		case errors.Is(err, mk312.ErrKeyed):
-			fmt.Fprintln(os.Stderr, "The device still holds the key of an earlier session. Switch it off, wait ten seconds, switch it on and run the probe again.")
-		case errors.Is(err, estim.ErrNoDevice):
-			fmt.Fprintln(os.Stderr, "No device answered. Check that it is on, that the link cable is seated, and that nothing else (Bluetooth, another program) has it open.")
+		if errors.Is(err, estim.ErrNoDevice) {
+			fmt.Fprintln(os.Stderr, "No device answered. Check that it is switched on and within reach, and that nothing else has it open.")
 		}
 		return 1
 	}
-	fmt.Printf("Found %s on %s.\n", drv.Label(), drv.Port())
+	fmt.Printf("Found %s (%s).\n", drv.Label(), drv.Port())
 	code := 0
 	if err := drv.Release(pctx); err != nil {
 		fmt.Fprintln(os.Stderr, "release:", err)
@@ -192,7 +177,7 @@ func probeEstim(ctx context.Context, stateDir, port string, log *slog.Logger) in
 		code = 1
 	}
 	if code == 0 {
-		fmt.Println("Released: outputs at zero, front panel live, normal power. The device is ready for a session.")
+		fmt.Println("Released: output stopped and at zero, the device's own controls live. It is ready for a session.")
 	}
 	return code
 }

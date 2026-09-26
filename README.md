@@ -16,14 +16,29 @@ the stream goes from your computer to the enclave inside TLS.
 
 ## Install
 
-Download the archive for your platform from the
-[releases page](https://github.com/FemLed/masseuse-camlink/releases) and
-unpack it anywhere. To send your computer's camera it needs
+On the computer in the room, open [masseuse.ai/computer](https://masseuse.ai/computer):
+it offers the download for that computer (Mac, Windows, Linux), and the app
+on your phone can send it the address. The same files are on the
+[releases page](https://github.com/FemLed/masseuse-camlink/releases).
+
+**Mac.** The download is a disk image, `masseuse-camlink_X.Y.Z_darwin_all.dmg`,
+for Apple silicon and Intel alike. Open it, drag `masseuse-camlink` into
+`Applications`, and open it from there. A Terminal window opens with the
+program running in it: it names the camera and microphone it will use and
+shows the pairing code. ffmpeg is included in the app, so there is nothing
+else to install. Leave the window open while you use it; closing it stops
+the program, and opening the app again while it runs only brings that
+window back. (The `darwin_*` archives still carry the bare binary for
+people who run it from Terminal; run from anywhere but Terminal, macOS
+refuses a bare binary however it is signed, which is what the app is for.)
+
+**Windows and Linux.** Unpack the archive anywhere and run
+`masseuse-camlink` from a terminal. To send the computer's camera it needs
 [ffmpeg](https://ffmpeg.org), which does the capturing and encoding:
 
-- macOS: `brew install ffmpeg`
 - Windows: `winget install Gyan.FFmpeg`, then open a new terminal
 - Linux: `sudo apt install ffmpeg` (or your distribution's package)
+- macOS, when running the bare binary rather than the app: `brew install ffmpeg`
 
 Without ffmpeg the program still runs and can send a home network camera.
 On a NAS or Raspberry Pi the container image does that:
@@ -39,9 +54,14 @@ With Go installed, `go install github.com/FemLed/masseuse-camlink/cmd/masseuse-c
 builds the same code from the module proxy.
 
 Every release is reproducible and signed; see [VERIFY.md](VERIFY.md). The
-macOS binaries are also signed with an Apple Developer ID and notarized, so
-they run without a Gatekeeper warning; VERIFY.md, "The macOS binaries", shows
-how to check the signer and how to compare them with a rebuild all the same.
+macOS app, its disk image and the bare macOS binaries are also signed with
+an Apple Developer ID and notarized: the app and the image open from the
+Finder without a Gatekeeper refusal, and the bare binaries run from
+Terminal. VERIFY.md, "The macOS binaries" and "The macOS app", show how to
+check the signer and how to compare them with a rebuild all the same
+(everything in the app but ffmpeg is byte for byte the published binaries;
+ffmpeg is built from pinned upstream sources by the same public workflow,
+`packaging/ffmpeg/THIRD_PARTY.md`).
 
 ## Use your computer's camera
 
@@ -52,14 +72,16 @@ Identity 3fK9pQ2m… (state in /Users/you/Library/Application Support/masseuse-c
 Camera: Insta360 Link + Yeti Stereo Microphone (1280x720 30 fps, h264_videotoolbox). It is on only while a session reads it.
 
 Pairing code: 7QK4-N2PX
-Enter it in the masseuse.ai app: Camera > Computer or home camera.
+Type it into the masseuse.ai app on your phone when it asks for the code from your computer; the dash is added for you.
 ```
 
-Type the code into the app once. The app then shows the camera by name, with
-a button, **Use this camera**, that points the session at it. From then on
-the program keeps a quiet connection to masseuse.ai and, whenever a session
-uses the camera, turns it on and sends the picture for as long as the session
-lasts:
+Type the code into the app once, when its setup asks for the code from your
+computer (eight letters and numbers; the dash is drawn for you). The app then
+shows the camera by name, and the session takes this camera on its own once
+the private room is ready (the app's Setup sheet can hand the view back to
+the phone, or to this camera again). From then on the program keeps a quiet
+connection to masseuse.ai and, whenever a session uses the camera, turns it
+on and sends the picture for as long as the session lasts:
 
 ```
 Camera link active: connected to the verified enclave.
@@ -158,53 +180,56 @@ whenever the dead connection is noticed.
 
 ## Your stimulation device
 
-If an electrical stimulation device the connector supports is plugged into
-the same computer, the connector serves it too: the service that runs your
-session sees its status and can adjust it, within limits the connector
-holds to. Supported today: the ErosTek MK-312BT over its serial link cable
-(the FTDI USB adapter it ships with). Nothing to set up: plug the cable in,
-switch the device on, and start the connector. It says
+If an electrical stimulation device the connector supports is within reach
+of the same computer, the connector serves it too: the service that runs
+your session sees its status and can adjust it, within limits the connector
+holds to. The reference device is the Mastago TENS unit (the Bluetooth
+unit that advertises as `MASTOGO G-xxxx`). Nothing to set up: switch the
+unit on and start the connector; the first time, macOS asks whether the
+terminal may use Bluetooth. The connector finds the unit whether it is
+advertising or already open in the vendor's own app on this computer, and
+says
 
 ```
-Stimulation device connected: ErosTek MK-312BT. It is held at zero until a session on your phone uses this computer.
+Stimulation device connected: Mastago TENS G-12AB. It is held at zero until a session on your phone uses this computer.
 ```
 
-and holds the device at zero, with its front panel live and its power range
-at normal, until a session on your phone uses this connector. That session
-arms it; the arm lasts as long as the session keeps answering, and the
-connector puts the device back to zero when the session ends, when the
-service goes quiet for 15 s, when any command fails, when the device stops
-answering, and when you stop the connector (Ctrl-C). Two of the bounds are
-yours to set for a session, from the phone: the power range the device is
-armed in (normal or high; high until you choose) and the highest level it
-may be set to (85 of the device's 99 until you choose; never more than 99).
-They hold for that session only; the next starts from the defaults. If you
-change them while the device is running and it cannot take the change in
-place (a different power range, or a maximum below where it is), the
-connector puts the device to zero first and arms it again within the new
-bounds. Everything else is fixed: the connector never touches Channel B,
-moves the level one step at a time, and selects only patterns from a fixed
-list. The service can only ask for what the connector allows; those limits
-are in this program's source, not on the service.
+and holds the unit paused at zero, with its own buttons live, until a
+session on your phone uses this connector. That session arms it, which also
+sets the unit's own countdown to the arm window (30 minutes, renewed while
+the session keeps answering), so the unit stops by itself if this computer
+dies with it armed. The connector puts the unit back to zero when the
+session ends, when the service goes quiet for 15 s, when any command fails,
+when the unit stops answering or switches itself off, and when you stop the
+connector (Ctrl-C). One bound is yours to set for a session, from the
+phone: the highest intensity the unit may be set to (15 of its 25 until you
+choose; never more than 25). It holds for that session only; the next starts
+from the default. If you lower it below where the unit is running, the
+connector puts the unit to zero first and arms it again within the new
+bound. Everything else is fixed: the connector moves the intensity one step
+at a time, reading it back at every step, selects only the unit's own 32
+programs, and refuses an intensity the unit itself refuses because the
+pads are not on the skin. The service can only ask for what the connector
+allows; those limits are in this program's source, not on the service.
 
-To check the device without a session:
+To check the unit without a session:
 
 ```sh
 masseuse-camlink estim probe
 ```
 
-lists the USB serial adapters, finds the device, prints what it reports and
-leaves it released. If the connector picks the wrong adapter, name the right
-one with `-estim-port /dev/cu.usbserial-XXXX` (macOS), `/dev/ttyUSB0`
-(Linux) or `COM5` (Windows). A device that "holds the key of an earlier
-session" was left mid-conversation by a program that stopped without
-closing: switch it off for ten seconds and on again. On Linux your user
-needs access to the serial device (usually the `dialout` group).
+says what the connector can see over Bluetooth (units already open in
+another program, units advertising), finds the unit, prints what it reports
+and leaves it released. With several units in reach, name yours with
+`-estim-ble G-12AB` (the suffix the unit advertises); `-estim-ble off`
+leaves Bluetooth alone. On Linux the connector talks to BlueZ over D-Bus,
+so your user needs to be allowed to use Bluetooth (usually the `bluetooth`
+group); on Windows there is no Bluetooth backend yet.
 
 What travels between the connector and the service for this is described in
 [docs/PROTOCOL.md](docs/PROTOCOL.md), section 7. It does not go through the
 camera tunnel and the enclave never sees it. The connector names the device
-family it serves with a fixed `kind` (`mk312bt` today; `estim-2b`,
+family it serves with a fixed `kind` (`mastago`; `estim-2b`,
 `dglabs-coyote` and `tens` are reserved for the E-Stim Systems 2B, the
 DG-Lab Coyote and other TENS units, without a driver yet), and the service
 shapes the session on that name: a session with no device is guided

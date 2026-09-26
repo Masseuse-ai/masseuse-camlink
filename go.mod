@@ -5,6 +5,8 @@ go 1.27.1
 require (
 	github.com/bluenviron/gortsplib/v5 v5.6.5
 	github.com/coder/websocket v1.8.14
+	github.com/ebitengine/purego v0.11.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/pion/rtp v1.10.5
 	github.com/sigstore/protobuf-specs v0.5.1
 	github.com/sigstore/sigstore-go v1.3.0

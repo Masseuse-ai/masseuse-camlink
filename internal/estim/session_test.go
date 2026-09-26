@@ -11,9 +11,13 @@ import (
 	"time"
 
 	"github.com/FemLed/masseuse-camlink/internal/estim"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mk312"
-	"github.com/FemLed/masseuse-camlink/internal/estim/mk312/fakebox"
+	"github.com/FemLed/masseuse-camlink/internal/estim/mastago/fakeunit"
 )
+
+// The Session's protocol with the service, over a fake Mastago unit
+// (unitRuntime, runtime_mastago_test.go): 25 levels, 15 until a session
+// sets its maximum, one power range (named `normal`), a countdown set by
+// the arm.
 
 type sent struct {
 	sessionID string
@@ -89,16 +93,16 @@ func findLast(batches []sent, typ string) map[string]any {
 	return last
 }
 
-func newSession(t *testing.T) (*estim.Session, *estim.Runtime, *fakebox.Box, *fakeUplink) {
+func newSession(t *testing.T) (*estim.Session, *estim.Runtime, *fakeunit.Unit, *fakeUplink) {
 	t.Helper()
-	box := fakebox.New()
-	rt, _ := boxRuntime(t, box)
+	u := fakeunit.New("id-1", "MASTOGO G-12AB")
+	rt := unitRuntime(t, u)
 	if err := rt.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	up := &fakeUplink{}
 	s := &estim.Session{Runtime: rt, Uplink: up}
-	return s, rt, box, up
+	return s, rt, u, up
 }
 
 func control(payload string) json.RawMessage {
@@ -107,14 +111,14 @@ func control(payload string) json.RawMessage {
 
 func TestSessionAttachArmsAndReportsState(t *testing.T) {
 	ctx := context.Background()
-	s, rt, box, up := newSession(t)
-	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1","levelCap":85,"allowedModes":[118]}`))
+	s, rt, u, up := newSession(t)
+	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1","levelCap":15,"allowedModes":[4]}`))
 	s.Wait()
 	if sid, ok := s.Attached(); !ok || sid != "sess-1" {
 		t.Fatal("not attached")
 	}
-	if !rt.Armed() || box.Power() != mk312.PowerHigh {
-		t.Fatal("attach must arm")
+	if !rt.Armed() || u.TimerS() < 19*60 {
+		t.Fatalf("attach must arm and set the countdown: armed=%v timer=%d", rt.Armed(), u.TimerS())
 	}
 	got := up.drain(ctx, s)
 	// State before arming and the settings in force, then state after:
@@ -129,7 +133,7 @@ func TestSessionAttachArmsAndReportsState(t *testing.T) {
 			t.Fatalf("batch for %q", b.sessionID)
 		}
 	}
-	if settings := find(got, "device_settings"); settings["powerMode"] != "high" || settings["levelMax"] != 85.0 {
+	if settings := find(got, "device_settings"); settings["powerMode"] != "normal" || settings["levelMax"] != 15.0 {
 		t.Fatalf("settings = %v", settings)
 	}
 	last := got[len(got)-1].messages
@@ -138,38 +142,39 @@ func TestSessionAttachArmsAndReportsState(t *testing.T) {
 		t.Fatalf("armed = %v", armed)
 	}
 	status := last[len(last)-2]["status"].(map[string]any)
-	if status["connected"] != true || status["power"] != "high" || status["levelA"] != 0.0 {
+	if status["connected"] != true || status["power"] != "normal" || status["levelA"] != 0.0 || status["outputting"] != false || status["loadDetected"] != true || status["timerRemainingS"] == nil {
 		t.Fatalf("status = %v", status)
 	}
 }
 
 func TestSessionSettings(t *testing.T) {
 	ctx := context.Background()
-	s, rt, box, up := newSession(t)
+	s, rt, u, up := newSession(t)
+	defaults := estim.Settings{PowerMode: "normal", LevelMax: 15}
 	// Settings before any session attach go nowhere.
-	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":60}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":10}`))
 	s.Wait()
-	if got := up.drain(ctx, s); len(got) != 0 || rt.Settings() != estim.DefaultSettings() {
+	if got := up.drain(ctx, s); len(got) != 0 || rt.Settings() != defaults {
 		t.Fatalf("settings without a session: %v %+v", types(got), rt.Settings())
 	}
 	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
 	s.Wait()
 	up.drain(ctx, s)
-	if box.Power() != mk312.PowerHigh {
-		t.Fatal("the defaults arm high")
+	if !rt.Armed() || rt.Settings() != defaults {
+		t.Fatalf("the defaults arm: armed=%v settings=%+v", rt.Armed(), rt.Settings())
 	}
 
-	// The session's settings while armed at zero: a power change releases
-	// and arms again, in the new range; the service hears the settings and
-	// the state.
-	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":60}`))
+	// The session's settings while armed at zero: a power range change
+	// releases and arms again (the arm is what selects the range, even on
+	// a device with one); the service hears the settings and the state.
+	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"high","levelMax":10}`))
 	s.Wait()
 	got := up.drain(ctx, s)
-	if settings := find(got, "device_settings"); settings == nil || settings["powerMode"] != "normal" || settings["levelMax"] != 60.0 {
+	if settings := find(got, "device_settings"); settings == nil || settings["powerMode"] != "high" || settings["levelMax"] != 10.0 {
 		t.Fatalf("settings = %v (all %v)", settings, types(got))
 	}
-	if !rt.Armed() || box.Power() != mk312.PowerNormal || rt.Settings() != (estim.Settings{PowerMode: "normal", LevelMax: 60}) {
-		t.Fatalf("armed=%v power=%d settings=%+v", rt.Armed(), box.Power(), rt.Settings())
+	if !rt.Armed() || rt.Settings() != (estim.Settings{PowerMode: "high", LevelMax: 10}) {
+		t.Fatalf("armed=%v settings=%+v", rt.Armed(), rt.Settings())
 	}
 	// The state after the release, then the state armed again.
 	if a := find(got, "armed"); a == nil || a["armed"] != false {
@@ -180,7 +185,7 @@ func TestSessionSettings(t *testing.T) {
 	}
 
 	// Commands run inside them.
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c1","sessionId":"sess-1","command":{"verb":"set_level","level":61}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c1","sessionId":"sess-1","command":{"verb":"set_level","level":11}}`))
 	got = up.drain(ctx, s)
 	if n := find(got, "device_ack"); n == nil || n["ok"] != false {
 		t.Fatalf("level over the maximum: %v", n)
@@ -189,58 +194,58 @@ func TestSessionSettings(t *testing.T) {
 	s.Handle(ctx, "sess-1", json.RawMessage(`{"type":"heartbeat_ack"}`))
 	s.Wait()
 	up.drain(ctx, s)
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c2","sessionId":"sess-1","command":{"verb":"set_level","level":50}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c2","sessionId":"sess-1","command":{"verb":"set_level","level":8}}`))
 	got = up.drain(ctx, s)
-	if a := find(got, "device_ack"); a == nil || a["ok"] != true || box.LevelA() != 50 {
-		t.Fatalf("set_level 50: %v level=%d", a, box.LevelA())
+	if a := find(got, "device_ack"); a == nil || a["ok"] != true || u.Level() != 8 || !u.Outputting() {
+		t.Fatalf("set_level 8: %v level=%d", a, u.Level())
 	}
 
 	// A maximum above the level applies in place: the device keeps running.
-	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":95}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"high","levelMax":20}`))
 	s.Wait()
 	got = up.drain(ctx, s)
-	if box.LevelA() != 50 || !rt.Armed() {
-		t.Fatalf("raised maximum must not release: level=%d armed=%v", box.LevelA(), rt.Armed())
+	if u.Level() != 8 || !u.Outputting() || !rt.Armed() {
+		t.Fatalf("raised maximum must not release: level=%d armed=%v", u.Level(), rt.Armed())
 	}
-	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 95.0 {
+	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 20.0 {
 		t.Fatalf("settings = %v", settings)
 	}
 	if find(got, "armed") != nil {
 		t.Fatalf("no state report for a change applied in place: %v", types(got))
 	}
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c3","sessionId":"sess-1","command":{"verb":"set_level","level":95}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c3","sessionId":"sess-1","command":{"verb":"set_level","level":20}}`))
 	got = up.drain(ctx, s)
-	if a := find(got, "device_ack"); a == nil || a["ok"] != true || box.LevelA() != 95 {
-		t.Fatalf("set_level 95: %v level=%d", a, box.LevelA())
+	if a := find(got, "device_ack"); a == nil || a["ok"] != true || u.Level() != 20 {
+		t.Fatalf("set_level 20: %v level=%d", a, u.Level())
 	}
 
 	// A maximum below the level: released, then armed again within it.
-	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":40}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_settings","sessionId":"sess-1","powerMode":"high","levelMax":6}`))
 	s.Wait()
 	got = up.drain(ctx, s)
-	if box.LevelA() != 0 || !rt.Armed() || rt.Settings().LevelMax != 40 {
-		t.Fatalf("lowered maximum: level=%d armed=%v settings=%+v", box.LevelA(), rt.Armed(), rt.Settings())
+	if u.Level() != 0 || u.Outputting() || !rt.Armed() || rt.Settings().LevelMax != 6 {
+		t.Fatalf("lowered maximum: level=%d armed=%v settings=%+v", u.Level(), rt.Armed(), rt.Settings())
 	}
-	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 40.0 {
+	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 6.0 {
 		t.Fatalf("settings = %v", settings)
 	}
 
 	// Refused whole: another session's, or values off the scale; the
 	// service is told what stands.
 	for _, bad := range []string{
-		`{"type":"device_settings","sessionId":"other","powerMode":"high","levelMax":50}`,
-		`{"type":"device_settings","sessionId":"sess-1","powerMode":"low","levelMax":50}`,
-		`{"type":"device_settings","sessionId":"sess-1","powerMode":"high","levelMax":100}`,
-		`{"type":"device_settings","sessionId":"sess-1","powerMode":"high"}`,
+		`{"type":"device_settings","sessionId":"other","powerMode":"normal","levelMax":5}`,
+		`{"type":"device_settings","sessionId":"sess-1","powerMode":"low","levelMax":5}`,
+		`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":100}`,
+		`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal"}`,
 	} {
 		s.Handle(ctx, "sess-1", control(bad))
 		s.Wait()
 		got = up.drain(ctx, s)
-		if rt.Settings() != (estim.Settings{PowerMode: "normal", LevelMax: 40}) || box.Power() != mk312.PowerNormal {
+		if rt.Settings() != (estim.Settings{PowerMode: "high", LevelMax: 6}) {
 			t.Fatalf("%s changed the settings: %+v", bad, rt.Settings())
 		}
 		if strings.Contains(bad, `"sessionId":"sess-1"`) {
-			if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 40.0 {
+			if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 6.0 {
 				t.Fatalf("%s: the settings in force must be re-reported: %v", bad, types(got))
 			}
 		} else if len(got) != 0 {
@@ -248,48 +253,48 @@ func TestSessionSettings(t *testing.T) {
 		}
 	}
 
-	// A detach restores the defaults; the next session starts from them.
+	// A detach restores the device's defaults; the next session starts from them.
 	s.Handle(ctx, "sess-1", json.RawMessage(`{"type":"detach","reason":"companion_replaced"}`))
 	up.drain(ctx, s)
-	if rt.Settings() != estim.DefaultSettings() {
+	if rt.Settings() != defaults {
 		t.Fatalf("settings after detach = %+v", rt.Settings())
 	}
 	s.Handle(ctx, "sess-2", control(`{"type":"companion_attached","sessionId":"sess-2"}`))
 	s.Wait()
 	got = up.drain(ctx, s)
-	if settings := find(got, "device_settings"); settings == nil || settings["powerMode"] != "high" || settings["levelMax"] != 85.0 {
+	if settings := find(got, "device_settings"); settings == nil || settings["powerMode"] != "normal" || settings["levelMax"] != 15.0 {
 		t.Fatalf("settings for the next session = %v", settings)
 	}
-	if box.Power() != mk312.PowerHigh {
-		t.Fatal("the next session arms in the default range")
+	if !rt.Armed() {
+		t.Fatal("the next session arms")
 	}
 	// The same session attaching again keeps what it set.
-	s.Handle(ctx, "sess-2", control(`{"type":"device_settings","sessionId":"sess-2","powerMode":"normal","levelMax":30}`))
+	s.Handle(ctx, "sess-2", control(`{"type":"device_settings","sessionId":"sess-2","powerMode":"normal","levelMax":12}`))
 	s.Wait()
 	up.drain(ctx, s)
 	s.Handle(ctx, "sess-2", control(`{"type":"companion_attached","sessionId":"sess-2"}`))
 	s.Wait()
 	got = up.drain(ctx, s)
-	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 30.0 {
+	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 12.0 {
 		t.Fatalf("settings on re-attach = %v", settings)
 	}
 	// Another session attaching starts from the defaults again.
 	s.Handle(ctx, "sess-3", control(`{"type":"companion_attached","sessionId":"sess-3"}`))
 	s.Wait()
 	got = up.drain(ctx, s)
-	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 85.0 || rt.Settings() != estim.DefaultSettings() {
+	if settings := find(got, "device_settings"); settings == nil || settings["levelMax"] != 15.0 || rt.Settings() != defaults {
 		t.Fatalf("settings for a third session = %v", settings)
 	}
 }
 
 func TestSessionCommandsAckAndNack(t *testing.T) {
 	ctx := context.Background()
-	s, rt, box, up := newSession(t)
+	s, rt, u, up := newSession(t)
 	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
 	s.Wait()
 	up.drain(ctx, s)
 
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c1","sessionId":"sess-1","command":{"verb":"set_level","channel":"a","level":9}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c1","sessionId":"sess-1","command":{"verb":"set_level","channel":"a","level":9}}`))
 	got := up.drain(ctx, s)
 	ack := find(got, "device_ack")
 	if ack == nil || ack["commandId"] != "c1" || ack["ok"] != true {
@@ -298,33 +303,33 @@ func TestSessionCommandsAckAndNack(t *testing.T) {
 	if res := ack["result"].(map[string]any); res["verb"] != "set_level" || res["level"] != 9.0 {
 		t.Fatalf("result = %v", res)
 	}
-	if st := ack["status"].(map[string]any); st["levelA"] != 9.0 {
+	if st := ack["status"].(map[string]any); st["levelA"] != 9.0 || st["outputting"] != true {
 		t.Fatalf("ack status = %v", st)
 	}
 	if ts := types(got); len(ts) != 3 || ts[1] != "device_status" || ts[2] != "armed" {
 		t.Fatalf("ack must be followed by the runtime state: %v", ts)
 	}
-	if box.LevelA() != 9 {
+	if u.Level() != 9 || !u.Outputting() {
 		t.Fatal("device not at 9")
 	}
 
 	// A command for another session is refused; release is not.
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c2","sessionId":"other","command":{"verb":"set_level","level":1}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c2","sessionId":"other","command":{"verb":"set_level","level":1}}`))
 	got = up.drain(ctx, s)
 	if n := find(got, "device_ack"); n == nil || n["ok"] != false || n["error"] != "live session ID mismatch" {
 		t.Fatalf("mismatch nack = %v", n)
 	}
-	if box.LevelA() != 9 {
+	if u.Level() != 9 {
 		t.Fatal("mismatched command ran")
 	}
 
 	// A command that fails caps is nacked and the device released.
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c3","sessionId":"sess-1","command":{"verb":"set_level","level":86}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c3","sessionId":"sess-1","command":{"verb":"set_level","level":16}}`))
 	got = up.drain(ctx, s)
 	if n := find(got, "device_ack"); n == nil || n["ok"] != false {
 		t.Fatalf("cap nack = %v", n)
 	}
-	if box.LevelA() != 0 || rt.Armed() {
+	if u.Level() != 0 || u.Outputting() || rt.Armed() {
 		t.Fatal("a failed command must release")
 	}
 	// The next heartbeat acknowledgment arms again for the attached session.
@@ -336,15 +341,36 @@ func TestSessionCommandsAckAndNack(t *testing.T) {
 	up.drain(ctx, s)
 
 	// Malformed commands are nacked with the reason.
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c4","sessionId":"sess-1","command":{"verb":"set_level","level":"9"}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c4","sessionId":"sess-1","command":{"verb":"set_level","level":"9"}}`))
 	got = up.drain(ctx, s)
 	if n := find(got, "device_ack"); n == nil || n["ok"] != false || n["commandId"] != "c4" {
 		t.Fatalf("malformed nack = %v", n)
 	}
-	// Release verb: outputs down, latch set, acked.
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c5","sessionId":"sess-1","command":{"verb":"set_level","level":3}}`))
+	// A command the unit itself refuses (a step with the electrodes off
+	// the skin) is nacked with the unit's reason, and the device released.
+	s.Handle(ctx, "sess-1", json.RawMessage(`{"type":"heartbeat_ack"}`))
 	s.Wait()
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c6","sessionId":"sess-1","command":{"verb":"release"}}`))
+	up.drain(ctx, s)
+	u.SetLoad(false)
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c4b","sessionId":"sess-1","command":{"verb":"set_level","level":3}}`))
+	got = up.drain(ctx, s)
+	if n := find(got, "device_ack"); n == nil || n["ok"] != false || !strings.Contains(fmt.Sprint(n["error"]), "electrodes are not on the skin") {
+		t.Fatalf("no-contact nack = %v", n)
+	}
+	if st, _ := find(got, "device_ack")["status"].(map[string]any); st["loadDetected"] != false {
+		t.Fatalf("the nack's status must say the pads are off: %v", st)
+	}
+	if u.Outputting() || rt.Armed() {
+		t.Fatal("a refused command must release")
+	}
+	u.SetLoad(true)
+	s.Handle(ctx, "sess-1", json.RawMessage(`{"type":"heartbeat_ack"}`))
+	s.Wait()
+	up.drain(ctx, s)
+	// Release verb: outputs down, latch set, acked.
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c5","sessionId":"sess-1","command":{"verb":"set_level","level":3}}`))
+	s.Wait()
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c6","sessionId":"sess-1","command":{"verb":"release"}}`))
 	got = up.drain(ctx, s)
 	var acks []map[string]any
 	for _, b := range got {
@@ -357,33 +383,38 @@ func TestSessionCommandsAckAndNack(t *testing.T) {
 	if len(acks) != 2 || acks[1]["ok"] != true || acks[1]["result"].(map[string]any)["released"] != true {
 		t.Fatalf("acks = %v", acks)
 	}
-	if box.LevelA() != 0 || rt.Armed() {
+	if u.Level() != 0 || u.Outputting() || rt.Armed() {
 		t.Fatal("release verb did not release")
 	}
 }
 
 type gate struct {
 	estim.Driver
+	entered chan struct{}
 	release chan struct{}
 }
 
 func (g gate) Execute(ctx context.Context, cmd estim.Command, levelMax int, cancelled func() bool) (estim.Result, error) {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
 	<-g.release
 	return g.Driver.Execute(ctx, cmd, levelMax, cancelled)
 }
 
 func TestSessionOneCommandAtATime(t *testing.T) {
 	ctx := context.Background()
-	box := fakebox.New()
-	rt, _ := boxRuntime(t, box)
+	rt := unitRuntime(t, fakeunit.New("id-1", "MASTOGO G-12AB"))
 	inner := rt.Connect
+	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	rt.Connect = func(ctx context.Context) (estim.Driver, error) {
 		d, err := inner(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return gate{d, release}, nil
+		return gate{d, entered, release}, nil
 	}
 	if err := rt.Open(ctx); err != nil {
 		t.Fatal(err)
@@ -393,8 +424,14 @@ func TestSessionOneCommandAtATime(t *testing.T) {
 	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
 	s.Wait()
 	up.drain(ctx, s)
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"slow","sessionId":"sess-1","command":{"verb":"set_level","level":2}}`))
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"second","sessionId":"sess-1","command":{"verb":"set_level","level":3}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"slow","sessionId":"sess-1","command":{"verb":"set_level","level":2}}`))
+	// The slow command holds the device once it reaches the driver.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slow command never reached the driver")
+	}
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"second","sessionId":"sess-1","command":{"verb":"set_level","level":3}}`))
 	s.Flush(ctx)
 	up.mu.Lock()
 	got := up.sent
@@ -417,14 +454,14 @@ func TestSessionOneCommandAtATime(t *testing.T) {
 
 func TestSessionStaleAckReleasesAndDetaches(t *testing.T) {
 	ctx := context.Background()
-	s, rt, box, up := newSession(t)
+	s, rt, u, up := newSession(t)
 	now := time.Now()
 	s.Now = func() time.Time { return now }
 	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
 	s.Wait()
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c1","sessionId":"sess-1","command":{"verb":"set_level","level":4}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c1","sessionId":"sess-1","command":{"verb":"set_level","level":4}}`))
 	up.drain(ctx, s)
-	if box.LevelA() != 4 {
+	if u.Level() != 4 {
 		t.Fatal("setup")
 	}
 	// Heartbeats keep flowing while acknowledgments are fresh.
@@ -436,14 +473,14 @@ func TestSessionStaleAckReleasesAndDetaches(t *testing.T) {
 	if ts := types(got); len(ts) < 3 || ts[0] != "heartbeat" {
 		t.Fatalf("heartbeat batch = %v", ts)
 	}
-	if _, ok := s.Attached(); !ok || box.LevelA() != 4 {
+	if _, ok := s.Attached(); !ok || u.Level() != 4 {
 		t.Fatal("fresh ack must keep the session")
 	}
 	// Sixteen seconds without one: released, detached, and the service told.
 	now = now.Add(16 * time.Second)
 	s.HeartbeatForTest(ctx)
 	got = up.drain(ctx, s)
-	if _, ok := s.Attached(); ok || box.LevelA() != 0 || rt.Armed() {
+	if _, ok := s.Attached(); ok || u.Level() != 0 || u.Outputting() || rt.Armed() {
 		t.Fatal("stale ack must release and detach")
 	}
 	d := find(got, "detached")
@@ -459,19 +496,22 @@ func TestSessionStaleAckReleasesAndDetaches(t *testing.T) {
 
 func TestSessionServiceDetachAndDeviceReports(t *testing.T) {
 	ctx := context.Background()
-	s, rt, box, up := newSession(t)
+	s, rt, u, up := newSession(t)
 	s.DeviceChanged(ctx, rt.Descriptor())
 	got := up.drain(ctx, s)
 	if len(got) != 1 || got[0].sessionID != "" {
 		t.Fatalf("device report must be connector-level: %+v", got)
 	}
 	dev := got[0].messages[0]
-	if dev["type"] != "device" || dev["kind"] != "mk312bt" || dev["connected"] != true || dev["label"] != mk312.Label {
+	if dev["type"] != "device" || dev["kind"] != "mastago" || dev["connected"] != true || dev["label"] != "Mastago TENS G-12AB" {
 		t.Fatalf("device = %v", dev)
 	}
 	caps := dev["capabilities"].(map[string]any)
-	if caps["levelMax"] != 99.0 || caps["tempo"] != true || len(caps["modes"].([]any)) != 11 {
+	if caps["levelMax"] != 25.0 || caps["levelMaxDefault"] != 15.0 || caps["tempo"] != false || caps["timer"] != true || caps["loadDetect"] != true || len(caps["modes"].([]any)) != 32 {
 		t.Fatalf("capabilities = %v", caps)
+	}
+	if _, ok := caps["powerModes"]; ok {
+		t.Fatalf("a device with one power range names none: %v", caps)
 	}
 
 	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
@@ -480,23 +520,24 @@ func TestSessionServiceDetachAndDeviceReports(t *testing.T) {
 	// The service closing the link: release without a detached message.
 	s.Handle(ctx, "sess-1", json.RawMessage(`{"type":"detach","reason":"companion_replaced"}`))
 	got = up.drain(ctx, s)
-	if _, ok := s.Attached(); ok || rt.Armed() || box.Power() != mk312.PowerNormal {
+	if _, ok := s.Attached(); ok || rt.Armed() || u.Outputting() {
 		t.Fatal("service detach must release")
 	}
 	if find(got, "detached") != nil {
 		t.Fatal("no detached message is sent back to the service that detached")
 	}
 	// Commands after that are refused.
-	s.Handle(ctx, "sess-1", control(`{"type":"mk312_command","commandId":"c9","sessionId":"sess-1","command":{"verb":"set_level","level":1}}`))
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"c9","sessionId":"sess-1","command":{"verb":"set_level","level":1}}`))
 	got = up.drain(ctx, s)
 	if n := find(got, "device_ack"); n == nil || n["ok"] != false {
 		t.Fatalf("nack after detach = %v", n)
 	}
-	// A device lost mid-session reports itself and the arm is off.
+	// A device lost mid-session (the unit switched itself off) reports
+	// itself and the arm is off.
 	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
 	s.Wait()
 	up.drain(ctx, s)
-	box.SetDead(true)
+	u.AutoOff(0)
 	rt.HealthCheck(ctx)
 	s.DeviceChanged(ctx, rt.Descriptor())
 	got = up.drain(ctx, s)

@@ -420,7 +420,7 @@ func (s *Session) handleControl(ctx context.Context, envelopeSession string, p c
 			defer s.wg.Done()
 			s.applySettings(ctx, sid, settings)
 		}()
-	case "mk312_command", "device_command":
+	case "device_command":
 		s.mu.Lock()
 		sid, attached := s.sessionID, s.attached
 		s.mu.Unlock()
