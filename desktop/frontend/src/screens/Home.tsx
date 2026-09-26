@@ -229,7 +229,7 @@ export function Home() {
                 icon={Zap}
                 label="Unit"
                 value={unit?.connected ? unit.label : unit ? unit.label : 'No unit'}
-                note={unit?.connected ? (unit.armed ? `Armed · up to ${unit.armed.levelBound} of ${unit.capabilities.levelMax}` : `${familyName(unit.kind)} · held at zero`) : unit ? 'Disconnected; reconnects on its own' : 'Optional; found on its own when switched on'}
+                note={unit?.connected ? (unit.armed ? `Armed · up to ${unit.armed.levelBound} of ${unit.capabilities.levelMax}` : `${familyName(unit.kind, unit.id)} · held at zero`) : unit ? 'Disconnected; reconnects on its own' : 'Optional; found on its own when switched on'}
                 badge={unit?.connected ? (unit.armed ? { text: 'Armed', variant: 'rose' } : { text: 'Held at zero', variant: 'mint' }) : unit ? { text: 'Disconnected', variant: 'amber' } : undefined}
                 step="unit"
                 disabled={Boolean(unit?.armed)}

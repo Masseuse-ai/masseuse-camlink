@@ -84,7 +84,7 @@ archives:
       - README.md
       - VERIFY.md
       # The unit driver helpers for the archive's platform (docs/UNITS.md),
-      # fetched and verified by packaging/units/fetch.sh into
+      # fetched and verified by packaging/units/fetch-all.sh into
       # units-bin/<os>_<arch>/ by the workflow before goreleaser runs
       # (the darwin archives carry the thin binaries for their
       # architecture; the application bundle takes the universal one). A

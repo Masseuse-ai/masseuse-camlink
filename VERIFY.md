@@ -420,36 +420,41 @@ connector runs as child processes to serve stimulation units whose drivers
 are not in this repository. They are the one part of a download that is
 neither built from this repository nor rebuilt byte for byte here; what
 can be checked is that every helper in a release is exactly one named in
-a manifest signed by masseuse.ai's helpers key, for the helpers version
+a manifest signed by masseuse.ai's helpers key, for the helpers releases
 the tag pins.
 
 The key's public half is `packaging/units/cosign.pub` at the tag, and
-`packaging/units/VERSION` is the helpers version. The manifest and the
-helpers themselves are at `https://masseuse.ai/app/units/<version>/`:
+`packaging/units/VERSION` lists the helpers releases, one per line: each
+line is the release's path under `https://masseuse.ai/app/units/`, a bare
+version (`1.0.3`) or a helper family's prefix and its version
+(`<family>/0.1.0`, a family that publishes its releases apart from the
+first). Each release has its own manifest and signature:
 
 ```sh
-V=$(curl -fsSL https://raw.githubusercontent.com/FemLed/masseuse-camlink/vX.Y.Z/packaging/units/VERSION)
 curl -fsSLO https://raw.githubusercontent.com/FemLed/masseuse-camlink/vX.Y.Z/packaging/units/cosign.pub
-curl -fsSLO "https://masseuse.ai/app/units/$V/manifest.json"
-curl -fsSLO "https://masseuse.ai/app/units/$V/manifest.json.sigstore.json"
-cosign verify-blob --key cosign.pub --bundle manifest.json.sigstore.json manifest.json
-jq -r '.files[] | "\(.os)/\(.arch)  \(.sha256)  \(.name)"' manifest.json
+for R in $(curl -fsSL https://raw.githubusercontent.com/FemLed/masseuse-camlink/vX.Y.Z/packaging/units/VERSION); do
+  curl -fsSL -o "manifest-${R##*/}.json" "https://masseuse.ai/app/units/$R/manifest.json"
+  curl -fsSL -o "manifest-${R##*/}.json.sigstore.json" "https://masseuse.ai/app/units/$R/manifest.json.sigstore.json"
+  cosign verify-blob --key cosign.pub --bundle "manifest-${R##*/}.json.sigstore.json" "manifest-${R##*/}.json"
+  jq -r '.files[] | "\(.os)/\(.arch)  \(.sha256)  \(.name)"' "manifest-${R##*/}.json"
+done
 ```
 
-The manifest names each helper once per operating system and
-architecture, with the hash of the file as published. In the Mac bundle
-the helpers are universal binaries signed with the same Developer ID as
-the app, so they are compared the way the app's executable is, with
-`machostrip`, which removes the signature and hashes each architecture on
-its own; the other side is the thin `darwin/arm64` and `darwin/amd64`
-files, fetched and checked against the manifest by `packaging/units/fetch.sh`
-and stripped the same way (Go's linker gives a darwin/arm64 binary an
-ad-hoc signature, so the thin arm64 file's raw hash is not its stripped
-one):
+A manifest names each of its release's helpers once per operating system
+and architecture, with the hash of the file as published; no helper is
+named by two releases. In the Mac bundle the helpers are universal
+binaries signed with the same Developer ID as the app, so they are
+compared the way the app's executable is, with `machostrip`, which
+removes the signature and hashes each architecture on its own; the other
+side is the thin `darwin/arm64` and `darwin/amd64` files, fetched and
+checked against their manifests by `packaging/units/fetch-all.sh` (every
+pinned release; `fetch.sh` is one release) and stripped the same way
+(Go's linker gives a darwin/arm64 binary an ad-hoc signature, so the thin
+arm64 file's raw hash is not its stripped one):
 
 ```sh
 for arch in arm64 amd64; do
-  sh packaging/units/fetch.sh "$V" darwin "$arch" "units-$arch"   # from the tag's checkout
+  sh packaging/units/fetch-all.sh darwin "$arch" "units-$arch"   # from the tag's checkout
   go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 units-$arch/camlink-unit-*
 done
 hdiutil attach -readonly -nobrowse Masseuse.ai-X.Y.Z.dmg
@@ -468,8 +473,8 @@ is the `windows/amd64` entry (a Go binary's stripped hash is its plain
 one). The archives' helpers carry no signature and hash as they are:
 `unzip -p masseuse-camlink_X.Y.Z_windows_amd64.zip units/camlink-unit-<name>.exe
 | sha256sum` against `windows/amd64`. The release workflow runs the manifest
-check itself (`packaging/units/fetch.sh`) before it bundles anything, so a
-release whose helpers were not the manifest's would not have them, and
+check itself (`packaging/units/fetch-all.sh`) before it bundles anything, so a
+release whose helpers were not the manifests' would not have them, and
 `checksums.txt`, `checksums-darwin.txt` and `checksums-windows.txt` cover
 the archives and the package the helpers sit in, provenance and all.
 

@@ -1,32 +1,44 @@
 #!/bin/sh
-# Fetch the unit driver helpers for one platform from masseuse.ai and verify
-# them (docs/UNITS.md, section 4): the helpers version's manifest and its
-# cosign bundle are downloaded, the bundle is checked against cosign.pub
-# here (the helpers' key, a public PR to change), then each file the
-# manifest lists for OS/ARCH is downloaded and its SHA-256 compared with the
-# manifest's. Anything that does not match is an error and nothing is left
-# in OUTDIR. Nothing here needs a secret; the release workflow runs it on
-# every runner that bundles helpers, and anyone may run it to see what a
-# release bundled.
+# Fetch the unit driver helpers of one helpers release for one platform
+# from masseuse.ai and verify them (docs/UNITS.md, section 4): the release's
+# manifest and its cosign bundle are downloaded, the bundle is checked
+# against cosign.pub here (the helpers' key, a public PR to change), then
+# each file the manifest lists for OS/ARCH is downloaded and its SHA-256
+# compared with the manifest's. Anything that does not match is an error
+# and nothing is left in OUTDIR. Nothing here needs a secret; the release
+# workflow runs it (through fetch-all.sh, for every release
+# packaging/units/VERSION pins) on every runner that bundles helpers, and
+# anyone may run it to see what a release bundled.
 #
-# usage: sh packaging/units/fetch.sh VERSION OS ARCH OUTDIR
-#   VERSION  the helpers version (packaging/units/VERSION), bare: 1.0.0
+# usage: sh packaging/units/fetch.sh RELEASE OS ARCH OUTDIR
+#   RELEASE  one line of packaging/units/VERSION: the release's path under
+#            masseuse.ai/app/units/, a bare version (1.0.0) or a helper
+#            family's prefix and its version (<family>/0.1.0)
 #   OS       darwin, windows or linux
 #   ARCH     all (the universal macOS binaries), amd64, arm64 or arm
 #   OUTDIR   where the helpers land, one file each (camlink-unit-<name>[.exe]);
 #            (re)created
 # environment:
-#   UNITS_BASE_URL  where the versions are served (default
+#   UNITS_BASE_URL  where the releases are served (default
 #                   https://masseuse.ai/app/units); tests point it elsewhere
 # needs: curl, cosign, jq, sha256sum or shasum
 set -eu
 
-version="${1:-}"; os="${2:-}"; arch="${3:-}"; outdir="${4:-}"
-[ -n "$version" ] && [ -n "$os" ] && [ -n "$arch" ] && [ -n "$outdir" ] ||
-  { echo "usage: $0 VERSION OS ARCH OUTDIR" >&2; exit 2; }
+release="${1:-}"; os="${2:-}"; arch="${3:-}"; outdir="${4:-}"
+[ -n "$release" ] && [ -n "$os" ] && [ -n "$arch" ] && [ -n "$outdir" ] ||
+  { echo "usage: $0 RELEASE OS ARCH OUTDIR" >&2; exit 2; }
+# The release is [<family>/]<version>: the family a lower-case word, the
+# version X.Y.Z; nothing else, so the path never leaves the releases.
+version="${release##*/}"
+family="${release%"$version"}"
+case "$family" in
+  "") ;;
+  [a-z]*/) case "${family%/}" in *[!a-z0-9-]*|*/*) echo "release $release is not [family/]X.Y.Z" >&2; exit 2 ;; esac ;;
+  *) echo "release $release is not [family/]X.Y.Z" >&2; exit 2 ;;
+esac
 case "$version" in
   [0-9]*.[0-9]*.[0-9]*) ;;
-  *) echo "version $version is not X.Y.Z" >&2; exit 2 ;;
+  *) echo "release $release is not [family/]X.Y.Z" >&2; exit 2 ;;
 esac
 case "$os" in darwin|windows|linux) ;; *) echo "os must be darwin, windows or linux" >&2; exit 2 ;; esac
 case "$arch" in all|amd64|arm64|arm) ;; *) echo "arch must be all, amd64, arm64 or arm" >&2; exit 2 ;; esac
@@ -38,7 +50,7 @@ if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"; else SHA="shasum 
 here=$(cd "$(dirname "$0")" && pwd)
 pub="$here/cosign.pub"
 [ -f "$pub" ] || { echo "no $pub" >&2; exit 2; }
-base="${UNITS_BASE_URL:-https://masseuse.ai/app/units}/$version"
+base="${UNITS_BASE_URL:-https://masseuse.ai/app/units}/$release"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/camlink-units.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
@@ -47,7 +59,7 @@ fetch() { # URL FILE
   curl -fsSL --retry 3 --retry-delay 5 -o "$2" "$1" || { echo "could not fetch $1" >&2; exit 1; }
 }
 
-echo "==> helpers $version for $os/$arch from $base"
+echo "==> helpers $release for $os/$arch from $base"
 fetch "$base/manifest.json" "$work/manifest.json"
 fetch "$base/manifest.json.sigstore.json" "$work/manifest.json.sigstore.json"
 cosign verify-blob --key "$pub" --bundle "$work/manifest.json.sigstore.json" "$work/manifest.json" >/dev/null 2>"$work/cosign.err" ||
@@ -81,4 +93,4 @@ done < "$work/files.txt"
 rm -rf "$outdir"
 mkdir -p "$outdir"
 cp "$work/out"/* "$outdir/"
-echo "helpers $version for $os/$arch in $outdir: $(ls "$outdir" | tr '\n' ' ')"
+echo "helpers $release for $os/$arch in $outdir: $(ls "$outdir" | tr '\n' ' ')"

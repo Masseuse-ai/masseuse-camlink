@@ -382,15 +382,24 @@ fi
 # public half the tag carries. Releases before v0.10.0 have none.
 raw="https://raw.githubusercontent.com/$REPO/$tag/packaging/units"
 if curl -fsSL -o units-VERSION "$raw/VERSION" 2>/dev/null; then
-  units=$(tr -d '[:space:]' < units-VERSION)
-  echo "==> 10. unit driver helpers $units: manifest signature, and the files in the archives"
+  # One helpers release per line (a bare version, or a family's prefix and
+  # its version), each with its own signed manifest; the files in the
+  # archives are compared with the manifests of all of them together.
+  releases=$(tr -d '\r' < units-VERSION | sed 's/#.*//' | tr -s '[:space:]' '\n' | sed '/^$/d')
+  echo "==> 10. unit driver helpers $(echo "$releases" | tr '\n' ' '): manifest signatures, and the files in the archives"
   fetch_units() { curl -fsSL -o "$2" "$1" || { echo "    could not fetch $1" >&2; exit 1; }; }
   fetch_units "$raw/cosign.pub" units-cosign.pub
-  fetch_units "https://masseuse.ai/app/units/$units/manifest.json" units-manifest.json
-  fetch_units "https://masseuse.ai/app/units/$units/manifest.json.sigstore.json" units-manifest.json.sigstore.json
-  cosign verify-blob --key units-cosign.pub --bundle units-manifest.json.sigstore.json units-manifest.json >/dev/null
-  echo "    ok  manifest.json signed by the helpers' key at $tag"
+  i=0
+  for release in $releases; do
+    i=$((i + 1))
+    fetch_units "https://masseuse.ai/app/units/$release/manifest.json" "units-manifest-$i.json"
+    fetch_units "https://masseuse.ai/app/units/$release/manifest.json.sigstore.json" "units-manifest-$i.json.sigstore.json"
+    cosign verify-blob --key units-cosign.pub --bundle "units-manifest-$i.json.sigstore.json" "units-manifest-$i.json" >/dev/null
+    echo "    ok  $release/manifest.json signed by the helpers' key at $tag"
+  done
   if command -v jq >/dev/null 2>&1; then
+    # Every release's files in one list, for the comparisons below.
+    jq -s '{files: [.[].files[]]}' units-manifest-*.json > units-manifest.json
     # windows/amd64 archive: units/<name>.exe hashes to the manifest's
     # windows/amd64 entry (the archive's helpers are unsigned; the
     # package's are signed and compared below with the signature stripped).

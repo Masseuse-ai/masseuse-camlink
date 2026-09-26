@@ -11,19 +11,23 @@ import type { Descriptor, Unit } from '../bridge/types';
 import { CHOICE_ROW, CHOICE_ROW_DISABLED } from './Card';
 
 /** Whether a unit is reached over a serial cable, by its id or family. */
-export function isSerial(unit: Unit): boolean {
+export function isSerial(unit: Pick<Unit, 'id' | 'kind'>): boolean {
     return unit.id.startsWith('serial:') || /^(\/dev\/|COM\d)/.test(unit.id) || unit.kind === 'mk312bt';
 }
 
-/** The family's name for people, from its kind. */
-export function familyName(kind: string): string {
+/**
+ * The family's name for people, from its kind; for a helper's family the
+ * connector does not know by name, the link it is on (a serial id, else
+ * Bluetooth) is what there is to say.
+ */
+export function familyName(kind: string, id = ''): string {
     switch (kind) {
         case 'mastago':
             return 'Mastago TENS · Bluetooth';
         case 'mk312bt':
             return 'ErosTek MK-312BT · USB serial';
         default:
-            return `${kind} · unit driver helper`;
+            return `Unit driver helper · ${isSerial({ id, kind }) ? 'USB serial' : 'Bluetooth'}`;
     }
 }
 
@@ -43,7 +47,7 @@ export function UnitCard({ unit, serving, disabled = false }: Props) {
             <Icon className="lucide h-5 w-5 shrink-0 text-bone/80" strokeWidth={2.2} />
             <span className="min-w-0 flex-1">
                 <span className="type-body block truncate font-semibold tracking-tight text-bone">{unit.label}</span>
-                <span className="type-caption block text-bone/50">{familyName(unit.kind)}</span>
+                <span className="type-caption block text-bone/50">{familyName(unit.kind, unit.id)}</span>
                 {/* A long word about the unit goes under its name, not beside it, so the name keeps its room. */}
                 {unit.held ? (
                     <span className="mt-1.5 block">

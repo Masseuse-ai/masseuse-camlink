@@ -177,8 +177,12 @@ the failure is a loss, reported as not connected with that reason.
 
 ## 4. Distribution, signing, verification
 
-Helpers are published as their own release, apart from the connector's:
-`https://masseuse.ai/app/units/<version>/` holds, for one helpers version,
+Helpers are published as their own releases, apart from the connector's,
+one release per helper family that publishes on its own:
+`https://masseuse.ai/app/units/<release>/` holds, for one helpers release,
+where `<release>` is a bare version (`1.0.3`, the first family's, at the
+root) or a family's prefix and its version (`<family>/0.1.0`, a
+lower-case word before the version),
 
 - `manifest.json`: `{"version": "<version>", "files": [{"name":
   "camlink-unit-<name>[.exe]", "os": "darwin|windows|linux", "arch":
@@ -192,18 +196,23 @@ Helpers are published as their own release, apart from the connector's:
 - `manifest.json.sigstore.json`: a cosign bundle over the manifest, the
   helpers' signing key's signature with its entry in the Rekor transparency
   log; the key's public half is `packaging/units/cosign.pub` in this
-  repository, and `cosign verify-blob --key cosign.pub --bundle
-  manifest.json.sigstore.json manifest.json` is the check;
+  repository (one key for every family's releases), and `cosign
+  verify-blob --key cosign.pub --bundle manifest.json.sigstore.json
+  manifest.json` is the check;
 - one file per entry, at `<os>_<arch>/<name>`.
 
-`packaging/units/VERSION` in this repository pins the helpers version a
-connector release bundles, and `packaging/units/fetch.sh <version> <os>
-<arch> <outdir>` is how the release workflow gets them: it downloads the
-manifest and its bundle, checks the signature with `cosign verify-blob
---key packaging/units/cosign.pub`, downloads each file for that platform
-and checks its SHA-256 against the manifest, and refuses anything that
-does not match (nothing is left in `<outdir>` then). Nothing in this
-repository needs a secret to build; the release workflow fetches and
+`packaging/units/VERSION` in this repository pins the helpers releases a
+connector release bundles, one `<release>` per line, and
+`packaging/units/fetch-all.sh <os> <arch> <outdir>` is how the release
+workflow gets them: for each release it runs `packaging/units/fetch.sh
+<release> <os> <arch> <dir>`, which downloads the manifest and its bundle,
+checks the signature with `cosign verify-blob --key
+packaging/units/cosign.pub`, downloads each file for that platform and
+checks its SHA-256 against the manifest, and refuses anything that does
+not match; then it puts the releases' helpers together, refusing a helper
+file named by two releases (a release cannot stand in for another's
+helper). Nothing is left in `<outdir>` when anything fails. Nothing in
+this repository needs a secret to build; the release workflow fetches and
 verifies on every runner that packs helpers (`.github/workflows/release.yml`),
 then bundles them: goreleaser packs `units/` into each archive
 (`.goreleaser.yaml`), `packaging/windows/pack -u` signs nothing itself but
@@ -222,9 +231,9 @@ What that gives someone checking a release (VERIFY.md, "Unit driver
 helpers"): the connector binary is reproducible from this repository as
 before, the helpers are not, and every helper in a release is named, with
 its hash, in a manifest signed by one key, so that a helper in the bundle
-can be checked against the published manifest for the version pinned at
+can be checked against the published manifest of the release pinned at
 the tag. The signing key is held by masseuse.ai and used only by the
-helpers' release workflow; a change of key is a change to `cosign.pub`
+helpers' release workflows; a change of key is a change to `cosign.pub`
 in this repository, in the open.
 
 ## 5. Writing a helper

@@ -65,15 +65,15 @@ jobs:
           sha256sum gateway-bin/*
           go version -m gateway-bin/masseuse-camlink-gateway_${version}_linux_amd64
       - name: The unit driver helpers for every archive, verified
-        # packaging/units/fetch.sh: the helpers version packaging/units/VERSION
-        # pins, from masseuse.ai/app/units, the manifest's signature checked
-        # against packaging/units/cosign.pub and each file against the
-        # manifest (docs/UNITS.md). goreleaser packs units-bin/<os>_<arch>/
-        # into the archive for that platform (.goreleaser.yaml).
+        # packaging/units/fetch-all.sh: every helpers release
+        # packaging/units/VERSION pins (one per line), from
+        # masseuse.ai/app/units, each manifest's signature checked against
+        # packaging/units/cosign.pub and each file against its manifest
+        # (docs/UNITS.md). goreleaser packs units-bin/<os>_<arch>/ into the
+        # archive for that platform (.goreleaser.yaml).
         run: |
-          units=$(tr -d '[:space:]' < packaging/units/VERSION)
           for target in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64; do
-            sh packaging/units/fetch.sh "$units" "${target%/*}" "${target#*/}" "units-bin/${target%/*}_${target#*/}"
+            sh packaging/units/fetch-all.sh "${target%/*}" "${target#*/}" "units-bin/${target%/*}_${target#*/}"
           done
           find units-bin -type f | sort
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
@@ -357,10 +357,9 @@ jobs:
       - name: The unit driver helpers, universal, verified
         # The same fetch as the goreleaser job's, for darwin/all: the
         # universal helpers the bundle takes (Contents/Helpers/units/,
-        # docs/UNITS.md), each checked against the signed manifest.
+        # docs/UNITS.md), each checked against its release's signed manifest.
         run: |
-          units=$(tr -d '[:space:]' < packaging/units/VERSION)
-          sh packaging/units/fetch.sh "$units" darwin all dist/units
+          sh packaging/units/fetch-all.sh darwin all dist/units
           for f in dist/units/camlink-unit-*; do echo "$(basename "$f"): $(lipo -archs "$f")"; done
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -417,9 +416,8 @@ jobs:
         # its own place, names the helpers on its first line
         # (Contents/Helpers/units is where it looks).
         run: |
-          units=$(tr -d '[:space:]' < packaging/units/VERSION)
           for arch in arm64 amd64; do
-            sh packaging/units/fetch.sh "$units" darwin "$arch" "dist/units-${arch}"
+            sh packaging/units/fetch-all.sh darwin "$arch" "dist/units-${arch}"
           done
           n=0
           for f in dist/Masseuse.app/Contents/Helpers/units/camlink-unit-*; do
@@ -724,9 +722,7 @@ jobs:
             grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
           done
       - name: The unit driver helpers for Windows, verified
-        run: |
-          units=$(tr -d '[:space:]' < packaging/units/VERSION)
-          sh packaging/units/fetch.sh "$units" windows amd64 dist/units
+        run: sh packaging/units/fetch-all.sh windows amd64 dist/units
       - name: Whether this run signs
         # Artifact Signing needs the Azure credentials (repository secrets)
         # and the account (repository variables; packaging/windows/README.md,

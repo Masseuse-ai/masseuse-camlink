@@ -53,7 +53,7 @@ function ServingCard({ unit }: { unit: Descriptor }) {
                 Serving
             </CardLabel>
             <h2 className="type-title text-bone">{unit.label}</h2>
-            <p className="type-secondary mt-0.5 text-bone/55">{familyName(unit.kind)}</p>
+            <p className="type-secondary mt-0.5 text-bone/55">{familyName(unit.kind, unit.id)}</p>
             <p className="type-body mt-3 text-bone/75">
                 {armed
                     ? `A session on your phone has it armed, up to ${armed.levelBound} of ${unit.capabilities.levelMax}. It goes back to zero when the session ends, when the service goes quiet, or when you close this window.`

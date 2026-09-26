@@ -105,12 +105,13 @@ jobs:
           lipo -create -output dist/Masseuse dist/shell_arm64 dist/shell_amd64
           cp /usr/bin/true dist/ffmpeg/ffmpeg # a Mach-O stand-in, so codesign has nested code to seal
           printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg/licenses/README
-          sh packaging/units/fetch.sh "$(tr -d '[:space:]' < packaging/units/VERSION)" darwin all dist/units
+          sh packaging/units/fetch-all.sh darwin all dist/units
           sh packaging/macos/build-app.sh -v 0.0.0 -s dist/Masseuse -b dist/masseuse-camlink -f dist/ffmpeg -u dist/units -o dist
           ls dist/Masseuse.app/Contents/Helpers/units/camlink-unit-* >/dev/null
           # The bundle's connector finds the helpers where the bundle puts them.
           dist/Masseuse.app/Contents/MacOS/masseuse-camlink -state-dir "${RUNNER_TEMP}/probe-state" -estim-ble off estim probe > probe.txt 2>&1 || true
-          grep -F 'Unit drivers: Mastago (built in) + 1 helper(s)' probe.txt || { cat probe.txt; exit 1; }
+          n=$(ls dist/units/camlink-unit-* | wc -l | tr -d ' ')
+          grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt || { cat probe.txt; exit 1; }
           plutil -lint dist/Masseuse.app/Contents/Info.plist
           test "$(plutil -extract CFBundleExecutable raw -o - dist/Masseuse.app/Contents/Info.plist)" = Masseuse
           test "$(plutil -extract CFBundleDisplayName raw -o - dist/Masseuse.app/Contents/Info.plist)" = Masseuse
@@ -207,7 +208,7 @@ jobs:
         run: |
           cp dist/masseuse-camlink.exe dist/ffmpeg-windows/ffmpeg.exe
           printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg-windows/licenses/README
-          sh packaging/units/fetch.sh "$(tr -d '[:space:]' < packaging/units/VERSION)" windows amd64 dist/units
+          sh packaging/units/fetch-all.sh windows amd64 dist/units
           go run ./packaging/windows/pack -v 0.0.0 -s dist/shell/Masseuse.exe -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -u dist/units -o dist/Masseuse.exe | tee pack.txt
           grep -q ' masseuse-camlink.exe$' pack.txt
           grep -q ' units/camlink-unit-.*\.exe$' pack.txt
@@ -219,7 +220,8 @@ jobs:
           alone="${RUNNER_TEMP}/alone"; mkdir -p "$alone" && cp dist/Masseuse.exe "$alone/"
           "$alone/Masseuse.exe" --version
           dist/payload-check/masseuse-camlink.exe -state-dir "$(cygpath -w "${RUNNER_TEMP}/probe-state")" -estim-ble off estim probe > probe.txt 2>&1 || true
-          grep -F 'Unit drivers: Mastago (built in) + 1 helper(s)' probe.txt || { cat probe.txt; exit 1; }
+          n=$(ls dist/units/camlink-unit-* | wc -l | tr -d ' ')
+          grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt || { cat probe.txt; exit 1; }
 
   vulncheck:
     runs-on: ubuntu-latest
