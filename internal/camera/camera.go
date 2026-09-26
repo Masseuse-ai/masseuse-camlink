@@ -264,7 +264,7 @@ func (s *Source) pull(ctx context.Context) error {
 		return err
 	}
 	defer pub.Close()
-	fwd := newForwarder(pub, desc, s.log)
+	fwd := newForwarder(pub, desc, s.log, c.PacketNTP)
 	c.OnPacketRTPAny(fwd.packet)
 	if _, err := c.Play(nil); err != nil {
 		return err
@@ -430,17 +430,21 @@ func mediaKinds(desc *description.Session) []string {
 // forwarder moves the camera's packets into the stream. H.264 and H.265 go
 // through an RTP depacketizer and packetizer pair so that packets fit the
 // stream's limit whatever size the camera chose; everything else passes as
-// it is.
+// it is. Each packet is timed by the camera's own RTCP sender reports
+// (`timeOf`, the RTSP client's PacketNTP; serve.TimedWriter), which the
+// re-packetized units keep since they keep the timestamp; the stream sets
+// a clock that is plainly wrong aside (serve.MaxSourceClockSkew).
 type forwarder struct {
-	pub  *serve.Publication
+	w    *serve.TimedWriter
 	log  *slog.Logger
 	repk map[format.Format]*repacketizer
 	mu   sync.Mutex
 	warn int
 }
 
-func newForwarder(pub *serve.Publication, desc *description.Session, log *slog.Logger) *forwarder {
-	f := &forwarder{pub: pub, log: log, repk: map[format.Format]*repacketizer{}}
+func newForwarder(pub *serve.Publication, desc *description.Session, log *slog.Logger,
+	timeOf func(*description.Media, *rtp.Packet) (time.Time, bool)) *forwarder {
+	f := &forwarder{w: serve.NewTimedWriter(pub, timeOf), log: log, repk: map[format.Format]*repacketizer{}}
 	for _, m := range desc.Medias {
 		for _, fo := range m.Formats {
 			if r := newRepacketizer(fo); r != nil {
@@ -463,7 +467,7 @@ func (f *forwarder) packet(medi *description.Media, forma format.Format, pkt *rt
 }
 
 func (f *forwarder) write(medi *description.Media, pkt *rtp.Packet) {
-	if err := f.pub.WritePacketRTP(medi, pkt); err != nil {
+	if err := f.w.Write(medi, pkt); err != nil {
 		f.mu.Lock()
 		f.warn++
 		n := f.warn

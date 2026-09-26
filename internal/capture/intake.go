@@ -120,7 +120,11 @@ func (in *intake) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Respons
 	return &base.Response{StatusCode: base.StatusOK}, nil, nil
 }
 
-// OnRecord forwards every packet into the stream.
+// OnRecord forwards every packet into the stream, timed by ffmpeg's own
+// RTCP sender reports: its clock as it muxed the frame, one or two frames
+// after the camera captured it. That time rides the stream to the enclave
+// (serve.TimedWriter, serve.Publication.WritePacketRTPWithNTP), which lines
+// the picture up with the phone's by it.
 func (in *intake) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*base.Response, error) {
 	in.mu.Lock()
 	pub := in.pub
@@ -128,8 +132,9 @@ func (in *intake) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*base.Respo
 	if pub == nil {
 		return &base.Response{StatusCode: base.StatusMethodNotValidInThisState}, nil
 	}
+	w := serve.NewTimedWriter(pub, ctx.Session.PacketNTP)
 	ctx.Session.OnPacketRTPAny(func(medi *description.Media, _ format.Format, pkt *rtp.Packet) {
-		if err := pub.WritePacketRTP(medi, pkt); err != nil {
+		if err := w.Write(medi, pkt); err != nil {
 			// Logged sparingly: a reader that cannot keep up drops many.
 			if n := in.dropped.Add(1); n == 1 || n%1000 == 0 {
 				in.log.Warn("capture: packet not forwarded", "err", err, "dropped", n)

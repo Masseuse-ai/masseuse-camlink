@@ -33,6 +33,16 @@ func sampleDesc() *description.Session {
 // pump writes a packet per media every 20 ms until ctx ends.
 func pump(ctx context.Context, t *testing.T, pub *Publication, desc *description.Session) {
 	t.Helper()
+	pumpTimed(ctx, t, pub, desc, nil)
+}
+
+// pumpTimed is pump with each packet timed by `ntpOf` of its sequence
+// number on the source's clock (WritePacketRTPWithNTP); nil times them at
+// their writing, as pump does. The timestamps advance 3000 ticks (a 30 fps
+// frame) per packet.
+func pumpTimed(ctx context.Context, t *testing.T, pub *Publication, desc *description.Session,
+	ntpOf func(seq uint16) time.Time) {
+	t.Helper()
 	var seq uint16
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
@@ -49,15 +59,28 @@ func pump(ctx context.Context, t *testing.T, pub *Publication, desc *description
 				Header:  rtp.Header{Version: 2, Marker: true, PayloadType: pt, SequenceNumber: seq, Timestamp: uint32(seq) * 3000, SSRC: uint32(pt)},
 				Payload: []byte{0x65, 1, 2, 3},
 			}
-			if err := pub.WritePacketRTP(m, pkt); err != nil {
+			var ntp time.Time
+			if ntpOf != nil {
+				ntp = ntpOf(seq)
+			}
+			if err := pub.WritePacketRTPWithNTP(m, pkt, ntp); err != nil {
 				return
 			}
 		}
 	}
 }
 
+// timedPacket is one video packet as a reader saw it: its RTP timestamp and
+// the absolute time the stream's sender reports gave it, once they had.
+type timedPacket struct {
+	ts  uint32
+	ntp time.Time
+	ok  bool
+}
+
 // reader plays the stream over conns from dial and counts packets by kind,
-// keeping the video packets' headers to check continuity.
+// keeping the video packets' headers to check continuity and the time the
+// sender reports gave each.
 type reader struct {
 	c            *gortsplib.Client
 	video, audio atomic.Int64
@@ -65,12 +88,19 @@ type reader struct {
 
 	mu      sync.Mutex
 	headers []rtp.Header
+	timed   []timedPacket
 }
 
 func (r *reader) videoHeaders() []rtp.Header {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]rtp.Header(nil), r.headers...)
+}
+
+func (r *reader) timedPackets() []timedPacket {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]timedPacket(nil), r.timed...)
 }
 
 func play(t *testing.T, dial func() (net.Conn, error)) (*reader, error) {
@@ -106,8 +136,10 @@ func play(t *testing.T, dial func() (net.Conn, error)) (*reader, error) {
 	r.c.OnPacketRTPAny(func(medi *description.Media, _ format.Format, pkt *rtp.Packet) {
 		if medi.Type == description.MediaTypeVideo {
 			r.video.Add(1)
+			ntp, ok := r.c.PacketNTP(medi, pkt)
 			r.mu.Lock()
 			r.headers = append(r.headers, pkt.Header)
+			r.timed = append(r.timed, timedPacket{ts: pkt.Timestamp, ntp: ntp, ok: ok})
 			r.mu.Unlock()
 		} else {
 			r.audio.Add(1)
@@ -217,6 +249,247 @@ func TestReaderGetsPacketsAndPinsCertificate(t *testing.T) {
 	waitFor(t, "reader gone", func() bool { return s.Readers() == 0 })
 	if s.Stats().Publishing {
 		t.Fatal("still publishing")
+	}
+}
+
+// frameAt is the time the pump's packet seq belongs to when the source's
+// clock started at base: one 30 fps frame per packet, as its timestamps say.
+func frameAt(base time.Time, seq uint16) time.Time {
+	return base.Add(time.Duration(seq) * time.Second / 30)
+}
+
+func TestReadersGetTheSourcesTime(t *testing.T) {
+	s, err := New(Config{StateDir: t.TempDir(), Logger: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	desc := sampleDesc()
+	pub, err := s.Publish(desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The source's clock runs 1.5 s behind this computer's: within
+	// MaxSourceClockSkew, so the time it gives each frame is what the
+	// readers' sender reports must carry, not the moment of forwarding.
+	base := time.Now().Add(-1500 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pumpTimed(ctx, t, pub, desc, func(seq uint16) time.Time { return frameAt(base, seq) })
+
+	r, err := play(t, s.Dial)
+	if err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	defer r.c.Close()
+	waitFor(t, "timed packets", func() bool {
+		n := 0
+		for _, p := range r.timedPackets() {
+			if p.ok {
+				n++
+			}
+		}
+		return n >= 10
+	})
+	timed := 0
+	for _, p := range r.timedPackets() {
+		if !p.ok {
+			continue // before the first sender report: no time yet
+		}
+		timed++
+		want := frameAt(base, uint16(p.ts/3000))
+		if d := p.ntp.Sub(want); d > time.Millisecond || d < -time.Millisecond {
+			t.Fatalf("packet ts %d timed %s, source said %s (off by %s)", p.ts, p.ntp, want, d)
+		}
+	}
+	if timed < 10 {
+		t.Fatalf("only %d packets timed", timed)
+	}
+}
+
+func TestASourceClockFarOffIsSetAside(t *testing.T) {
+	s, err := New(Config{StateDir: t.TempDir(), Logger: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	desc := sampleDesc()
+	pub, err := s.Publish(desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A camera whose clock was never set: an hour off. Its time would date
+	// the stream wrongly, so the packets are timed by this computer's clock.
+	base := time.Now().Add(-time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pumpTimed(ctx, t, pub, desc, func(seq uint16) time.Time { return frameAt(base, seq) })
+
+	r, err := play(t, s.Dial)
+	if err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	defer r.c.Close()
+	waitFor(t, "timed packets", func() bool {
+		for _, p := range r.timedPackets() {
+			if p.ok {
+				return true
+			}
+		}
+		return false
+	})
+	for _, p := range r.timedPackets() {
+		if !p.ok {
+			continue
+		}
+		if off := time.Since(p.ntp); off > 5*time.Second || off < -5*time.Second {
+			t.Fatalf("packet ts %d timed %s, %s from now: the source's clock was not set aside", p.ts, p.ntp, off)
+		}
+	}
+}
+
+// sourceClock plays a source's sender reports for a TimedWriter: it knows
+// the time of a packet (frameAt on `base`) once `reported` is set.
+type sourceClock struct {
+	base     time.Time
+	reported atomic.Bool
+}
+
+func (c *sourceClock) timeOf(_ *description.Media, pkt *rtp.Packet) (time.Time, bool) {
+	if !c.reported.Load() {
+		return time.Time{}, false
+	}
+	return frameAt(c.base, uint16(pkt.Timestamp/3000)), true
+}
+
+// writeTimed writes one packet per media through w, as pumpTimed makes
+// them, with sequence number seq.
+func writeTimed(t *testing.T, w *TimedWriter, desc *description.Session, seq uint16) {
+	t.Helper()
+	for _, m := range desc.Medias {
+		pt := m.Formats[0].PayloadType()
+		pkt := &rtp.Packet{
+			Header:  rtp.Header{Version: 2, Marker: true, PayloadType: pt, SequenceNumber: seq, Timestamp: uint32(seq) * 3000, SSRC: uint32(pt)},
+			Payload: []byte{0x65, 1, 2, 3},
+		}
+		if err := w.Write(m, pkt); err != nil {
+			t.Fatalf("write %d: %v", seq, err)
+		}
+	}
+}
+
+func TestTimedWriterHoldsTheFirstPacketsForTheSourcesReport(t *testing.T) {
+	s, err := New(Config{StateDir: t.TempDir(), Logger: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	desc := sampleDesc()
+	pub, err := s.Publish(desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := play(t, s.Dial)
+	if err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	defer r.c.Close()
+
+	// The source reports after its fourth packet, as a gortsplib publisher
+	// reports right after its first: the packets before are held, so that
+	// the reader's first sender report is anchored on the source's time.
+	clock := &sourceClock{base: time.Now().Add(-1500 * time.Millisecond)}
+	w := NewTimedWriter(pub, clock.timeOf)
+	for seq := uint16(1); seq <= 4; seq++ {
+		writeTimed(t, w, desc, seq)
+	}
+	if w.Held() != 8 || s.Stats().VideoPackets != 0 || r.video.Load() != 0 {
+		t.Fatalf("held %d, %d video packets written, reader saw %d", w.Held(), s.Stats().VideoPackets, r.video.Load())
+	}
+	clock.reported.Store(true)
+	for seq := uint16(5); seq <= 12; seq++ {
+		writeTimed(t, w, desc, seq)
+		if seq == 8 {
+			time.Sleep(100 * time.Millisecond) // lets the reader's report through
+		}
+	}
+	if w.Held() != 0 {
+		t.Fatalf("still holding %d", w.Held())
+	}
+	waitFor(t, "packets", func() bool { return r.video.Load() >= 12 && r.audio.Load() >= 12 })
+	// The reader's report follows its first packet, and the flushed packets
+	// may all be on the wire before it: the ones it has timed - there must
+	// be some - carry the source's time, not the forwarding time 1.5 s later.
+	timed := 0
+	for i, p := range r.timedPackets() {
+		if p.ts != uint32(i+1)*3000 {
+			t.Fatalf("packet %d has timestamp %d: order lost", i, p.ts)
+		}
+		if !p.ok {
+			continue
+		}
+		timed++
+		want := frameAt(clock.base, uint16(i+1))
+		if d := p.ntp.Sub(want); d > time.Millisecond || d < -time.Millisecond {
+			t.Fatalf("packet %d timed %s, source said %s (off by %s)", i, p.ntp, want, d)
+		}
+	}
+	if timed == 0 {
+		t.Fatal("no packet timed")
+	}
+}
+
+func TestTimedWriterGivesUpOnASourceThatDoesNotReport(t *testing.T) {
+	s, err := New(Config{StateDir: t.TempDir(), Logger: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	desc := sampleDesc()
+	pub, err := s.Publish(desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := play(t, s.Dial)
+	if err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	defer r.c.Close()
+
+	// A source that never reports: after the hold its packets flow, timed
+	// at their forwarding, none of them lost.
+	w := NewTimedWriter(pub, func(*description.Media, *rtp.Packet) (time.Time, bool) { return time.Time{}, false })
+	w.hold = 100 * time.Millisecond
+	writeTimed(t, w, desc, 1)
+	if w.Held() != 2 {
+		t.Fatalf("held %d", w.Held())
+	}
+	time.Sleep(120 * time.Millisecond)
+	for seq := uint16(2); seq <= 6; seq++ {
+		writeTimed(t, w, desc, seq)
+	}
+	if w.Held() != 0 {
+		t.Fatalf("still holding %d", w.Held())
+	}
+	waitFor(t, "packets", func() bool { return r.video.Load() >= 6 && r.audio.Load() >= 6 })
+	for i, p := range r.timedPackets() {
+		if p.ts != uint32(i+1)*3000 {
+			t.Fatalf("packet %d has timestamp %d: order lost", i, p.ts)
+		}
+		if p.ok {
+			if off := time.Since(p.ntp); off > 2*time.Second || off < -2*time.Second {
+				t.Fatalf("packet %d timed %s from now", i, off)
+			}
+		}
+	}
+	// Many packets before the hold runs out settle it too.
+	w2 := NewTimedWriter(pub, func(*description.Media, *rtp.Packet) (time.Time, bool) { return time.Time{}, false })
+	w2.hold = time.Hour
+	for seq := uint16(7); seq < 7+HoldPackets; seq++ {
+		writeTimed(t, w2, desc, seq)
+	}
+	if w2.Held() != 0 {
+		t.Fatalf("still holding %d after %d packets", w2.Held(), HoldPackets)
 	}
 }
 

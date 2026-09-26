@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -68,6 +69,11 @@ func fakeFFmpeg(args []string) int {
 		}
 		close(quit)
 	}()
+	// The fake's clock, as its sender reports tell it, sits
+	// CAPTURE_FAKE_CLOCK_BEHIND_MS behind this computer's: the tests check
+	// that time reaches the stream's readers instead of the forwarding time.
+	behind, _ := strconv.Atoi(os.Getenv("CAPTURE_FAKE_CLOCK_BEHIND_MS"))
+	start := time.Now()
 	var seq uint16
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
@@ -78,16 +84,19 @@ func fakeFFmpeg(args []string) int {
 		case <-tick.C:
 		}
 		seq++
+		now := time.Now()
+		// Timestamps follow the wall clock, as an encoder's do.
+		ts := uint32(now.Sub(start).Seconds() * 90000)
 		for _, m := range desc.Medias {
 			pt := m.Formats[0].PayloadType()
 			// The video payload carries the bit rate this ffmpeg was started
 			// with, after the IDR NAL header, so tests can see which
 			// generation a packet came from.
 			pkt := &rtp.Packet{
-				Header:  rtp.Header{Version: 2, Marker: true, PayloadType: pt, SequenceNumber: seq, Timestamp: uint32(seq) * 3000, SSRC: uint32(pt)},
+				Header:  rtp.Header{Version: 2, Marker: true, PayloadType: pt, SequenceNumber: seq, Timestamp: ts, SSRC: uint32(pt)},
 				Payload: append([]byte{0x65}, bitrate...),
 			}
-			if err := c.WritePacketRTP(m, pkt); err != nil {
+			if err := c.WritePacketRTPWithNTP(m, pkt, now.Add(-time.Duration(behind)*time.Millisecond)); err != nil {
 				return 1
 			}
 		}
@@ -423,7 +432,9 @@ func TestFindFFmpegMissing(t *testing.T) {
 }
 
 // playback is what a reader saw: packets by count, the latest video
-// payload, and whether video sequence numbers ever skipped.
+// payload, whether video sequence numbers ever skipped, and how far behind
+// this computer's clock the stream's sender reports timed the latest video
+// packet (lag, nanoseconds; timed is whether a report has arrived).
 type playback struct {
 	n           atomic.Int64
 	lastVideo   atomic.Pointer[[]byte]
@@ -431,6 +442,8 @@ type playback struct {
 	haveSeq     atomic.Bool
 	lastSeq     atomic.Uint32
 	firstVideoP atomic.Pointer[[]byte]
+	timed       atomic.Bool
+	lag         atomic.Int64
 }
 
 // video is the bit rate the latest video packet's publisher was started
@@ -470,6 +483,10 @@ func play(t *testing.T, srv *serve.Server) (*gortsplib.Client, *playback) {
 		if medi.Type != description.MediaTypeVideo {
 			return
 		}
+		if ntp, ok := c.PacketNTP(medi, pkt); ok {
+			p.lag.Store(int64(time.Since(ntp)))
+			p.timed.Store(true)
+		}
 		payload := append([]byte(nil), pkt.Payload...)
 		p.lastVideo.Store(&payload)
 		if p.haveSeq.Load() && uint16(p.lastSeq.Load())+1 != pkt.SequenceNumber {
@@ -499,6 +516,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 func testSource(t *testing.T, opts Options) (*serve.Server, *Source) {
 	t.Helper()
 	t.Setenv("CAPTURE_FAKE_FFMPEG", "1")
+	t.Setenv("CAPTURE_FAKE_CLOCK_BEHIND_MS", "800")
 	srv, err := serve.New(serve.Config{StateDir: t.TempDir(), Logger: quiet(), DescribeWait: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -534,6 +552,13 @@ func TestSourceStartsFFmpegAndPublishes(t *testing.T) {
 	}
 	if src.Encoder() != EncoderVideoToolbox {
 		t.Fatalf("encoder %s", src.Encoder())
+	}
+	// The stream's readers are told ffmpeg's own time for each frame (its
+	// sender reports, here a clock 800 ms behind), not when the connector
+	// forwarded the packet.
+	waitFor(t, "timed packets", n.timed.Load)
+	if lag := time.Duration(n.lag.Load()); lag < 700*time.Millisecond || lag > 1500*time.Millisecond {
+		t.Fatalf("reader timed the latest frame %s ago; ffmpeg's clock is 800 ms behind", lag)
 	}
 
 	src.Stop()

@@ -369,6 +369,25 @@ The connector describes the source to the service (section 2.3) so the phone
 can name it; the phone still decides, and only the phone's capability can
 hand the enclave a link.
 
+**Time.** The enclave shows this stream and the phone's side by side, and
+lines them up by the absolute time each frame belongs to, which RTSP carries
+in RTCP sender reports (an NTP time for an RTP timestamp). The stream's
+sender reports give each frame the time its source gave it, not the moment
+the connector forwarded the packet: ffmpeg's own report for the computer's
+camera - its clock as it muxed the frame, a frame or two after capture -
+and the camera's own report for a camera on the network, which the
+re-packetized units keep since they keep the camera's timestamps. Until a
+source has reported on a media, the connector holds that media's first
+packets - for at most one second or 256 packets - and writes them once it
+has, each timed by the report, so that the first report a reader gets is
+anchored on the source's time (ffmpeg reports before its first packet; a
+gortsplib publisher right after it). A source that has still not reported
+by then, or whose clock is more than 5 s from the computer's - a network
+camera whose clock was never set - has its packets timed at their
+forwarding, as every packet was before, and the connector says so once. The
+phone reports the same way, so the enclave aligns the two on one clock;
+what it does with the alignment is documented in its repository.
+
 **Trust.** With a camera named directly, the connector relays ciphertext it
 cannot read. With its own stream, the connector holds the picture in the
 clear on the person's computer: it is the camera. What holds is what held

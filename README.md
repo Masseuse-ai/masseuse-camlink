@@ -242,6 +242,15 @@ public: [FemLed/masseuse-video-tee](https://github.com/FemLed/masseuse-video-tee
 holds every line that touches frames or audio, and its `README.md` says what
 leaves the enclave (numbers, never frames or sound).
 
+While a session uses this camera, your phone's camera stays live too: the
+enclave shows it as a small inset over this camera's picture, with your
+face's keypoints, and classifies the phone's microphone rather than this
+computer's. So that the two pictures line up, each frame of this stream
+carries the time its source gave it (ffmpeg's clock for the computer's
+camera, the camera's own for one on the network), passed through unchanged;
+the enclave aligns the two streams on that time. Both streams end at the
+same enclave and nowhere else.
+
 You do not have to take that on trust. Every enclave image is built by that
 repository's release workflow on GitHub Actions from a tagged commit, with
 SLSA provenance and a keyless signature; the workflow alone holds the key

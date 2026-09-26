@@ -36,6 +36,11 @@ var tcp = gortsplib.ProtocolTCP
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// cameraClockBehind is how far the fake camera's clock (its sender reports)
+// sits behind this computer's: within serve.MaxSourceClockSkew, so the
+// stream's readers must be told the camera's time, not the forwarding time.
+const cameraClockBehind = 600 * time.Millisecond
+
 // fakeCamera is an RTSPS camera with basic authentication, an H.264 track
 // sent as oversized packets (as cameras on TCP do) and an Opus track.
 type fakeCamera struct {
@@ -101,7 +106,9 @@ func startCamera(t *testing.T, cert tls.Certificate) *fakeCamera {
 
 // pump sends one 2800-byte H.264 access unit as two ~1400-byte FU-A
 // fragments (over the proxy's 1200-byte payload limit, as cameras on TCP
-// often send) and one Opus packet every 20 ms.
+// often send) and one Opus packet every 20 ms. Video timestamps follow the
+// wall clock and each unit is timed on the camera's clock, which sits
+// cameraClockBehind this computer's.
 func (c *fakeCamera) pump() {
 	defer c.wg.Done()
 	tick := time.NewTicker(20 * time.Millisecond)
@@ -109,6 +116,7 @@ func (c *fakeCamera) pump() {
 	var seq uint16
 	nalu := make([]byte, 2800)
 	nalu[0] = 0x65 // IDR slice
+	start := time.Now()
 	for {
 		select {
 		case <-c.stop:
@@ -116,7 +124,8 @@ func (c *fakeCamera) pump() {
 		case <-tick.C:
 		}
 		seq++
-		ts := uint32(seq) * 3000
+		now := time.Now()
+		ts := uint32(now.Sub(start).Seconds() * 90000)
 		half := len(nalu) / 2
 		for i, chunk := range [][]byte{nalu[1:half], nalu[half:]} {
 			fu := []byte{0x7c, 0x05} // FU-A indicator, type 5 (IDR)
@@ -129,7 +138,7 @@ func (c *fakeCamera) pump() {
 				Header:  rtp.Header{Version: 2, Marker: i == 1, PayloadType: 96, SequenceNumber: seq*2 + uint16(i), Timestamp: ts, SSRC: 11},
 				Payload: append(fu, chunk...),
 			}
-			_ = c.stream.WritePacketRTP(c.desc.Medias[0], pkt)
+			_ = c.stream.WritePacketRTPWithNTP(c.desc.Medias[0], pkt, now.Add(-cameraClockBehind))
 		}
 		_ = c.stream.WritePacketRTP(c.desc.Medias[1], &rtp.Packet{
 			Header:  rtp.Header{Version: 2, Marker: true, PayloadType: 97, SequenceNumber: seq, Timestamp: uint32(seq) * 960, SSRC: 22},
@@ -167,11 +176,15 @@ func (c *fakeCamera) url(user, pass string) string {
 	return fmt.Sprintf("rtsps://%s:%s@%s/live", user, pass, c.host)
 }
 
-// reader plays the connector's stream in-process and records packet sizes.
+// reader plays the connector's stream in-process and records packet sizes
+// and how far behind this computer's clock the stream's sender reports
+// timed the latest video packet (lag, nanoseconds, once timed).
 type reader struct {
 	c            *gortsplib.Client
 	video, audio atomic.Int64
 	maxSize      atomic.Int64
+	timed        atomic.Bool
+	lag          atomic.Int64
 }
 
 func play(t *testing.T, srv *serve.Server) *reader {
@@ -199,6 +212,10 @@ func play(t *testing.T, srv *serve.Server) *reader {
 			r.video.Add(1)
 			if n := int64(pkt.MarshalSize()); n > r.maxSize.Load() {
 				r.maxSize.Store(n)
+			}
+			if ntp, ok := r.c.PacketNTP(medi, pkt); ok {
+				r.lag.Store(int64(time.Since(ntp)))
+				r.timed.Store(true)
 			}
 		} else {
 			r.audio.Add(1)
@@ -275,6 +292,13 @@ func TestProxyTrustsOnFirstUseAndRepacketizes(t *testing.T) {
 	// The camera's ~1500-byte fragments arrive re-packetized under the limit.
 	if max := r.maxSize.Load(); max > payloadMax+12 {
 		t.Fatalf("video packet of %d bytes forwarded", max)
+	}
+	// The re-packetized units keep the camera's own time (its sender
+	// reports say its clock is 600 ms behind); the readers are told that,
+	// not the moment of forwarding.
+	waitFor(t, "timed packets", r.timed.Load)
+	if lag := time.Duration(r.lag.Load()); lag < cameraClockBehind-100*time.Millisecond || lag > cameraClockBehind+700*time.Millisecond {
+		t.Fatalf("reader timed the latest frame %s ago; the camera's clock is %s behind", lag, cameraClockBehind)
 	}
 	if st := sink.Stats(); st.VideoPackets < 20 || st.AudioPackets < 10 {
 		t.Fatalf("stats %+v", st)

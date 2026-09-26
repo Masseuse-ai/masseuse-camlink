@@ -63,6 +63,12 @@ const (
 	// reader's patience the reader gets its answer. The enclave gives the
 	// path 15 s to be ready in all.
 	DefaultDescribeWait = 12 * time.Second
+	// MaxSourceClockSkew bounds how far a source's own clock may sit from
+	// this computer's before its time is set aside for this computer's
+	// (WritePacketRTPWithNTP): a network camera whose clock was never set
+	// would otherwise date the stream by years, and the enclave lines the
+	// stream up with the phone's by that time.
+	MaxSourceClockSkew = 5 * time.Second
 )
 
 var (
@@ -297,6 +303,7 @@ type Publication struct {
 	audioPackets, audioBytes atomic.Uint64
 	droppedFrames            atomic.Uint64
 	congested                atomic.Bool
+	clockOff                 atomic.Bool
 	closeOnce                sync.Once
 
 	mu       sync.Mutex
@@ -310,8 +317,20 @@ type Publication struct {
 }
 
 // WritePacketRTP sends a packet to every reader, with the stream's
-// continuity applied and, for video, subject to the gate.
+// continuity applied and, for video, subject to the gate. The packet is
+// timed at this moment: WritePacketRTPWithNTP with a zero time.
 func (p *Publication) WritePacketRTP(medi *description.Media, pkt *rtp.Packet) error {
+	return p.WritePacketRTPWithNTP(medi, pkt, time.Time{})
+}
+
+// WritePacketRTPWithNTP is WritePacketRTP with the moment the packet's
+// frame belongs to on the source's own clock: what its RTCP sender report
+// said (ffmpeg's for the computer's camera, the camera's for a network
+// camera). The readers' sender reports carry it on, and the enclave lines
+// this stream up with the phone's - which reports the same way - by that
+// time. A zero ntp, or one more than MaxSourceClockSkew from this
+// computer's clock, is replaced by this moment.
+func (p *Publication) WritePacketRTPWithNTP(medi *description.Media, pkt *rtp.Packet, ntp time.Time) error {
 	p.mu.Lock()
 	tr := p.current[medi]
 	p.mu.Unlock()
@@ -321,6 +340,15 @@ func (p *Publication) WritePacketRTP(medi *description.Media, pkt *rtp.Packet) e
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
 	now := time.Now()
+	if ntp.IsZero() {
+		ntp = now
+	} else if skew := ntp.Sub(now); skew > MaxSourceClockSkew || skew < -MaxSourceClockSkew {
+		if p.clockOff.CompareAndSwap(false, true) {
+			p.s.log.Warn("stream: the source's clock is off; timing the stream by this computer's",
+				"off", skew.Round(time.Second).String())
+		}
+		ntp = now
+	}
 	if tr.video {
 		congested, backlog := p.s.congested(now)
 		ok, ended := tr.admit(pkt, congested, backlog, now)
@@ -349,7 +377,7 @@ func (p *Publication) WritePacketRTP(medi *description.Media, pkt *rtp.Packet) e
 		p.audioPackets.Add(1)
 		p.audioBytes.Add(n)
 	}
-	return p.st.WritePacketRTP(tr.media, out)
+	return p.st.WritePacketRTPWithNTP(tr.media, out, ntp)
 }
 
 func sumDropped(tracks []*track) uint64 {
