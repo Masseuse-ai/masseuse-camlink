@@ -9,11 +9,19 @@ are acknowledged within three business days.
 
 ## What the connector can and cannot do
 
-- It relays bytes between one camera on your network and one attested
-  enclave, only while a session you started on your phone is bound to it.
-- It cannot decrypt the camera stream: the camera speaks TLS (RTSPS) and the
-  enclave terminates it. The connector, and the masseuse.ai service, carry
-  ciphertext and metadata only.
+- It sends one camera to one attested enclave, only while a session you
+  started on your phone is bound to it: your computer's own camera and
+  microphone, a camera on your network it pulls for you, or, when the
+  session names a network camera directly, that camera's bytes relayed
+  untouched.
+- The stream leaves your computer only inside TLS that the enclave
+  terminates. When it relays a camera named by the session it cannot read
+  the bytes. When it serves its own camera it holds the picture on your
+  computer, as any camera program would, and sends it to that one enclave;
+  its own stream has no listening port and is reachable only through the
+  tunnel. The masseuse.ai service carries metadata only.
+- The camera and microphone are captured only while a session is reading;
+  the capture process is stopped when the session's tunnel ends.
 - It refuses to dial anything but a single private-network `host:port` per
   session, so a compromised service cannot turn it into a proxy.
 - It dials an enclave only after verifying that enclave's Confidential Space

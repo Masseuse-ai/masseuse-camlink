@@ -17,6 +17,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -32,7 +33,13 @@ import (
 	"github.com/FemLed/masseuse-camlink/internal/attest"
 	"github.com/FemLed/masseuse-camlink/internal/gateway"
 	"github.com/FemLed/masseuse-camlink/internal/identity"
+	"github.com/FemLed/masseuse-camlink/internal/serve"
 	"github.com/FemLed/masseuse-camlink/internal/tunnel"
+	"github.com/bluenviron/gortsplib/v5"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/pion/rtp"
 )
 
 // fakeAttester stands in for Confidential Space: it "attests" the test
@@ -294,6 +301,187 @@ func TestCameraThroughGatewayAndConnector(t *testing.T) {
 	}
 }
 
+// attach brokers a ticket, tells the gateway to expect the connector and
+// dials the tunnel, returning it serving.
+func attach(t *testing.T, r *rig) (*tunnel.Tunnel, context.CancelFunc) {
+	t.Helper()
+	ticket, ticketHash := mintTicket(t)
+	r.expect(t, ticketHash)
+	ctx, cancel := context.WithCancel(context.Background())
+	tun, err := r.dialer.Dial(ctx, r.wsSrv.URL, ticket, ticketHash)
+	if err != nil {
+		cancel()
+		t.Fatalf("dial: %v", err)
+	}
+	go func() { _ = tun.Serve(ctx) }()
+	waitStatus(t, r, func(s gateway.Status) bool { return s.Connected })
+	return tun, func() { cancel(); tun.Close() }
+}
+
+// publisher stands in for a source (internal/capture, internal/camera):
+// video and audio RTP into the connector's own stream.
+func publisher(ctx context.Context, srv *serve.Server) error {
+	desc := &description.Session{Medias: []*description.Media{
+		{Type: description.MediaTypeVideo, Formats: []format.Format{&format.H264{PayloadTyp: 96, PacketizationMode: 1}}},
+		{Type: description.MediaTypeAudio, Formats: []format.Format{&format.Opus{PayloadTyp: 97, ChannelCount: 1}}},
+	}}
+	pub, err := srv.Publish(desc)
+	if err != nil {
+		return err
+	}
+	defer pub.Close()
+	var seq uint16
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+		}
+		seq++
+		for _, m := range desc.Medias {
+			pt := m.Formats[0].PayloadType()
+			pkt := &rtp.Packet{
+				Header:  rtp.Header{Version: 2, Marker: true, PayloadType: pt, SequenceNumber: seq, Timestamp: uint32(seq) * 3000, SSRC: uint32(pt)},
+				Payload: []byte{0x65, 1, 2, 3},
+			}
+			if err := pub.WritePacketRTP(m, pkt); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// enclaveReader plays the connector's stream through the relay the way
+// MediaMTX does: RTSPS over TCP, pinning the certificate it sees.
+type enclaveReader struct {
+	c            *gortsplib.Client
+	leaf         string
+	video, audio atomic.Int64
+}
+
+func readStream(relayAddr string) (*enclaveReader, error) {
+	r := &enclaveReader{}
+	r.c = &gortsplib.Client{
+		Scheme: "rtsps", Host: relayAddr, ReadTimeout: 12 * time.Second, Protocol: &tcp,
+		TLSConfig: &tls.Config{
+			InsecureSkipVerify: true, // MediaMTX pins the fingerprint instead of a chain
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				r.leaf = serve.Fingerprint(cs.PeerCertificates[0])
+				return nil
+			},
+		},
+	}
+	if err := r.c.Start(); err != nil {
+		return nil, err
+	}
+	u, _ := base.ParseURL("rtsps://" + relayAddr + "/" + serve.Path)
+	desc, _, err := r.c.Describe(u)
+	if err != nil {
+		r.c.Close()
+		return nil, err
+	}
+	if err := r.c.SetupAll(desc.BaseURL, desc.Medias); err != nil {
+		r.c.Close()
+		return nil, err
+	}
+	r.c.OnPacketRTPAny(func(medi *description.Media, _ format.Format, _ *rtp.Packet) {
+		if medi.Type == description.MediaTypeVideo {
+			r.video.Add(1)
+		} else {
+			r.audio.Add(1)
+		}
+	})
+	if _, err := r.c.Play(nil); err != nil {
+		r.c.Close()
+		return nil, err
+	}
+	return r, nil
+}
+
+func TestConnectorStreamThroughGatewayAndConnector(t *testing.T) {
+	r := setup(t)
+	srv, err := serve.New(serve.Config{StateDir: t.TempDir(), Logger: r.dialer.Logger, DescribeWait: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	r.dialer.Local = map[string]func() (net.Conn, error){serve.Target: srv.Dial}
+
+	_, stop := attach(t, r)
+	defer stop()
+
+	// The phone handed the enclave the constant link; the enclave names the
+	// connector's own stream as the target.
+	if code, _ := r.ctl(t, "POST", "/target", map[string]any{"host": "127.0.0.1", "port": serve.Port}); code != 200 {
+		t.Fatalf("target: %d", code)
+	}
+
+	// The enclave asks before the source is up (sources start on demand);
+	// the DESCRIBE waits for it.
+	pctx, pcancel := context.WithCancel(context.Background())
+	defer pcancel()
+	pubErr := make(chan error, 1)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		pubErr <- publisher(pctx, srv)
+	}()
+	reader, err := readStream(r.relay.Addr().String())
+	if err != nil {
+		t.Fatalf("read through the tunnel: %v", err)
+	}
+	defer reader.c.Close()
+	if reader.leaf != srv.Fingerprint() {
+		t.Fatalf("enclave saw %s, connector serves %s", reader.leaf, srv.Fingerprint())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && (reader.video.Load() < 20 || reader.audio.Load() < 20) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if reader.video.Load() < 20 || reader.audio.Load() < 20 {
+		t.Fatalf("packets through the tunnel: video %d audio %d", reader.video.Load(), reader.audio.Load())
+	}
+	if srv.Readers() != 1 {
+		t.Fatalf("readers %d", srv.Readers())
+	}
+	st := srv.Stats()
+	if !st.Publishing || st.VideoPackets < 20 || st.AudioPackets < 20 {
+		t.Fatalf("stats %+v", st)
+	}
+
+	// Clear ends the session: the tunnel goes, and with it the reader.
+	if code, _ := r.ctl(t, "POST", "/clear", nil); code != 200 {
+		t.Fatalf("clear: %d", code)
+	}
+	done := make(chan struct{})
+	go func() { _ = reader.c.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reader survived clear")
+	}
+	pcancel()
+	if err := <-pubErr; err != nil {
+		t.Fatalf("publisher: %v", err)
+	}
+}
+
+func TestLocalTargetWithoutSourceIsRefused(t *testing.T) {
+	r := setup(t)
+	r.dialer.Local = map[string]func() (net.Conn, error){
+		serve.Target: func() (net.Conn, error) { return nil, errors.New("no camera source configured") },
+	}
+	_, stop := attach(t, r)
+	defer stop()
+	if code, _ := r.ctl(t, "POST", "/target", map[string]any{"host": "127.0.0.1", "port": serve.Port}); code != 200 {
+		t.Fatalf("target: %d", code)
+	}
+	if _, err := readStream(r.relay.Addr().String()); err == nil {
+		t.Fatal("stream served with no source")
+	}
+}
+
 func TestPublicTargetIsRefused(t *testing.T) {
 	r := setup(t)
 	ticket, ticketHash := mintTicket(t)
@@ -433,3 +621,6 @@ func TestControlValidation(t *testing.T) {
 		t.Errorf("healthz %d %q", rec.Code, rec.Body.String())
 	}
 }
+
+// tcp is the transport the enclave uses.
+var tcp = gortsplib.ProtocolTCP

@@ -197,6 +197,18 @@ func HelloMessage(ts int64, key string, paired []string) []byte {
 	return []byte("camlink-hello-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + strings.Join(paired, ","))
 }
 
+// SourceMessage is what the connector signs to tell the service which
+// camera it offers through its own stream (POST /api/camlink/source): kind
+// is "capture" or "camera", label the name shown to the person. The label
+// comes last so that any character in it is unambiguous.
+func SourceMessage(ts int64, key, kind string, ready bool, label string) []byte {
+	r := "0"
+	if ready {
+		r = "1"
+	}
+	return []byte("camlink-source-v1|" + strconv.FormatInt(ts, 10) + "|" + key + "|" + kind + "|" + r + "|" + label)
+}
+
 // TunnelProof is the string the connector signs to answer the gateway's
 // CHALLENGE: host is the origin host it dialed, ticketHash the hex SHA-256
 // of the ticket, nonce the challenge payload in base64url.

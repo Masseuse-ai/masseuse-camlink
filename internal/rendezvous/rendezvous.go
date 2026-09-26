@@ -42,6 +42,31 @@ type Handler interface {
 	OnOnline(online bool)
 }
 
+// Source describes the camera the connector offers through its own stream
+// (docs/PROTOCOL.md, section 2.3). The service shows it to the paired phone,
+// which decides whether to use it.
+type Source struct {
+	// Kind is "capture" (the computer's own camera and microphone) or
+	// "camera" (a camera on the connector's network the connector proxies).
+	Kind string `json:"kind"`
+	// Label names it for the person, at most 64 characters.
+	Label string `json:"label"`
+	// Ready says whether the connector can serve it now (ffmpeg found, the
+	// devices present, the camera reachable at startup).
+	Ready bool `json:"ready"`
+}
+
+// SourceReporter is implemented by a Handler that offers a source; the
+// client reports it after every hello (the service forgets a connector's
+// source when it forgets the connector).
+type SourceReporter interface {
+	CurrentSource() (Source, bool)
+}
+
+// ErrNoSourceReports is returned by ReportSource when the service has no
+// such route: an older service, which shows no source card.
+var ErrNoSourceReports = errors.New("rendezvous: the service does not take source reports")
+
 // Client talks to one service.
 type Client struct {
 	Service  string
@@ -128,7 +153,51 @@ func (c *Client) once(ctx context.Context, h Handler) error {
 	if hello.Code != "" {
 		h.OnCode(hello.Code, time.UnixMilli(hello.CodeExpiresAtMs))
 	}
+	if sr, ok := h.(SourceReporter); ok {
+		if src, ok := sr.CurrentSource(); ok {
+			if err := c.ReportSource(ctx, src); err != nil && !errors.Is(err, ErrNoSourceReports) {
+				c.log().Warn("rendezvous: source report failed", "err", err)
+			}
+		}
+	}
 	return c.Stream(ctx, hello.StreamToken, h)
+}
+
+// ReportSource tells the service which camera the connector offers. It is
+// signed like hello, so only the connector can describe itself.
+func (c *Client) ReportSource(ctx context.Context, src Source) error {
+	if len(src.Label) > 64 {
+		src.Label = src.Label[:64]
+	}
+	ts := time.Now().Unix()
+	key := c.Identity.PublicKeyString()
+	body, _ := json.Marshal(map[string]any{
+		"key":    key,
+		"ts":     ts,
+		"source": src,
+		"sig":    b64(c.Identity.Sign(identity.SourceMessage(ts, key, src.Kind, src.Ready, src.Label))),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.Service, "/")+"/api/camlink/source", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "masseuse-camlink/"+c.Version)
+	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, err := c.http().Do(req.WithContext(hctx))
+	if err != nil {
+		return fmt.Errorf("source: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return ErrNoSourceReports
+	case resp.StatusCode/100 != 2:
+		return &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(truncate(string(raw), 200))}
+	}
+	return nil
 }
 
 // Hello authenticates and returns a stream token.

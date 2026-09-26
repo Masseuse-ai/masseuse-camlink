@@ -56,7 +56,13 @@ type Dialer struct {
 	HandshakeTimeout time.Duration
 	// RelayBuffer is the copy buffer per direction; 0 means 256 KiB.
 	RelayBuffer int
-	Logger      *slog.Logger
+	// Local answers OPENs for targets the connector serves itself instead of
+	// dialing, keyed by the exact target ("127.0.0.1:7443" for the
+	// connector's own camera stream, internal/serve). The target still has
+	// to pass the single-target policy; the function's connection is
+	// relayed in place of a TCP one, and its error refuses the stream.
+	Local  map[string]func() (net.Conn, error)
+	Logger *slog.Logger
 }
 
 // Tunnel is one attached tunnel.
@@ -207,13 +213,18 @@ func (t *Tunnel) handle(ctx context.Context, p *mux.Pending) {
 		_ = p.Refuse(err.Error())
 		return
 	}
-	timeout := t.d.DialTimeout
-	if timeout == 0 {
-		timeout = 10 * time.Second
+	var conn net.Conn
+	if local, ok := t.d.Local[p.Target]; ok {
+		conn, err = local()
+	} else {
+		timeout := t.d.DialTimeout
+		if timeout == 0 {
+			timeout = 10 * time.Second
+		}
+		dctx, cancel := context.WithTimeout(ctx, timeout)
+		conn, err = (&net.Dialer{}).DialContext(dctx, "tcp", addr)
+		cancel()
 	}
-	dctx, cancel := context.WithTimeout(ctx, timeout)
-	conn, err := (&net.Dialer{}).DialContext(dctx, "tcp", addr)
-	cancel()
 	if err != nil {
 		// The local log may name the camera; the reason sent to the enclave
 		// does not.
@@ -261,33 +272,42 @@ func (p *targetPolicy) allow(ctx context.Context, target string, resolver Resolv
 	}
 	p.mu.Unlock()
 
-	var ip net.IP
-	if lit := net.ParseIP(host); lit != nil {
-		if !isPrivate(lit) {
-			return "", errors.New("target is not a private-network address")
-		}
-		ip = lit
-	} else {
-		if resolver == nil {
-			resolver = net.DefaultResolver
-		}
-		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		addrs, err := resolver.LookupIPAddr(rctx, host)
-		cancel()
-		if err != nil || len(addrs) == 0 {
-			return "", errors.New("target name does not resolve")
-		}
-		for _, a := range addrs {
-			if !isPrivate(a.IP) {
-				return "", errors.New("target name resolves outside the private network")
-			}
-		}
-		ip = addrs[0].IP
+	addr, err := ResolvePrivate(ctx, host, portStr, resolver)
+	if err != nil {
+		return "", err
 	}
 	p.mu.Lock()
 	p.locked = target
 	p.mu.Unlock()
-	return net.JoinHostPort(ip.String(), portStr), nil
+	return addr, nil
+}
+
+// ResolvePrivate returns host:port as an address to dial when host is a
+// private-network, loopback or link-local literal, or a name every address
+// of which is one; anything else is an error. The address returned is the
+// one checked, so a later DNS answer cannot redirect the dial.
+func ResolvePrivate(ctx context.Context, host, port string, resolver Resolver) (string, error) {
+	if lit := net.ParseIP(host); lit != nil {
+		if !isPrivate(lit) {
+			return "", errors.New("target is not a private-network address")
+		}
+		return net.JoinHostPort(lit.String(), port), nil
+	}
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	addrs, err := resolver.LookupIPAddr(rctx, host)
+	cancel()
+	if err != nil || len(addrs) == 0 {
+		return "", errors.New("target name does not resolve")
+	}
+	for _, a := range addrs {
+		if !isPrivate(a.IP) {
+			return "", errors.New("target name resolves outside the private network")
+		}
+	}
+	return net.JoinHostPort(addrs[0].IP.String(), port), nil
 }
 
 func isPrivate(ip net.IP) bool {

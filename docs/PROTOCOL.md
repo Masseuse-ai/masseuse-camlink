@@ -2,11 +2,13 @@
 
 Two programs and the service between them:
 
-- **connector** (`masseuse-camlink`): runs on a computer in the same home
-  network as the camera. It holds a persistent Ed25519 identity, keeps a
-  long-lived event stream to the masseuse.ai service (the *rendezvous*), and,
-  when told to, dials one enclave and relays TLS ciphertext between the
-  camera and that enclave.
+- **connector** (`masseuse-camlink`): runs on a computer at home. It holds a
+  persistent Ed25519 identity, keeps a long-lived event stream to the
+  masseuse.ai service (the *rendezvous*), and, when told to, dials one
+  enclave and carries one camera's TLS stream to it: its own stream, serving
+  the computer's camera and microphone or a camera on the home network
+  (section 6), or, when the session names a camera directly, that camera's
+  ciphertext relayed untouched.
 - **gateway** (`masseuse-camlink-gateway`): runs inside the video enclave
   (Confidential Space). It accepts exactly one connector per session, and
   exposes a loopback listener that the enclave's RTSP server connects to as if
@@ -15,9 +17,11 @@ Two programs and the service between them:
   phone a pairing code and hand both sides a one-time ticket. It never sees
   camera bytes.
 
-Neither the connector nor the gateway decrypts anything. The camera speaks
-RTSPS (TLS) and the enclave terminates that TLS. What the connector carries is
-opaque ciphertext; what the service carries is a code, a ticket and an origin.
+The gateway decrypts nothing: the enclave's RTSP server terminates the
+camera's TLS, whether the camera is a device on the network or the
+connector's own stream. What the tunnel carries is opaque ciphertext; what
+the service carries is a code, a ticket, an origin and the name of the
+camera the connector offers.
 
 All identifiers below are encoded as base64url without padding unless stated.
 Hashes are SHA-256. Timestamps are Unix seconds unless a name ends in `Ms`.
@@ -83,6 +87,32 @@ On any disconnect the connector re-`hello`s with exponential backoff
 (1 s .. 60 s, jittered). A `dial` for a session it is already connected to is
 idempotent; a `dial` for a different origin replaces the current tunnel.
 
+### 2.3 `POST /api/camlink/source`
+
+After every successful hello, and whenever it changes, the connector reports
+the camera it offers through its own stream (section 6):
+
+```json
+{
+  "key": "<connectorKey>",
+  "ts": 1757400000,
+  "source": {"kind": "capture", "label": "Insta360 Link + Yeti Stereo Microphone", "ready": true},
+  "sig": "<base64url Ed25519 signature>"
+}
+```
+
+`kind` is `capture` (the computer's own camera and microphone) or `camera` (a
+camera on the connector's network the connector pulls and re-serves).
+`label` is what the phone shows, at most 64 characters. `ready` says whether
+the connector can serve it now (ffmpeg present and the devices found, or the
+network camera answering at startup). `sig` is over the UTF-8 string
+`camlink-source-v1|<ts>|<key>|<kind>|<1 if ready else 0>|<label>`; the label
+comes last so that any character in it is unambiguous. The service applies
+the hello rules (`|now - ts| <= 60 s`, signature, rate limit), keeps the
+latest report per connector for as long as it remembers the connector, and
+shows it to a phone bound to that connector as `camlink.source`. A `404`
+means an older service; the connector goes on without the card.
+
 ## 3. Phone <-> rendezvous
 
 Cookie-authenticated session routes of the masseuse.ai service.
@@ -101,7 +131,13 @@ While a session is bound to a connector and the session holds an enclave, the
 service mints a 32-byte ticket, tells the enclave to expect
 `{connectorKey, ticketHash, expiresAt}` (section 5) and sends the connector
 `dial`. The session snapshot and its event stream carry
-`camlink: {"bound","online","tunnel"}`.
+`camlink: {"bound","online","tunnel","source"}`, `source` being the
+connector's latest report (section 2.3) or absent.
+
+To use the connector's own camera the phone hands the enclave the fixed link
+`rtsps://127.0.0.1:7443/camera` the way it would hand it any camera's link;
+the enclave treats a loopback host as a tunnel target like any private
+address (section 6).
 
 ## 4. Connector <-> gateway
 
@@ -189,6 +225,12 @@ name every address of which resolves to such an address (the connector then
 dials the address it checked, not the name). It never becomes a general
 proxy. The gateway pings every 30 s.
 
+One target is reserved: `127.0.0.1:7443` is the connector's own stream
+(section 6). An `OPEN` for it is answered from inside the connector process,
+never by a dial, so nothing has to listen on that port and nothing else on
+the computer can reach the stream. It is subject to the same single-target
+lock.
+
 ## 5. Enclave control (loopback only)
 
 The gateway's control API listens on `127.0.0.1:8091` inside the enclave and
@@ -210,3 +252,51 @@ The relay listener is `127.0.0.1:7441`. Each accepted connection becomes an
 set, the connection is closed immediately. The enclave's RTSP server is
 pointed at `rtsps://127.0.0.1:7441/<path>` and verifies the camera's
 certificate fingerprint through the tunnel exactly as it would directly.
+
+## 6. The connector's own stream
+
+The connector is itself an RTSPS server, reachable only through the tunnel:
+the enclave names it with the fixed link `rtsps://127.0.0.1:7443/camera`,
+the gateway opens streams to `127.0.0.1:7443`, and the connector answers them
+in-process (section 4). Its certificate is self-signed ECDSA P-256, generated
+on first run and kept as `camera-cert.pem` (mode 0600) in the state
+directory, so its fingerprint is stable across restarts; the enclave probes
+it through the tunnel and pins it for the session as it does with any
+camera.
+
+What the stream carries is one source, chosen on the command line and
+remembered in `source.json`:
+
+- **The computer's camera and microphone** (`capture`). The connector runs
+  ffmpeg as a child process: avfoundation on macOS, dshow on Windows, v4l2
+  and PulseAudio on Linux; 1280x720 at 30 frames per second by default, H.264
+  from the hardware encoder (VideoToolbox, Media Foundation) or libx264, a
+  keyframe every two seconds, Opus mono audio. ffmpeg publishes over plain
+  RTSP to a loopback port the connector chose, on a path that is a fresh
+  random secret, and the connector forwards the packets into its stream
+  unchanged. The child runs only while a session is reading: it starts at the
+  first `OPEN` for the reserved target and stops when the session's tunnel
+  ends, so the camera light is off between sessions. A `DESCRIBE` that
+  arrives while ffmpeg is still starting waits for it (up to 8 s; the enclave
+  allows 15 s).
+- **A camera on the network** (`camera`). The connector is an RTSPS client of
+  the camera (`-camera-url rtsps://user:password@host:port/path`; the host
+  must be a private-network address or a name resolving only to such
+  addresses). It pins the camera's certificate by SHA-256: the fingerprint
+  given with `-camera-fingerprint`, or the one seen first, saved in
+  `cameras.json` and printed. Media passes through; H.264 and H.265 are
+  re-packetized so that no packet exceeds 1200 bytes of payload, which the
+  stream's server requires. It too is pulled only while a session reads.
+
+The connector describes the source to the service (section 2.3) so the phone
+can name it; the phone still decides, and only the phone's capability can
+hand the enclave a link.
+
+**Trust.** With a camera named directly, the connector relays ciphertext it
+cannot read. With its own stream, the connector holds the picture in the
+clear on the person's computer: it is the camera. What holds is what held
+before: the stream leaves the computer only inside TLS that one attested
+enclave terminates, the connector dials nothing but that enclave, and the
+enclave pins the connector's certificate through the tunnel. The connector
+is open source and its releases reproducible (VERIFY.md), so what it does
+with the picture can be read.

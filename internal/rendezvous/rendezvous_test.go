@@ -77,7 +77,18 @@ type fakeService struct {
 	events []string // raw SSE blocks to send after the code event
 	drop   bool     // end the stream after the scripted events
 	block  chan struct{}
+	// noSource makes the service an older one without /api/camlink/source.
+	noSource bool
+	sources  []Source
 }
+
+// offering is a recorder that also offers a source.
+type offering struct {
+	*recorder
+	src Source
+}
+
+func (o *offering) CurrentSource() (Source, bool) { return o.src, true }
 
 func (f *fakeService) handler() http.Handler {
 	m := http.NewServeMux()
@@ -113,6 +124,36 @@ func (f *fakeService) handler() http.Handler {
 		f.tokens[tok] = true
 		f.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"streamToken": tok, "code": "7QK4-N2PX", "codeExpiresAtMs": time.Now().Add(10 * time.Minute).UnixMilli()})
+	})
+	m.HandleFunc("POST /api/camlink/source", func(w http.ResponseWriter, r *http.Request) {
+		if f.noSource {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Key    string `json:"key"`
+			Ts     int64  `json:"ts"`
+			Source Source `json:"source"`
+			Sig    string `json:"sig"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		pub, err := identity.ParsePublicKey(body.Key)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		sig, _ := base64.RawURLEncoding.DecodeString(body.Sig)
+		if !ed25519.Verify(pub, identity.SourceMessage(body.Ts, body.Key, body.Source.Kind, body.Source.Ready, body.Source.Label), sig) {
+			http.Error(w, "bad signature", 401)
+			return
+		}
+		f.mu.Lock()
+		f.sources = append(f.sources, body.Source)
+		f.mu.Unlock()
+		w.WriteHeader(204)
 	})
 	m.HandleFunc("GET /api/camlink/events", func(w http.ResponseWriter, r *http.Request) {
 		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -202,6 +243,61 @@ func TestHelloStreamAndDispatch(t *testing.T) {
 	defer rec.mu.Unlock()
 	if len(rec.online) < 2 || rec.online[len(rec.online)-1] != false {
 		t.Fatalf("online transitions %v", rec.online)
+	}
+}
+
+func TestSourceReportAfterHello(t *testing.T) {
+	f := &fakeService{t: t, tokens: map[string]bool{}, drop: true}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+	c, id := newClient(t, srv)
+	rec := &offering{recorder: newRecorder(), src: Source{Kind: "capture", Label: "Insta360 Link + Yeti Stereo Microphone", Ready: true}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx, rec) }()
+	rec.wait(t, "online:true")
+	rec.wait(t, "online:false")
+	rec.wait(t, "online:true") // second hello after the drop: reported again
+	f.mu.Lock()
+	n := len(f.sources)
+	first := f.sources[0]
+	f.mu.Unlock()
+	if n < 2 || first != rec.src {
+		t.Fatalf("sources %d %+v", n, first)
+	}
+	cancel()
+
+	// An explicit report on change, and a label cut to 64 characters.
+	long := Source{Kind: "camera", Label: strings.Repeat("x", 80), Ready: false}
+	if err := c.ReportSource(context.Background(), long); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	last := f.sources[len(f.sources)-1]
+	f.mu.Unlock()
+	if last.Kind != "camera" || len(last.Label) != 64 || last.Ready {
+		t.Fatalf("last %+v", last)
+	}
+
+	// A report signed by someone else is refused.
+	other, _ := identity.Load(t.TempDir())
+	body, _ := json.Marshal(map[string]any{
+		"key": id.PublicKeyString(), "ts": time.Now().Unix(), "source": rec.src,
+		"sig": base64.RawURLEncoding.EncodeToString(other.Sign(identity.SourceMessage(time.Now().Unix(), id.PublicKeyString(), "capture", true, rec.src.Label))),
+	})
+	resp, err := srv.Client().Post(srv.URL+"/api/camlink/source", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("imposter report: %d", resp.StatusCode)
+	}
+
+	// An older service without the route is not an error worth retrying.
+	f.noSource = true
+	if err := c.ReportSource(context.Background(), rec.src); err != ErrNoSourceReports {
+		t.Fatalf("old service: %v", err)
 	}
 }
 

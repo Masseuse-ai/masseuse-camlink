@@ -1,13 +1,15 @@
-// masseuse-camlink runs at home, next to the camera, and relays its
-// encrypted stream to the one attested enclave a session names
-// (docs/PROTOCOL.md).
+// masseuse-camlink runs on a computer at home and sends its camera and
+// microphone, or a camera on the home network, to the one attested enclave
+// a session names (docs/PROTOCOL.md).
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,20 +22,33 @@ import (
 
 	"github.com/FemLed/masseuse-camlink/internal/attest"
 	"github.com/FemLed/masseuse-camlink/internal/buildinfo"
+	"github.com/FemLed/masseuse-camlink/internal/capture"
 	"github.com/FemLed/masseuse-camlink/internal/identity"
 	"github.com/FemLed/masseuse-camlink/internal/oci"
 	"github.com/FemLed/masseuse-camlink/internal/provenance"
 	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
+	"github.com/FemLed/masseuse-camlink/internal/serve"
 	"github.com/FemLed/masseuse-camlink/internal/tunnel"
 )
 
 func main() {
 	var (
 		service  = flag.String("service", envOr("MASSEUSE_CAMLINK_SERVICE", "https://masseuse.ai"), "the masseuse.ai service")
-		stateDir = flag.String("state-dir", envOr("MASSEUSE_CAMLINK_STATE_DIR", defaultStateDir()), "where the identity key and pairings live")
+		stateDir = flag.String("state-dir", envOr("MASSEUSE_CAMLINK_STATE_DIR", defaultStateDir()), "where the identity key, pairings and camera choice live")
 		logLevel = flag.String("log-level", "info", "debug, info, warn or error")
 		version  = flag.Bool("version", false, "print the version and exit")
+		sf       sourceFlags
 	)
+	flag.StringVar(&sf.camera, "camera", "", "the computer's camera to send: its number in the devices listing, or (part of) its name; default the first")
+	flag.StringVar(&sf.mic, "mic", "", "the microphone to send with it: number or name; none for video only; default the first")
+	flag.StringVar(&sf.videoSize, "video-size", "", "capture size WxH (default "+capture.Defaults.VideoSize+")")
+	flag.IntVar(&sf.fps, "fps", 0, fmt.Sprintf("capture rate (default %d)", capture.Defaults.FPS))
+	flag.StringVar(&sf.bitrate, "bitrate", "", "video bit rate (default "+capture.Defaults.Bitrate+")")
+	flag.StringVar(&sf.encoder, "encoder", "", "auto, h264_videotoolbox, h264_mf or libx264 (default auto: the hardware encoder, then libx264)")
+	flag.StringVar(&sf.ffmpeg, "ffmpeg", "", "the ffmpeg executable (default: found on PATH)")
+	flag.StringVar(&sf.cameraURL, "camera-url", "", "send a camera on your network instead: rtsps://user:password@host:port/path")
+	flag.StringVar(&sf.cameraFingerprint, "camera-fingerprint", "", "that camera's certificate SHA-256, if you have it; otherwise it is trusted on first use")
+	flag.Usage = usage
 	flag.Parse()
 	if *version {
 		fmt.Println(buildinfo.Version(), buildinfo.GoVersion())
@@ -50,6 +65,18 @@ func main() {
 		os.Exit(2)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	switch flag.Arg(0) {
+	case "":
+	case "devices":
+		os.Exit(listDevices(ctx, sf.ffmpeg))
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q (the one command is: devices)\n", flag.Arg(0))
+		os.Exit(2)
+	}
+
 	id, err := identity.Load(*stateDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "identity:", err)
@@ -57,17 +84,43 @@ func main() {
 	}
 	fmt.Printf("masseuse-camlink %s\n", buildinfo.Version())
 	fmt.Printf("Identity %s… (state in %s)\n", id.PublicKeyString()[:8], *stateDir)
-	if n := len(id.PairedHashes()); n > 0 {
-		fmt.Printf("Paired with %d phone(s). Sessions that use your home camera will connect automatically.\n", n)
-	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// The connector's own stream and the camera behind it.
+	sink, err := serve.New(serve.Config{StateDir: *stateDir, Logger: logger})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "camera stream:", err)
+		os.Exit(1)
+	}
+	defer sink.Close()
+	cfg, err := resolveSourceConfig(*stateDir, sf)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, capture.ErrNoDevice) {
+			fmt.Fprintln(os.Stderr, "Run `masseuse-camlink devices` to see what is connected.")
+		}
+		os.Exit(2)
+	}
+	off.describe()
+	if sf.any() {
+		if err := saveSourceConfig(*stateDir, off.save); err != nil {
+			logger.Warn("could not remember the camera choice", "err", err)
+		}
+	}
+	cam := &camControl{sink: sink, offer: off, log: logger}
+	if n := len(id.PairedHashes()); n > 0 {
+		fmt.Printf("Paired with %d phone(s). Sessions that use this camera connect automatically.\n", n)
+	}
 
 	httpClient := &http.Client{}
 	mgr := &manager{
 		id:  id,
 		log: logger,
+		cam: cam,
 		dialer: &tunnel.Dialer{
 			Identity: id,
 			Attester: &policyAttester{
@@ -81,6 +134,7 @@ func main() {
 					Logger:   logger,
 				},
 			},
+			Local:  map[string]func() (net.Conn, error){serve.Target: cam.dialLocal},
 			Logger: logger,
 		},
 		tunnels: map[string]*active{},
@@ -91,7 +145,24 @@ func main() {
 		os.Exit(1)
 	}
 	mgr.closeAll("shutting down")
+	cam.off()
 	fmt.Println("\nStopped.")
+}
+
+func usage() {
+	w := flag.CommandLine.Output()
+	fmt.Fprintf(w, `masseuse-camlink sends this computer's camera and microphone, or a camera
+on your network, to the enclave of a masseuse.ai session.
+
+  masseuse-camlink                    run with the remembered (or first) camera and microphone
+  masseuse-camlink devices            list cameras and microphones
+  masseuse-camlink -camera 1 -mic 0   choose by number or by (part of) the name; remembered
+  masseuse-camlink -camera-url rtsps://user:password@192.168.1.20:322/live
+                                      send a camera on your network instead
+
+Flags:
+`)
+	flag.PrintDefaults()
 }
 
 // policyAttester fetches the service's policy (cached briefly), tightens it
@@ -216,10 +287,19 @@ type manager struct {
 	id     *identity.Identity
 	log    *slog.Logger
 	dialer *tunnel.Dialer
+	cam    *camControl
 
 	mu       sync.Mutex
 	tunnels  map[string]*active // by session id
 	lastCode string             // the code last shown, so a re-send is not printed twice
+}
+
+// CurrentSource tells the service which camera this connector offers.
+func (m *manager) CurrentSource() (rendezvous.Source, bool) {
+	if m.cam == nil || m.cam.offer == nil {
+		return rendezvous.Source{}, false
+	}
+	return m.cam.offer.source(), true
 }
 
 type active struct {
@@ -239,7 +319,7 @@ func (m *manager) OnCode(code string, expiresAt time.Time) {
 		return
 	}
 	fmt.Printf("\nPairing code: %s\n", code)
-	fmt.Println("Enter it in the masseuse.ai app: Camera > Home network camera.")
+	fmt.Println("Enter it in the masseuse.ai app: Camera > Computer or home camera.")
 	if !expiresAt.IsZero() && expiresAt.Year() > 2000 {
 		fmt.Printf("(valid until %s; a new one appears here when it expires)\n\n", expiresAt.Local().Format("15:04"))
 	}
@@ -250,7 +330,7 @@ func (m *manager) OnPaired(hash string) {
 		m.log.Error("could not save pairing", "err", err)
 		return
 	}
-	fmt.Println("Paired with a phone. Sessions that use your home camera will connect automatically.")
+	fmt.Println("Paired with a phone. Sessions that use this camera connect automatically.")
 }
 
 func (m *manager) OnOnline(online bool) {
@@ -308,8 +388,11 @@ func (m *manager) closeAll(reason string) {
 }
 
 // run keeps a tunnel up for the session until it is cleared, re-dialing
-// after failures with backoff.
+// after failures with backoff. The camera, if the session turned it on,
+// goes off whenever the tunnel is down: it comes back at the next stream
+// the enclave opens.
 func (m *manager) run(ctx context.Context, d rendezvous.Dial) {
+	defer m.cam.off()
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
@@ -330,8 +413,9 @@ func (m *manager) run(ctx context.Context, d rendezvous.Dial) {
 			continue
 		}
 		backoff = time.Second
-		fmt.Println("Camera link active: relaying to the verified enclave.")
+		fmt.Println("Camera link active: connected to the verified enclave.")
 		err = t.Serve(ctx)
+		m.cam.off()
 		if ctx.Err() != nil {
 			return
 		}

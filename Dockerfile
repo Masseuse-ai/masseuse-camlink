@@ -2,7 +2,9 @@
 # binaries under <os>/<arch>/, one image for every platform.
 #
 # gcr.io/distroless/static-debian12:nonroot, pinned by digest: no shell, no
-# package manager, an unprivileged user (65532).
+# package manager, an unprivileged user (65532). The image carries no ffmpeg:
+# it is for a NAS or Raspberry Pi sending a camera on the network
+# (-camera-url); the computer's own camera is for the native binaries.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG TARGETPLATFORM
 
