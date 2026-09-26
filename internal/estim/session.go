@@ -52,7 +52,9 @@ type queued struct {
 // Session speaks the companion protocol for the one live session the
 // service attaches. It arms the device when the session attaches, renews
 // the window on every heartbeat acknowledgment, relays commands one at a
-// time, and releases the device when the service goes quiet or detaches.
+// time, takes the session's settings (device_settings) into the Runtime
+// and reports what is in force, and releases the device when the service
+// goes quiet or detaches.
 type Session struct {
 	Runtime *Runtime
 	Uplink  Uplink
@@ -232,6 +234,8 @@ func (s *Session) detach(ctx context.Context, reason string, tell bool) {
 	if _, err := s.Runtime.Release(ctx, reason); err != nil {
 		s.log().Warn("estim: release on detach failed", "err", err)
 	}
+	// The settings were the session's; the defaults hold until the next.
+	s.Runtime.ResetSettings()
 	if attached {
 		s.log().Info("estim: session detached", "session", sid, "reason", reason)
 		if tell {
@@ -317,6 +321,9 @@ type controlPayload struct {
 	CommandID any             `json:"commandId"`
 	Command   json.RawMessage `json:"command"`
 	IssuedAt  any             `json:"issuedAt"`
+	// raw is the payload as received, for the controls whose fields are
+	// their own (device_settings).
+	raw json.RawMessage
 }
 
 // Handle takes one message the service sent for sessionID.
@@ -341,6 +348,7 @@ func (s *Session) Handle(ctx context.Context, sessionID string, raw json.RawMess
 			s.log().Debug("estim: ignoring a control message with a bad payload", "err", err)
 			return
 		}
+		p.raw = m.Payload
 		s.handleControl(ctx, sessionID, p)
 	case "detach":
 		s.mu.Lock()
@@ -375,11 +383,43 @@ func (s *Session) handleControl(ctx context.Context, envelopeSession string, p c
 		if s.attached && s.sessionID != sid {
 			s.log().Info("estim: live session changed", "from", s.sessionID, "to", sid)
 		}
+		// Settings are one session's: another session starts from the
+		// defaults. The same session attaching again (the service came
+		// back) keeps them; it sends its own right after anyway.
+		fresh := !s.attached || s.sessionID != sid
 		s.sessionID, s.attached, s.lastAck = sid, true, s.now()
 		s.mu.Unlock()
+		if fresh {
+			s.Runtime.ResetSettings()
+		}
 		s.log().Info("estim: attached to live session", "session", sid)
 		s.queueRuntimeState(sid)
+		s.queueSettings(sid)
 		s.autoArm(ctx, "attach")
+	case "device_settings":
+		s.mu.Lock()
+		sid, attached := s.sessionID, s.attached
+		s.mu.Unlock()
+		if !attached {
+			s.log().Debug("estim: ignoring settings: no live session is attached")
+			return
+		}
+		if p.SessionID != sid || (envelopeSession != "" && envelopeSession != sid) {
+			s.log().Warn("estim: ignoring settings for another session", "session", p.SessionID)
+			return
+		}
+		settings, err := ParseSettings(p.raw)
+		if err != nil {
+			// Refused whole; the service is told what stands.
+			s.log().Warn("estim: settings refused", "err", err)
+			s.queueSettings(sid)
+			return
+		}
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.applySettings(ctx, sid, settings)
+		}()
 	case "mk312_command", "device_command":
 		s.mu.Lock()
 		sid, attached := s.sessionID, s.attached
@@ -420,6 +460,36 @@ func (s *Session) handleControl(ctx context.Context, envelopeSession string, p c
 	default:
 		s.log().Debug("estim: ignoring control", "type", p.Type)
 	}
+}
+
+// applySettings takes the session's settings into the Runtime and reports
+// what is in force. A change the device could not take in place released
+// it (Runtime.SetSettings); arming again, in the new range, follows for
+// the session still attached.
+func (s *Session) applySettings(ctx context.Context, sid string, settings Settings) {
+	released, err := s.Runtime.SetSettings(ctx, settings)
+	if err != nil {
+		s.log().Warn("estim: settings could not be applied", "err", err)
+	} else {
+		s.log().Info("estim: settings applied", "power", settings.PowerMode, "levelMax", settings.LevelMax, "released", released)
+	}
+	s.mu.Lock()
+	stillAttached := s.attached && s.sessionID == sid
+	s.mu.Unlock()
+	if !stillAttached {
+		return
+	}
+	s.queueSettings(sid)
+	if released {
+		s.queueRuntimeState(sid)
+		s.autoArm(ctx, "settings changed")
+	}
+}
+
+// queueSettings tells the service the settings in force for sid.
+func (s *Session) queueSettings(sid string) {
+	st := s.Runtime.Settings()
+	s.queue(sid, false, map[string]any{"type": "device_settings", "powerMode": st.PowerMode, "levelMax": st.LevelMax})
 }
 
 func (s *Session) runCommand(ctx context.Context, sid string, p controlPayload, cmd Command, perr error, isRelease bool) {

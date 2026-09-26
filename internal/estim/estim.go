@@ -4,8 +4,9 @@
 // (docs/PROTOCOL.md, section 7).
 //
 // The package is device-neutral. A Driver speaks one device's protocol; the
-// Runtime owns the arm window, the cancellation latch, the caps and fault
-// handling; the Session speaks the companion protocol with the service.
+// Runtime owns the arm window, the cancellation latch, the caps, the
+// attached session's settings within them and fault handling; the Session
+// speaks the companion protocol with the service.
 package estim
 
 import (
@@ -15,11 +16,39 @@ import (
 	"fmt"
 )
 
-// Kind names a supported device family.
+// Kind names a device family. It is the `kind` of the Descriptor the
+// connector reports (docs/PROTOCOL.md, section 7.3) and the value the
+// service keys its behaviour on, so the names are fixed here whether or not
+// this program carries a driver for them yet.
 type Kind string
 
-// KindMK312BT is the ErosTek MK-312BT over its serial link.
-const KindMK312BT Kind = "mk312bt"
+const (
+	// KindMK312BT is the ErosTek MK-312BT over its serial link. The one
+	// family with a driver in this program.
+	KindMK312BT Kind = "mk312bt"
+	// KindEstim2B is the E-Stim Systems 2B over its serial link.
+	KindEstim2B Kind = "estim-2b"
+	// KindCoyote is the DG-Lab Coyote, a Bluetooth Low Energy device.
+	KindCoyote Kind = "dglabs-coyote"
+	// KindTENS is any other transcutaneous electrical nerve stimulation unit
+	// the connector cannot name more precisely.
+	KindTENS Kind = "tens"
+)
+
+// Kinds lists every device family the Descriptor may name, in the order
+// above. A service that receives a kind outside this list should treat the
+// descriptor as malformed.
+var Kinds = []Kind{KindMK312BT, KindEstim2B, KindCoyote, KindTENS}
+
+// Known reports whether k is one of Kinds.
+func (k Kind) Known() bool {
+	for _, known := range Kinds {
+		if k == known {
+			return true
+		}
+	}
+	return false
+}
 
 // Capabilities tells the service what a device accepts.
 type Capabilities struct {
@@ -140,8 +169,12 @@ type Result struct {
 
 // Caps the connector holds every device to, whatever the service asks.
 const (
-	// LevelCap is the highest level a command may set.
-	LevelCap = 85
+	// DefaultLevelCap is the highest level a command may set until the
+	// attached session sets its own maximum (Settings.LevelMax).
+	DefaultLevelCap = 85
+	// LevelScaleMax is the top of the device's own 0..99 scale; no
+	// setting passes it.
+	LevelScaleMax = 99
 	// LevelDeltaCap bounds one adjust_level step.
 	LevelDeltaCap = 5
 	// TempoPercentCap is the top of the tempo (percent) scale.
@@ -149,6 +182,68 @@ const (
 	// TempoDeltaCap bounds one adjust_ma step.
 	TempoDeltaCap = 10
 )
+
+// Power ranges a session may arm the device in.
+const (
+	PowerModeNormal = "normal"
+	PowerModeHigh   = "high"
+)
+
+// Settings are what the attached session may adjust about how the
+// connector drives the device (docs/PROTOCOL.md, section 7.3,
+// `device_settings`): the power range the device is armed in, and the
+// level no command may set past. They are held for the attached session
+// alone; a detach restores DefaultSettings.
+type Settings struct {
+	PowerMode string `json:"powerMode"`
+	LevelMax  int    `json:"levelMax"`
+}
+
+// DefaultSettings are what apply until a session sets its own: the high
+// power range while armed, the level at most DefaultLevelCap.
+func DefaultSettings() Settings {
+	return Settings{PowerMode: PowerModeHigh, LevelMax: DefaultLevelCap}
+}
+
+// Validate refuses a power range the connector does not arm in and a
+// level maximum off the device's scale.
+func (s Settings) Validate() error {
+	if s.PowerMode != PowerModeNormal && s.PowerMode != PowerModeHigh {
+		return fmt.Errorf("powerMode must be %q or %q", PowerModeNormal, PowerModeHigh)
+	}
+	if s.LevelMax < 0 || s.LevelMax > LevelScaleMax {
+		return fmt.Errorf("levelMax must be 0..%d", LevelScaleMax)
+	}
+	return nil
+}
+
+// ParseSettings decodes a `device_settings` payload: both fields present,
+// the power range one of the two, the level maximum an integer on the
+// device's scale. Unknown fields are the service's business.
+func ParseSettings(raw json.RawMessage) (Settings, error) {
+	var p struct {
+		PowerMode *string `json:"powerMode"`
+		LevelMax  *int    `json:"levelMax"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return Settings{}, fmt.Errorf("estim: malformed settings: %w", err)
+	}
+	if p.PowerMode == nil || p.LevelMax == nil {
+		return Settings{}, errors.New("estim: settings need powerMode and levelMax")
+	}
+	s := Settings{PowerMode: *p.PowerMode, LevelMax: *p.LevelMax}
+	if err := s.Validate(); err != nil {
+		return Settings{}, fmt.Errorf("estim: %w", err)
+	}
+	return s, nil
+}
+
+// LevelMaxFor is the level no command may set past under settings on a
+// device with caps: the lowest of the session's maximum, the device's
+// own and the scale's top.
+func LevelMaxFor(caps Capabilities, settings Settings) int {
+	return max(0, min(caps.LevelMax, settings.LevelMax, LevelScaleMax))
+}
 
 // A Driver speaks one device's protocol over an open link. Methods are
 // called one at a time; the Runtime serializes them.
@@ -164,15 +259,16 @@ type Driver interface {
 	// reports them together.
 	Release(ctx context.Context) error
 	// Arm prepares the device for an armed window with outputs still at
-	// zero (for the MK-312BT: the high power range).
-	Arm(ctx context.Context) error
+	// zero, in the power range named (PowerModeNormal or PowerModeHigh).
+	Arm(ctx context.Context, powerMode string) error
 	Status(ctx context.Context) (Status, error)
 	// Telemetry is a compact routine sample, cheaper than Status.
 	Telemetry(ctx context.Context) (Frame, error)
 	// Execute runs one bounded actuation command (not status or release,
-	// which the Runtime handles). The Runtime has already checked the caps;
-	// cancelled, polled between steps, preempts a ramp.
-	Execute(ctx context.Context, cmd Command, cancelled func() bool) (Result, error)
+	// which the Runtime handles). The Runtime has already checked the caps
+	// and passes the level no step may pass (LevelMaxFor); cancelled,
+	// polled between steps, preempts a ramp.
+	Execute(ctx context.Context, cmd Command, levelMax int, cancelled func() bool) (Result, error)
 	// Close releases the device when restore is set and leaves it ready for
 	// a fresh connection. It never leaves a stale session behind.
 	Close(ctx context.Context, restore bool) error
@@ -204,8 +300,9 @@ func ParseCommand(raw json.RawMessage) (Command, error) {
 	return cmd, nil
 }
 
-// CheckCaps enforces the connector's caps on an actuation command.
-func CheckCaps(cmd Command, caps Capabilities) error {
+// CheckCaps enforces the connector's caps on an actuation command: the
+// device's, and the session's settings within them.
+func CheckCaps(cmd Command, caps Capabilities, settings Settings) error {
 	switch cmd.Verb {
 	case "set_mode":
 		if cmd.Mode == nil {
@@ -218,8 +315,9 @@ func CheckCaps(cmd Command, caps Capabilities) error {
 		}
 		return fmt.Errorf("mode is not allowed: %d", *cmd.Mode)
 	case "set_level":
-		if cmd.Level == nil || *cmd.Level < 0 || *cmd.Level > min(LevelCap, caps.LevelMax) {
-			return fmt.Errorf("level must be 0..%d", min(LevelCap, caps.LevelMax))
+		levelMax := LevelMaxFor(caps, settings)
+		if cmd.Level == nil || *cmd.Level < 0 || *cmd.Level > levelMax {
+			return fmt.Errorf("level must be 0..%d", levelMax)
 		}
 	case "adjust_level":
 		if cmd.Delta == nil || *cmd.Delta == 0 || *cmd.Delta < -LevelDeltaCap || *cmd.Delta > LevelDeltaCap {

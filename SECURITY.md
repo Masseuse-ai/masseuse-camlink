@@ -34,10 +34,13 @@ are acknowledged within three business days.
   computer (today the ErosTek MK-312BT over its serial cable), the connector
   relays the service's commands to it and its status back, over the same
   authenticated channel it uses for camera dials; the camera tunnel carries
-  none of it. The connector holds the device to fixed bounds the service
-  cannot change: Channel A only, level at most 85 of 99, one step per
-  quarter second with a read-back, patterns from a fixed allow-list, the
-  power range chosen by the connector. The device is armed only while a
+  none of it. The connector holds the device to bounds the service cannot
+  change: Channel A only, one step per quarter second with a read-back,
+  patterns from a fixed allow-list, the level never past the device's own
+  99. Two bounds within those are the attached session's to set from the
+  phone and are restored to the defaults when it detaches: the power range
+  the device is armed in (normal or high; high by default) and the highest
+  level a command may set (85 by default). The device is armed only while a
   session started on your phone is attached, for at most 30 minutes per
   renewal, and is put back to zero (front panel live, normal power) when the
   session ends, when the service goes 15 s without acknowledging a

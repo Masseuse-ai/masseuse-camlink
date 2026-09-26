@@ -147,8 +147,11 @@ The enclave closed the camera link (session cleared); waiting for the service.
 
 The first is a ticket the enclave no longer holds (the session moved on);
 the second is the session letting the camera go. Both are normal after
-"Use phone camera" or the end of a session; the next "Use this camera"
-brings a new ticket. While attached, the program also tells the service
+"Stop using this camera" or the end of a session; the next "Use this
+camera" brings a new ticket. A new ticket that arrives while the link is up
+(the session's room was leased again, as when its picture is being set up)
+changes nothing on screen: the link stays, and the new ticket is the one
+used if the link ever has to be redialed. While attached, the program also tells the service
 every 30 s that it is still there, so if the computer sleeps or drops off
 the network the app shows the camera offline within about 90 s rather than
 whenever the dead connection is noticed.
@@ -171,11 +174,18 @@ at normal, until a session on your phone uses this connector. That session
 arms it; the arm lasts as long as the session keeps answering, and the
 connector puts the device back to zero when the session ends, when the
 service goes quiet for 15 s, when any command fails, when the device stops
-answering, and when you stop the connector (Ctrl-C). The connector never
-sets Channel A above 85 of the device's 99, never touches Channel B, moves
-the level one step at a time, and selects only patterns from a fixed list.
-The service can only ask for what the connector allows; those limits are in
-this program's source, not on the service.
+answering, and when you stop the connector (Ctrl-C). Two of the bounds are
+yours to set for a session, from the phone: the power range the device is
+armed in (normal or high; high until you choose) and the highest level it
+may be set to (85 of the device's 99 until you choose; never more than 99).
+They hold for that session only; the next starts from the defaults. If you
+change them while the device is running and it cannot take the change in
+place (a different power range, or a maximum below where it is), the
+connector puts the device to zero first and arms it again within the new
+bounds. Everything else is fixed: the connector never touches Channel B,
+moves the level one step at a time, and selects only patterns from a fixed
+list. The service can only ask for what the connector allows; those limits
+are in this program's source, not on the service.
 
 To check the device without a session:
 
@@ -193,7 +203,12 @@ needs access to the serial device (usually the `dialout` group).
 
 What travels between the connector and the service for this is described in
 [docs/PROTOCOL.md](docs/PROTOCOL.md), section 7. It does not go through the
-camera tunnel and the enclave never sees it.
+camera tunnel and the enclave never sees it. The connector names the device
+family it serves with a fixed `kind` (`mk312bt` today; `estim-2b`,
+`dglabs-coyote` and `tens` are reserved for the E-Stim Systems 2B, the
+DG-Lab Coyote and other TENS units, without a driver yet), and the service
+shapes the session on that name: a session with no device is guided
+differently from one with a device connected.
 
 ## How it stays private
 

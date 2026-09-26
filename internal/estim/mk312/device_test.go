@@ -403,30 +403,44 @@ func TestDriverExecuteAndCaps(t *testing.T) {
 		t.Fatal("driver identity")
 	}
 	caps := drv.Capabilities()
-	if caps.LevelMax != 85 || len(caps.Modes) != 11 || !caps.Tempo || len(caps.Channels) != 1 || caps.Channels[0] != "a" {
+	if caps.LevelMax != estim.LevelScaleMax || len(caps.Modes) != 11 || !caps.Tempo || len(caps.Channels) != 1 || caps.Channels[0] != "a" {
 		t.Fatalf("caps = %+v", caps)
 	}
-	if err := drv.Arm(ctx); err != nil || box.Power() != mk312.PowerHigh {
+	if mk312.LCDMax != estim.LevelScaleMax {
+		t.Fatal("the device's scale and the settings' scale must agree")
+	}
+	// The arm is in the range the session chose; the low range is not on offer.
+	if err := drv.Arm(ctx, "normal"); err != nil || box.Power() != mk312.PowerNormal {
+		t.Fatalf("arm normal: %v power=%d", err, box.Power())
+	}
+	if err := drv.Arm(ctx, "low"); err == nil || box.Power() != mk312.PowerNormal {
+		t.Fatalf("arm low: %v power=%d", err, box.Power())
+	}
+	if err := drv.Arm(ctx, ""); err == nil {
+		t.Fatal("arm without a range accepted")
+	}
+	if err := drv.Arm(ctx, "high"); err != nil || box.Power() != mk312.PowerHigh {
 		t.Fatalf("arm: %v power=%d", err, box.Power())
 	}
+	const defaultCap = estim.DefaultLevelCap
 	box.Set(mk312.AddressLevelB, 30)
-	res, err := drv.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(10)}, nil)
+	res, err := drv.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(10)}, defaultCap, nil)
 	if err != nil || *res.Level != 10 || box.LevelA() != 10 || box.LevelB() != 0 {
 		t.Fatalf("set_level: %+v, %v (A=%d B=%d)", res, err, box.LevelA(), box.LevelB())
 	}
-	res, err = drv.Execute(ctx, estim.Command{Verb: "adjust_level", Delta: estim.Int(-3)}, nil)
+	res, err = drv.Execute(ctx, estim.Command{Verb: "adjust_level", Delta: estim.Int(-3)}, defaultCap, nil)
 	if err != nil || *res.PreviousLevel != 10 || *res.Level != 7 {
 		t.Fatalf("adjust_level: %+v, %v", res, err)
 	}
-	res, err = drv.Execute(ctx, estim.Command{Verb: "set_ma", Percent: estim.Int(0)}, nil)
+	res, err = drv.Execute(ctx, estim.Command{Verb: "set_ma", Percent: estim.Int(0)}, defaultCap, nil)
 	if err != nil || *res.LevelMA != 1 {
 		t.Fatalf("set_ma: %+v, %v", res, err)
 	}
-	res, err = drv.Execute(ctx, estim.Command{Verb: "adjust_ma", Delta: estim.Int(10)}, nil)
+	res, err = drv.Execute(ctx, estim.Command{Verb: "adjust_ma", Delta: estim.Int(10)}, defaultCap, nil)
 	if err != nil || *res.PreviousPercent != 0 || *res.Percent != 10 {
 		t.Fatalf("adjust_ma: %+v, %v", res, err)
 	}
-	res, err = drv.Execute(ctx, estim.Command{Verb: "set_mode", Mode: estim.Int(0x7B)}, nil)
+	res, err = drv.Execute(ctx, estim.Command{Verb: "set_mode", Mode: estim.Int(0x7B)}, defaultCap, nil)
 	if err != nil || *res.Mode != 0x7B || box.Mode() != 0x7B {
 		t.Fatalf("set_mode: %+v, %v", res, err)
 	}
@@ -443,14 +457,31 @@ func TestDriverExecuteAndCaps(t *testing.T) {
 		{Verb: "release"},
 		{Verb: "bogus"},
 	} {
-		if _, err := drv.Execute(ctx, bad, nil); err == nil {
+		if _, err := drv.Execute(ctx, bad, defaultCap, nil); err == nil {
 			t.Errorf("%+v accepted", bad)
 		}
 	}
-	// adjust_level clamps at the cap, never above it.
+	// adjust_level clamps at the maximum it is given, never above it.
 	box.Set(mk312.AddressLevelA, mk312.LCDToRAM(84))
-	if res, err := drv.Execute(ctx, estim.Command{Verb: "adjust_level", Delta: estim.Int(5)}, nil); err != nil || *res.Level != 85 {
+	if res, err := drv.Execute(ctx, estim.Command{Verb: "adjust_level", Delta: estim.Int(5)}, defaultCap, nil); err != nil || *res.Level != 85 {
 		t.Fatalf("adjust to cap: %+v, %v", res, err)
+	}
+	// The maximum is the session's: lower, or up to the device's scale, and
+	// never past the scale whatever it is told.
+	if _, err := drv.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(41)}, 40, nil); err == nil {
+		t.Fatal("level over a lower maximum accepted")
+	}
+	if res, err := drv.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(40)}, 40, nil); err != nil || *res.Level != 40 {
+		t.Fatalf("set_level at a lower maximum: %+v, %v", res, err)
+	}
+	if res, err := drv.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(99)}, mk312.LCDMax, nil); err != nil || *res.Level != 99 || box.LevelA() != 99 {
+		t.Fatalf("set_level to the scale's top: %+v, %v", res, err)
+	}
+	if res, err := drv.Execute(ctx, estim.Command{Verb: "adjust_level", Delta: estim.Int(5)}, 500, nil); err != nil || *res.Level != 99 {
+		t.Fatalf("adjust past the scale: %+v, %v", res, err)
+	}
+	if _, err := drv.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(100)}, 500, nil); err == nil {
+		t.Fatal("level past the scale accepted")
 	}
 }
 

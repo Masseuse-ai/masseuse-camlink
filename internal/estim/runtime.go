@@ -75,7 +75,9 @@ func (r *Ring) Dropped() int {
 // latch; every release, fault or expiry sets it, and an actuation command
 // needs the device armed and the latch clear. Device I/O is serialized: a
 // level ramp holds the device for its whole run and telemetry samples that
-// find it busy record a gap instead of waiting.
+// find it busy record a gap instead of waiting. The attached session's
+// Settings bound what runs (the power range armed in, the level maximum)
+// within the device's own caps; they are DefaultSettings until set.
 type Runtime struct {
 	// Connect finds a device and opens a session with it. The Runtime
 	// releases every fresh connection before trusting it.
@@ -104,6 +106,10 @@ type Runtime struct {
 	frames      int
 	gaps        int
 	readErrors  int
+	// settings are the attached session's; DefaultSettings while the zero
+	// value (hasSettings false).
+	settings    Settings
+	hasSettings bool
 
 	// Telemetry is the ring of sampled frames.
 	Telemetry Ring
@@ -168,6 +174,64 @@ func (r *Runtime) ArmedUntil() (time.Time, bool) {
 
 // CancelLatched says whether the fail-closed latch is set.
 func (r *Runtime) CancelLatched() bool { return r.cancel.Load() }
+
+// Settings are the attached session's settings in force (DefaultSettings
+// until set).
+func (r *Runtime) Settings() Settings {
+	r.st.Lock()
+	defer r.st.Unlock()
+	return r.settingsLocked()
+}
+
+func (r *Runtime) settingsLocked() Settings {
+	if !r.hasSettings {
+		return DefaultSettings()
+	}
+	return r.settings
+}
+
+// SetSettings takes the attached session's settings. They bound every
+// command from here on. While armed, a changed power range or a level
+// maximum below the level the device is at cannot be applied in place:
+// the device is released (outputs to zero, latch set) and the caller
+// arms again, in the new range; released says whether that happened. A
+// level maximum at or above the current level, or a change while not
+// armed, applies silently. Invalid settings are refused and nothing
+// changes.
+func (r *Runtime) SetSettings(ctx context.Context, s Settings) (released bool, err error) {
+	if err := s.Validate(); err != nil {
+		return false, fmt.Errorf("estim: %w", err)
+	}
+	r.st.Lock()
+	prev := r.settingsLocked()
+	r.settings = s
+	r.hasSettings = true
+	armed := r.armedLocked()
+	level := 0
+	if r.hasStatus && r.lastStatus.LevelA != nil {
+		level = *r.lastStatus.LevelA
+	}
+	r.st.Unlock()
+	if prev == s || !armed {
+		return false, nil
+	}
+	if prev.PowerMode == s.PowerMode && level <= s.LevelMax {
+		return false, nil
+	}
+	if _, err := r.Release(ctx, "settings changed"); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// ResetSettings restores DefaultSettings: the session they belonged to
+// has detached. No device I/O; the detach's release has already run.
+func (r *Runtime) ResetSettings() {
+	r.st.Lock()
+	defer r.st.Unlock()
+	r.settings = Settings{}
+	r.hasSettings = false
+}
 
 // RequestCancel sets the latch: a running ramp stops at its next step and
 // no actuation runs until the next Arm.
@@ -340,21 +404,23 @@ func (r *Runtime) Close(ctx context.Context) error {
 
 // -- arming ----------------------------------------------------------------------
 
-// Arm opens a bounded window: outputs zeroed, the power range raised, the
-// latch cleared. Only a live session attaching (or being renewed) calls it.
+// Arm opens a bounded window: outputs zeroed, the power range set to the
+// session's (Settings.PowerMode), the latch cleared. Only a live session
+// attaching (or being renewed) calls it.
 func (r *Runtime) Arm(ctx context.Context) error {
 	r.dev.Lock()
 	defer r.dev.Unlock()
 	if r.device == nil {
 		return errors.New("estim: device is not connected")
 	}
+	powerMode := r.Settings().PowerMode
 	// Arming is the one act that clears the fail-closed latch.
 	r.cancel.Store(false)
 	err := func() error {
 		if err := r.device.Release(ctx); err != nil {
 			return err
 		}
-		if err := r.device.Arm(ctx); err != nil {
+		if err := r.device.Arm(ctx, powerMode); err != nil {
 			return err
 		}
 		s, err := r.device.Status(ctx)
@@ -372,7 +438,7 @@ func (r *Runtime) Arm(ctx context.Context) error {
 		return err
 	}
 	r.armDeadline = r.now().Add(r.window())
-	r.log().Info("estim: armed", "window", r.window().String())
+	r.log().Info("estim: armed", "window", r.window().String(), "power", powerMode)
 	return nil
 }
 
@@ -521,10 +587,11 @@ func (r *Runtime) Execute(ctx context.Context, cmd Command) (Result, Status, err
 	if r.cancel.Load() {
 		return Result{}, r.LastStatus(), ErrLatched
 	}
-	if err := CheckCaps(cmd, dev.Capabilities()); err != nil {
+	caps, settings := dev.Capabilities(), r.Settings()
+	if err := CheckCaps(cmd, caps, settings); err != nil {
 		return Result{}, r.LastStatus(), fmt.Errorf("estim: %w", err)
 	}
-	res, err := dev.Execute(ctx, cmd, r.cancel.Load)
+	res, err := dev.Execute(ctx, cmd, LevelMaxFor(caps, settings), r.cancel.Load)
 	if err != nil {
 		return res, r.LastStatus(), err
 	}

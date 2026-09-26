@@ -90,8 +90,13 @@ One stream per connector: a new stream replaces the previous one.
 | `estim` | `{"sessionId","message"}` | hand `message` to the stimulation device link (section 7); an older connector ignores it |
 
 On any disconnect the connector re-`hello`s with exponential backoff
-(1 s .. 60 s, jittered). A `dial` for a session it is already connected to is
-idempotent; a `dial` for a different origin replaces the current tunnel.
+(1 s .. 60 s, jittered). A `dial` for a session it is already on with the
+same origin keeps the tunnel it has (up, or being re-dialed after a network
+failure) and takes the new ticket for its next dial: the service sends one
+whenever it brokers the tunnel again, and the enclave then expects that
+ticket (section 5). A `dial` for a different origin replaces the current
+tunnel; so does one for a session whose tunnel the connector gave up on
+(the enclave refused the ticket, or closed the link itself).
 
 ### 2.3 `POST /api/camlink/source`
 
@@ -348,12 +353,11 @@ remembered in `source.json`:
   unchanged. The child runs only while a session is reading: it starts at the
   first `OPEN` for the reserved target and stops when the session ends, so
   the camera light is off between sessions. When the session's tunnel goes
-  down while the session lasts (the service re-dials with a new ticket on
-  every new lease, and the connector re-dials after a network failure) the
-  child keeps running for 15 s, since the relay is back at the stream within
-  seconds and a restart would put it back to zero just as the relay's
-  `DESCRIBE` arrives; with no stream opened by then it stops. A `DESCRIBE`
-  that arrives while ffmpeg is still starting waits for it (up to 12 s, longer
+  down while the session lasts (a network failure; the connector re-dials
+  on its own) the child keeps running for 15 s, since the relay is back at
+  the stream within seconds and a restart would put it back to zero just as
+  the relay's `DESCRIBE` arrives; with no stream opened by then it stops. A
+  `DESCRIBE` that arrives while ffmpeg is still starting waits for it (up to 12 s, longer
   than the relay's own 10 s patience for the answer, so that the connector is
   never what gives up first; the enclave gives the path 15 s to be ready).
   By default the capture uses the first camera and the first microphone
@@ -439,13 +443,29 @@ Whatever the service asks:
 
 - Channel A only; Channel B is written to zero before and after every
   command.
-- Level at most 85 of the device's 0..99 scale, moved one step per quarter
-  second with a read-back at every step; `adjust_level` moves at most 5.
+- Level at most the session's maximum (`device_settings.levelMax`, 85
+  until the session sets one) on the device's 0..99 scale, moved one step
+  per quarter second with a read-back at every step; `adjust_level` moves
+  at most 5 and never past the maximum.
 - Tempo (the device's MultiAdjust) 0..100 percent of the loaded pattern's
   range; `adjust_ma` moves at most 10.
 - Patterns from a fixed allow-list of the device's own pattern numbers
   (`0x76..0x7B`, `0x80..0x84`); the connector names none of them.
-- The power range is the connector's: high while armed, normal otherwise.
+- The power range is normal while released and, while armed, the
+  session's choice of normal or high (`device_settings.powerMode`, high
+  until the session sets one); the low range is never selected.
+
+Settings: the two bounds above that are the session's (`powerMode`,
+`levelMax`) arrive as a `device_settings` control for the attached session
+and are held for that session alone; a detach, or another session
+attaching, restores the defaults (high, 85). A change while armed that the
+device cannot take in place - a different power range, or a maximum below
+the level the device is at - releases the device (outputs to zero) and the
+connector arms again, in the new range; any other change applies at once.
+A `device_settings` control with a power range other than the two, a
+maximum off the scale, or a `sessionId` other than the attached session's
+is refused whole. The connector reports what it holds (`device_settings`
+up) after every attach and every change, accepted or not.
 
 Arming: the device is armed when the service attaches a live session
 (`companion_attached`); the attach is the consent, given on the phone. The
@@ -475,6 +495,7 @@ session:
 | `armed` | `armed`, `expiresAt` (RFC 3339 or null), `heldOff` (always false) | with `device_status` |
 | `device_telemetry` | `frames` (at most 32) | every 2 s while attached, when frames were sampled |
 | `device_ack` | `commandId`, `ok`, `result` or `error`, `status` | for every command |
+| `device_settings` | `powerMode` (`normal` or `high`), `levelMax` (0..99) | the settings in force: after every attach and every `device_settings` control |
 | `detached` | `reason` | when the connector detaches on its own |
 
 and at connector level (`sessionId` `""`), after every hello and whenever
@@ -482,13 +503,32 @@ it changes:
 
 | type | fields | when |
 |---|---|---|
-| `device` | `kind` (`mk312bt`), `label`, `connected`, `capabilities` `{levelMax, channels, modes, tempo}` | a device is found or lost |
+| `device` | `kind`, `label`, `connected`, `capabilities` `{levelMax, channels, modes, tempo}` | a device is found or lost |
+
+`kind` names the device family and is what the service keys its behaviour
+on. The names are fixed in `internal/estim/estim.go` (`Kinds`) whether or
+not this program carries a driver for the family:
+
+| `kind` | device | driver in this program |
+|---|---|---|
+| `mk312bt` | ErosTek MK-312BT, serial link | yes |
+| `estim-2b` | E-Stim Systems 2B, serial link | not yet |
+| `dglabs-coyote` | DG-Lab Coyote, Bluetooth Low Energy | not yet |
+| `tens` | any other transcutaneous electrical nerve stimulation unit | not yet |
+
+A service that receives a `kind` outside this table should treat the
+descriptor as malformed.
+
+`capabilities.levelMax` is the device's own scale (99 for the MK-312BT):
+the most a session's `levelMax` may be. What a command may set is bounded
+by the session's setting within it (section 7.2).
 
 Down (service to connector, as `estim` events):
 
 | message | connector action |
 |---|---|
-| `{"type":"control","payload":{"type":"companion_attached","sessionId",...}}` | attach to the session, report state, arm |
+| `{"type":"control","payload":{"type":"companion_attached","sessionId",...}}` | attach to the session, report state and settings, arm |
+| `{"type":"control","payload":{"type":"device_settings","sessionId","powerMode","levelMax"}}` | take the session's settings (7.2), report them; release and arm again when the device cannot take the change in place |
 | `{"type":"control","payload":{"type":"mk312_command","commandId","sessionId","command":{"verb",...}}}` | run the command (below), acknowledge, report state |
 | `{"type":"heartbeat_ack","serverTime"}` | renew the arm |
 | `{"type":"detach","reason"}` | release and detach without replying |

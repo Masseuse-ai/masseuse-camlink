@@ -41,6 +41,7 @@ jobs:
           go test -run=^$ -fuzz=FuzzDecode -fuzztime=20s ./internal/frame/
           go test -run=^$ -fuzz=FuzzDecodeReply -fuzztime=10s ./internal/estim/mk312/
           go test -run=^$ -fuzz=FuzzParseCommand -fuzztime=10s ./internal/estim/
+          go test -run=^$ -fuzz=FuzzParseSettings -fuzztime=10s ./internal/estim/
       - name: build
         run: |
           mkdir -p bin

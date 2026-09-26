@@ -56,8 +56,11 @@ func TestRuntimeOpenArmExecuteRelease(t *testing.T) {
 	if !rt.Connected() || box.LevelA() != 0 || box.Power() != mk312.PowerNormal {
 		t.Fatal("open must release the device before trusting it")
 	}
-	if d := rt.Descriptor(); d.Kind != estim.KindMK312BT || !d.Connected || d.Capabilities.LevelMax != 85 {
+	if d := rt.Descriptor(); d.Kind != estim.KindMK312BT || !d.Connected || d.Capabilities.LevelMax != estim.LevelScaleMax {
 		t.Fatalf("descriptor = %+v", d)
+	}
+	if s := rt.Settings(); s != estim.DefaultSettings() || s.PowerMode != "high" || s.LevelMax != 85 {
+		t.Fatalf("settings before a session = %+v", s)
 	}
 	if len(*seen) != 1 || !(*seen)[0].Connected {
 		t.Fatalf("OnDevice calls = %+v", *seen)
@@ -91,8 +94,8 @@ func TestRuntimeOpenArmExecuteRelease(t *testing.T) {
 	if err != nil || *res.Level != 12 || *st.LevelA != 12 || box.LevelA() != 12 {
 		t.Fatalf("set_level: %+v %+v %v", res, st, err)
 	}
-	if _, _, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(90)}); err == nil {
-		t.Fatal("level over the cap accepted")
+	if _, _, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(86)}); err == nil {
+		t.Fatal("level over the default cap accepted")
 	}
 	if _, _, err := rt.Execute(ctx, estim.Command{Verb: "set_mode", Mode: estim.Int(0x7C)}); err == nil {
 		t.Fatal("pattern outside the allow-list accepted")
@@ -129,6 +132,100 @@ func TestRuntimeOpenArmExecuteRelease(t *testing.T) {
 	}
 	if n := len(*seen); n != 2 || (*seen)[1].Connected {
 		t.Fatalf("OnDevice calls = %+v", *seen)
+	}
+}
+
+func TestRuntimeSettings(t *testing.T) {
+	ctx := context.Background()
+	box := fakebox.New()
+	rt, _ := boxRuntime(t, box)
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Refused whole; nothing changes.
+	for _, bad := range []estim.Settings{{PowerMode: "low", LevelMax: 50}, {PowerMode: "high", LevelMax: 100}, {PowerMode: "", LevelMax: 50}, {PowerMode: "normal", LevelMax: -1}} {
+		if released, err := rt.SetSettings(ctx, bad); err == nil || released {
+			t.Errorf("%+v accepted", bad)
+		}
+	}
+	if rt.Settings() != estim.DefaultSettings() {
+		t.Fatal("refused settings changed something")
+	}
+	// Not armed: taken silently, and the next arm is in the range asked.
+	normal60 := estim.Settings{PowerMode: "normal", LevelMax: 60}
+	if released, err := rt.SetSettings(ctx, normal60); err != nil || released {
+		t.Fatalf("unarmed change: released=%v err=%v", released, err)
+	}
+	if err := rt.Arm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if box.Power() != mk312.PowerNormal || !rt.Armed() {
+		t.Fatalf("armed in %d, want normal", box.Power())
+	}
+	// The session's maximum bounds every level, below the default cap or above it.
+	if _, _, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(61)}); err == nil {
+		t.Fatal("level over the session's maximum accepted")
+	}
+	if _, st, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(60)}); err != nil || *st.LevelA != 60 {
+		t.Fatalf("set_level at the maximum: %+v %v", st, err)
+	}
+	if res, _, err := rt.Execute(ctx, estim.Command{Verb: "adjust_level", Delta: estim.Int(5)}); err != nil || *res.Level != 60 {
+		t.Fatalf("adjust_level past the maximum must clamp at it: %+v %v", res, err)
+	}
+	// The same again is no change.
+	if released, err := rt.SetSettings(ctx, normal60); err != nil || released || box.LevelA() != 60 {
+		t.Fatalf("unchanged settings: released=%v err=%v level=%d", released, err, box.LevelA())
+	}
+	// A maximum at or above the level applies in place.
+	if released, err := rt.SetSettings(ctx, estim.Settings{PowerMode: "normal", LevelMax: 95}); err != nil || released || box.LevelA() != 60 || !rt.Armed() {
+		t.Fatalf("raised maximum: released=%v err=%v level=%d armed=%v", released, err, box.LevelA(), rt.Armed())
+	}
+	if _, st, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(95)}); err != nil || *st.LevelA != 95 {
+		t.Fatalf("set_level to 95: %+v %v", st, err)
+	}
+	if _, _, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(96)}); err == nil {
+		t.Fatal("level over the raised maximum accepted")
+	}
+	// A maximum below the level cannot: released, latched, not armed.
+	if released, err := rt.SetSettings(ctx, estim.Settings{PowerMode: "normal", LevelMax: 40}); err != nil || !released {
+		t.Fatalf("lowered maximum under the level: released=%v err=%v", released, err)
+	}
+	if box.LevelA() != 0 || rt.Armed() || !rt.CancelLatched() || box.Power() != mk312.PowerNormal {
+		t.Fatalf("after the release: level=%d armed=%v latched=%v power=%d", box.LevelA(), rt.Armed(), rt.CancelLatched(), box.Power())
+	}
+	if rt.Settings().LevelMax != 40 {
+		t.Fatal("the settings must stand after the release")
+	}
+	// Arming again is inside the new bounds.
+	if err := rt.Arm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(41)}); err == nil {
+		t.Fatal("level over the lowered maximum accepted")
+	}
+	if _, st, err := rt.Execute(ctx, estim.Command{Verb: "set_level", Level: estim.Int(30)}); err != nil || *st.LevelA != 30 {
+		t.Fatalf("set_level to 30: %+v %v", st, err)
+	}
+	// A power range change while armed cannot apply in place either.
+	if released, err := rt.SetSettings(ctx, estim.Settings{PowerMode: "high", LevelMax: 40}); err != nil || !released {
+		t.Fatalf("power change: released=%v err=%v", released, err)
+	}
+	if box.LevelA() != 0 || rt.Armed() {
+		t.Fatal("power change must release")
+	}
+	if err := rt.Arm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if box.Power() != mk312.PowerHigh {
+		t.Fatalf("re-armed in %d, want high", box.Power())
+	}
+	// Reset: the defaults, with no device I/O.
+	rt.ResetSettings()
+	if rt.Settings() != estim.DefaultSettings() || !rt.Armed() || box.Power() != mk312.PowerHigh {
+		t.Fatal("reset must restore the defaults and touch nothing")
+	}
+	if err := rt.Close(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -288,16 +385,59 @@ func TestParseCommandAndCaps(t *testing.T) {
 		}
 	}
 	caps := estim.Capabilities{LevelMax: 99, Channels: []string{"a"}, Modes: []int{1, 2}, Tempo: false}
-	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Level: estim.Int(86)}, caps); err == nil {
-		t.Error("connector cap of 85 must hold even when the device allows more")
+	defaults := estim.DefaultSettings()
+	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Level: estim.Int(86)}, caps, defaults); err == nil {
+		t.Error("default cap of 85 must hold even when the device allows more")
 	}
-	if err := estim.CheckCaps(estim.Command{Verb: "set_ma", Percent: estim.Int(10)}, caps); err == nil {
+	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Level: estim.Int(85)}, caps, defaults); err != nil {
+		t.Error(err)
+	}
+	// The session's maximum moves the bound either way, within the device's scale.
+	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Level: estim.Int(99)}, caps, estim.Settings{PowerMode: "high", LevelMax: 99}); err != nil {
+		t.Error(err)
+	}
+	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Level: estim.Int(41)}, caps, estim.Settings{PowerMode: "high", LevelMax: 40}); err == nil {
+		t.Error("level over the session's maximum accepted")
+	}
+	small := estim.Capabilities{LevelMax: 50, Channels: []string{"a"}, Modes: []int{1}, Tempo: false}
+	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Level: estim.Int(51)}, small, estim.Settings{PowerMode: "high", LevelMax: 99}); err == nil {
+		t.Error("the device's own scale must hold over the session's maximum")
+	}
+	if got := estim.LevelMaxFor(small, estim.Settings{LevelMax: 99}); got != 50 {
+		t.Errorf("LevelMaxFor = %d", got)
+	}
+	if got := estim.LevelMaxFor(caps, estim.Settings{LevelMax: 120}); got != 99 {
+		t.Errorf("LevelMaxFor over the scale = %d", got)
+	}
+	if err := estim.CheckCaps(estim.Command{Verb: "set_ma", Percent: estim.Int(10)}, caps, defaults); err == nil {
 		t.Error("tempo on a device without one")
 	}
-	if err := estim.CheckCaps(estim.Command{Verb: "set_mode", Mode: estim.Int(3)}, caps); err == nil {
+	if err := estim.CheckCaps(estim.Command{Verb: "set_mode", Mode: estim.Int(3)}, caps, defaults); err == nil {
 		t.Error("pattern outside the device's list")
 	}
-	if err := estim.CheckCaps(estim.Command{Verb: "set_mode", Mode: estim.Int(2)}, caps); err != nil {
+	if err := estim.CheckCaps(estim.Command{Verb: "set_mode", Mode: estim.Int(2)}, caps, defaults); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestParseSettings(t *testing.T) {
+	s, err := estim.ParseSettings(json.RawMessage(`{"type":"device_settings","sessionId":"s","powerMode":"normal","levelMax":60,"extra":1}`))
+	if err != nil || s != (estim.Settings{PowerMode: "normal", LevelMax: 60}) {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if s, err := estim.ParseSettings(json.RawMessage(`{"powerMode":"high","levelMax":99}`)); err != nil || s.LevelMax != 99 {
+		t.Fatalf("%+v %v", s, err)
+	}
+	for _, bad := range []string{
+		`{"powerMode":"low","levelMax":60}`, `{"powerMode":"HIGH","levelMax":60}`, `{"powerMode":"high","levelMax":100}`,
+		`{"powerMode":"high","levelMax":-1}`, `{"powerMode":"high","levelMax":60.5}`, `{"powerMode":"high","levelMax":"60"}`,
+		`{"powerMode":"high"}`, `{"levelMax":60}`, `{}`, `[]`, `null`, ``, `{"powerMode":null,"levelMax":60}`,
+	} {
+		if s, err := estim.ParseSettings(json.RawMessage(bad)); err == nil {
+			t.Errorf("%s accepted as %+v", bad, s)
+		}
+	}
+	if err := (estim.Settings{PowerMode: "normal", LevelMax: 0}).Validate(); err != nil {
+		t.Error("a maximum of zero is a valid, if useless, setting")
 	}
 }

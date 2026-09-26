@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -149,6 +150,122 @@ func waitUntil(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// wire stands between the connector and the gateway so the test can cut the
+// connection the way a network does: no close frame, no reason, just gone.
+// TLS passes through untouched (the certificate names 127.0.0.1 either way,
+// and the pin is on the gateway's key).
+type wire struct {
+	ln     net.Listener
+	mu     sync.Mutex
+	conns  []net.Conn
+	origin string
+}
+
+func newWire(t *testing.T, to string) *wire {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &wire{ln: ln, origin: "https://" + ln.Addr().String()}
+	t.Cleanup(func() { _ = ln.Close(); w.cut() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			up, err := net.Dial("tcp", to)
+			if err != nil {
+				_ = c.Close()
+				continue
+			}
+			w.mu.Lock()
+			w.conns = append(w.conns, c, up)
+			w.mu.Unlock()
+			go func() { _, _ = io.Copy(up, c); _ = up.Close() }()
+			go func() { _, _ = io.Copy(c, up); _ = c.Close() }()
+		}
+	}()
+	return w
+}
+
+// cut drops every connection on the wire.
+func (w *wire) cut() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, c := range w.conns {
+		_ = c.Close()
+	}
+	w.conns = nil
+}
+
+func TestANewTicketForAConnectedSessionKeepsTheTunnel(t *testing.T) {
+	h := newHarness(t)
+	out := h.out
+	w := newWire(t, h.srv.Listener.Addr().String())
+
+	ticket, hash := h.ticket(t)
+	h.expect(t, hash)
+	h.mgr.OnDial(rendezvous.Dial{SessionID: "s3", Origin: w.origin, Ticket: ticket, TicketHash: hash})
+	waitUntil(t, "attach", func() bool { return h.gw.Status().Connected })
+	since := *h.gw.Status().SinceMs
+
+	// The service leases the enclave again (a production restart) and
+	// brokers again: the gateway is told the new ticket, the connector is
+	// dialed with it. The tunnel that is up stays up.
+	ticket2, hash2 := h.ticket(t)
+	h.expect(t, hash2)
+	h.mgr.OnDial(rendezvous.Dial{SessionID: "s3", Origin: w.origin, Ticket: ticket2, TicketHash: hash2})
+	time.Sleep(500 * time.Millisecond)
+	if n := h.dials.Load(); n != 1 {
+		t.Fatalf("dialed %d times: the new ticket replaced a working tunnel", n)
+	}
+	if st := h.gw.Status(); !st.Connected || *st.SinceMs != since {
+		t.Fatalf("the tunnel changed: %+v (attached since %d)", st, since)
+	}
+	if out.count("Camera link active") != 1 {
+		t.Fatalf("console:\n%s", out.String())
+	}
+
+	// The network drops the tunnel. The connector re-dials on its own, and
+	// with the ticket the enclave now expects - the newest - so it is let
+	// back in rather than refused.
+	w.cut()
+	waitUntil(t, "detach", func() bool { return !h.gw.Status().Connected })
+	waitUntil(t, "re-attach", func() bool { return h.gw.Status().Connected && h.dials.Load() == 2 })
+	waitUntil(t, "the second active line", func() bool { return out.count("Camera link active") == 2 })
+	if out.count("Camera link on hold") != 0 {
+		t.Fatalf("the re-dial was refused:\n%s", out.String())
+	}
+	h.mgr.OnClear("s3", "ended")
+	waitUntil(t, "closed", func() bool { return !h.gw.Status().Connected })
+}
+
+func TestADialForAnotherEnclaveReplacesTheTunnel(t *testing.T) {
+	h := newHarness(t)
+	w := newWire(t, h.srv.Listener.Addr().String())
+	ticket, hash := h.ticket(t)
+	h.expect(t, hash)
+	h.mgr.OnDial(rendezvous.Dial{SessionID: "s4", Origin: h.origin, Ticket: ticket, TicketHash: hash})
+	waitUntil(t, "attach", func() bool { return h.gw.Status().Connected })
+
+	// The session moved to another enclave (here: the same gateway by
+	// another address): the tunnel to the old one goes, the new one is
+	// dialed with its ticket.
+	ticket2, hash2 := h.ticket(t)
+	h.expect(t, hash2)
+	h.mgr.OnDial(rendezvous.Dial{SessionID: "s4", Origin: w.origin, Ticket: ticket2, TicketHash: hash2})
+	waitUntil(t, "the second dial", func() bool { return h.dials.Load() == 2 })
+	waitUntil(t, "attached over the wire", func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return h.gw.Status().Connected && len(w.conns) > 0
+	})
+	h.mgr.OnClear("s4", "ended")
+	waitUntil(t, "closed", func() bool { return !h.gw.Status().Connected })
+}
+
 func TestRefusedTicketIsDialedOnceAndClearStillReports(t *testing.T) {
 	h := newHarness(t)
 	out := h.out
@@ -191,9 +308,8 @@ func TestEnclaveClosingTheLinkIsNotRedialed(t *testing.T) {
 	h.expect(t, hash)
 	h.mgr.OnDial(rendezvous.Dial{SessionID: "s2", Origin: h.origin, Ticket: ticket, TicketHash: hash})
 	waitUntil(t, "attach", func() bool { return h.gw.Status().Connected })
-	if out.count("Camera link active") != 1 {
-		t.Fatalf("console:\n%s", out.String())
-	}
+	// The gateway is attached a moment before the connector says so.
+	waitUntil(t, "the active line", func() bool { return out.count("Camera link active") == 1 })
 	// The enclave clears the session (the phone removed the camera).
 	if code := h.control(t, "/clear", nil); code != 200 {
 		t.Fatalf("clear: %d", code)

@@ -86,29 +86,43 @@ func TestCameraStaysOnForTheNextTunnel(t *testing.T) {
 	}
 }
 
-func TestReplacedTunnelKeepsTheCameraAndClearTurnsItOff(t *testing.T) {
+func TestADroppedTunnelKeepsTheCameraAndClearTurnsItOff(t *testing.T) {
 	h := newHarness(t)
+	w := newWire(t, h.srv.Listener.Addr().String())
 	f := newFakeOffer()
 	h.mgr.cam.offer = &f.offer
-	h.mgr.cam.grace = 2 * time.Second
+	// Longer than the 2 s the connector waits before re-dialing after a
+	// drop, shorter than the 15 s of the real grace so the test is quick.
+	h.mgr.cam.grace = 4 * time.Second
 
 	ticket, hash := h.ticket(t)
 	h.expect(t, hash)
-	h.mgr.OnDial(rendezvous.Dial{SessionID: "s3", Origin: h.origin, Ticket: ticket, TicketHash: hash})
+	h.mgr.OnDial(rendezvous.Dial{SessionID: "s3", Origin: w.origin, Ticket: ticket, TicketHash: hash})
 	waitUntil(t, "attach", func() bool { return h.gw.Status().Connected })
 	h.mgr.cam.open(t) // the enclave reads the camera through this tunnel
 
-	// The service leases again: a new ticket for the same session replaces
-	// the tunnel. The camera stays on through the change.
+	// The service leases again: a new ticket for the same session. The
+	// tunnel and the camera are untouched.
 	ticket2, hash2 := h.ticket(t)
 	h.expect(t, hash2)
-	h.mgr.OnDial(rendezvous.Dial{SessionID: "s3", Origin: h.origin, Ticket: ticket2, TicketHash: hash2})
+	h.mgr.OnDial(rendezvous.Dial{SessionID: "s3", Origin: w.origin, Ticket: ticket2, TicketHash: hash2})
+	time.Sleep(300 * time.Millisecond)
+	if n := h.dials.Load(); n != 1 {
+		t.Fatalf("dialed %d times for a new ticket", n)
+	}
+	if f.starts.Load() != 1 || f.stops.Load() != 0 {
+		t.Fatalf("across the new ticket: starts %d stops %d", f.starts.Load(), f.stops.Load())
+	}
+
+	// The network drops the tunnel: the connector re-dials (with the new
+	// ticket) and the camera stays on through the change.
+	w.cut()
 	waitUntil(t, "second attach", func() bool { return h.gw.Status().Connected && h.dials.Load() == 2 })
 	if f.starts.Load() != 1 || f.stops.Load() != 0 {
 		t.Fatalf("across the re-dial: starts %d stops %d", f.starts.Load(), f.stops.Load())
 	}
 	h.mgr.cam.open(t) // the relay is back at the stream through the new tunnel
-	time.Sleep(2500 * time.Millisecond)
+	time.Sleep(4500 * time.Millisecond)
 	if f.starts.Load() != 1 || f.stops.Load() != 0 {
 		t.Fatalf("after the grace, with the new tunnel reading: starts %d stops %d", f.starts.Load(), f.stops.Load())
 	}

@@ -27,15 +27,22 @@ func FuzzParseCommand(f *testing.F) {
 		if cmd.Channel != "" && cmd.Channel != "a" {
 			t.Fatalf("channel %q accepted", cmd.Channel)
 		}
-		capsErr := estim.CheckCaps(cmd, caps)
+		capsErr := estim.CheckCaps(cmd, caps, estim.DefaultSettings())
 		switch cmd.Verb {
 		case "status", "release":
 			if capsErr != nil {
 				t.Fatalf("%s refused: %v", cmd.Verb, capsErr)
 			}
 		case "set_level":
-			if cmd.Level != nil && (*cmd.Level < 0 || *cmd.Level > estim.LevelCap) && capsErr == nil {
+			if cmd.Level != nil && (*cmd.Level < 0 || *cmd.Level > estim.DefaultLevelCap) && capsErr == nil {
 				t.Fatalf("level %d accepted", *cmd.Level)
+			}
+			// A session's maximum bounds it the same way, never past the scale.
+			for _, levelMax := range []int{0, 40, 99} {
+				err := estim.CheckCaps(cmd, caps, estim.Settings{PowerMode: "normal", LevelMax: levelMax})
+				if cmd.Level != nil && (*cmd.Level < 0 || *cmd.Level > levelMax) && err == nil {
+					t.Fatalf("level %d accepted under a maximum of %d", *cmd.Level, levelMax)
+				}
 			}
 		case "adjust_level":
 			if cmd.Delta != nil && (*cmd.Delta < -estim.LevelDeltaCap || *cmd.Delta > estim.LevelDeltaCap) && capsErr == nil {
@@ -55,6 +62,33 @@ func FuzzParseCommand(f *testing.F) {
 			}
 		default:
 			t.Fatalf("verb %q accepted", cmd.Verb)
+		}
+	})
+}
+
+// FuzzParseSettings: settings of any bytes never panic, and what is
+// accepted names one of the two power ranges with a maximum on the scale.
+func FuzzParseSettings(f *testing.F) {
+	f.Add([]byte(`{"type":"device_settings","sessionId":"s","powerMode":"high","levelMax":85}`))
+	f.Add([]byte(`{"powerMode":"normal","levelMax":0}`))
+	f.Add([]byte(`{"powerMode":"low","levelMax":50}`))
+	f.Add([]byte(`{"powerMode":"high","levelMax":100}`))
+	f.Add([]byte(`{"powerMode":"high"}`))
+	f.Add([]byte(`null`))
+	f.Add([]byte(``))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		s, err := estim.ParseSettings(json.RawMessage(raw))
+		if err != nil {
+			return
+		}
+		if s.PowerMode != estim.PowerModeNormal && s.PowerMode != estim.PowerModeHigh {
+			t.Fatalf("power mode %q accepted", s.PowerMode)
+		}
+		if s.LevelMax < 0 || s.LevelMax > estim.LevelScaleMax {
+			t.Fatalf("levelMax %d accepted", s.LevelMax)
+		}
+		if s.Validate() != nil {
+			t.Fatalf("parsed settings do not validate: %+v", s)
 		}
 	})
 }

@@ -75,7 +75,10 @@ type Driver struct {
 	log   *slog.Logger
 }
 
-var capabilities = estim.Capabilities{LevelMax: estim.LevelCap, Channels: []string{"a"}, Modes: AllowedModes, Tempo: true}
+// The device's own bounds: the level scale's top (the session's maximum
+// sits within it; estim.DefaultLevelCap until one is set), Channel A only,
+// the pattern allow-list, a tempo control.
+var capabilities = estim.Capabilities{LevelMax: LCDMax, Channels: []string{"a"}, Modes: AllowedModes, Tempo: true}
 
 // Capabilities describes what the service may ask of the device.
 func Capabilities() estim.Capabilities { return capabilities }
@@ -132,16 +135,24 @@ func (d *Driver) Port() string { return d.Path() }
 // Capabilities is what the service may ask.
 func (d *Driver) Capabilities() estim.Capabilities { return capabilities }
 
-// Arm selects the high power range for the armed window; both channels are
-// zeroed on the way. The service never controls the range.
-func (d *Driver) Arm(ctx context.Context) error {
-	return d.SetPowerLevel(ctx, PowerHigh)
+// Arm selects the power range for the armed window, the session's normal
+// or high; both channels are zeroed on the way. The low range is not the
+// service's to select.
+func (d *Driver) Arm(ctx context.Context, powerMode string) error {
+	power, ok := PowerOf(powerMode)
+	if !ok {
+		return fmt.Errorf("mk312: power range must be %q or %q", estim.PowerModeNormal, estim.PowerModeHigh)
+	}
+	return d.SetPowerLevel(ctx, power)
 }
 
-// Execute runs one actuation command within the caps the Runtime checked.
-// Channel B is pinned back to zero after every command.
-func (d *Driver) Execute(ctx context.Context, cmd estim.Command, cancelled func() bool) (estim.Result, error) {
+// Execute runs one actuation command within the caps the Runtime checked;
+// levelMax is the level no step may pass (the session's maximum, the
+// device's scale at most). Channel B is pinned back to zero after every
+// command.
+func (d *Driver) Execute(ctx context.Context, cmd estim.Command, levelMax int, cancelled func() bool) (estim.Result, error) {
 	res := estim.Result{Verb: cmd.Verb}
+	levelMax = clamp(levelMax, 0, LCDMax)
 	switch cmd.Verb {
 	case "set_mode":
 		if cmd.Mode == nil || !ModeAllowed(*cmd.Mode) {
@@ -152,8 +163,8 @@ func (d *Driver) Execute(ctx context.Context, cmd estim.Command, cancelled func(
 		}
 		res.Mode = estim.Int(*cmd.Mode)
 	case "set_level":
-		if cmd.Level == nil || *cmd.Level < 0 || *cmd.Level > estim.LevelCap {
-			return res, fmt.Errorf("mk312: level must be 0..%d", estim.LevelCap)
+		if cmd.Level == nil || *cmd.Level < 0 || *cmd.Level > levelMax {
+			return res, fmt.Errorf("mk312: level must be 0..%d", levelMax)
 		}
 		applied, err := d.RampLevelA(ctx, *cmd.Level, cancelled)
 		if err != nil {
@@ -168,7 +179,7 @@ func (d *Driver) Execute(ctx context.Context, cmd estim.Command, cancelled func(
 		if err != nil {
 			return res, err
 		}
-		target := clamp(current+*cmd.Delta, 0, estim.LevelCap)
+		target := clamp(current+*cmd.Delta, 0, levelMax)
 		applied, err := d.RampLevelA(ctx, target, cancelled)
 		if err != nil {
 			return res, err

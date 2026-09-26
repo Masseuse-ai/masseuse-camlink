@@ -338,6 +338,10 @@ func (m *manager) CurrentSource() (rendezvous.Source, bool) {
 }
 
 type active struct {
+	// dial is the latest the service sent for this session and origin: the
+	// ticket the next dial carries. Guarded by mu; run reads it before each
+	// attempt (a fresh ticket may have arrived while the tunnel was up).
+	mu     sync.Mutex
 	dial   rendezvous.Dial
 	cancel context.CancelFunc
 	// done is closed when run has given up on this dial (the enclave
@@ -356,6 +360,18 @@ func (a *active) finished() bool {
 	default:
 		return false
 	}
+}
+
+func (a *active) current() rendezvous.Dial {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.dial
+}
+
+func (a *active) take(d rendezvous.Dial) {
+	a.mu.Lock()
+	a.dial = d
+	a.mu.Unlock()
 }
 
 // OnCode shows a pairing code. The service sends the current code with
@@ -402,12 +418,22 @@ func (m *manager) OnEstim(sessionID string, message json.RawMessage) {
 	}
 }
 
+// OnDial opens a tunnel for the session, or keeps the one it has. A dial for
+// a session this connector is already on with the same enclave - the tunnel
+// up, or being re-dialed after a drop - does not touch the tunnel: the
+// service sends one with a fresh ticket whenever it leases the enclave again
+// (a production restart, a stream re-attach), and tearing a working tunnel
+// down for it cut the camera's stream at the relay for seconds each time.
+// The ticket is kept as the one the next dial carries, since it is what the
+// enclave now expects (PROTOCOL.md section 2.2). A different enclave, or a
+// dial after the run gave up, replaces as before.
 func (m *manager) OnDial(d rendezvous.Dial) {
 	m.mu.Lock()
 	if cur, ok := m.tunnels[d.SessionID]; ok {
-		if cur.dial.Origin == d.Origin && cur.dial.TicketHash == d.TicketHash && !cur.finished() {
+		if cur.current().Origin == d.Origin && !cur.finished() {
+			cur.take(d)
 			m.mu.Unlock()
-			return // idempotent
+			return
 		}
 		cur.cancel()
 	}
@@ -466,8 +492,10 @@ func (m *manager) closeAll(reason string) {
 // closing the link itself. Either way the service sends a new dial when a
 // session wants the camera again; the session entry stays so that a clear
 // is still reported and the same ticket is not dialed twice.
+//
+// Each attempt dials with the ticket the service sent last (OnDial keeps
+// the latest): after a drop, the enclave expects the newest one.
 func (m *manager) run(ctx context.Context, a *active) {
-	d := a.dial
 	defer close(a.done)
 	defer func() { m.cam.off(!a.ended.Load()) }()
 	backoff := time.Second
@@ -475,6 +503,7 @@ func (m *manager) run(ctx context.Context, a *active) {
 		if ctx.Err() != nil {
 			return
 		}
+		d := a.current()
 		t, err := m.dialer.Dial(ctx, d.Origin, d.Ticket, d.TicketHash)
 		if err != nil {
 			if ctx.Err() != nil {

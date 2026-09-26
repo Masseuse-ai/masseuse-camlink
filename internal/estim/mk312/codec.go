@@ -71,6 +71,19 @@ const (
 
 var powerParam = map[int]byte{PowerLow: 0x6B, PowerNormal: 0x6C, PowerHigh: 0x6D}
 
+// PowerOf is the range named as the service's protocol spells it
+// (estim.PowerModeNormal, estim.PowerModeHigh); false for any other name,
+// the low range included: the connector never arms in it.
+func PowerOf(name string) (int, bool) {
+	switch name {
+	case "normal":
+		return PowerNormal, true
+	case "high":
+		return PowerHigh, true
+	}
+	return 0, false
+}
+
 // PowerName is the range's name as the service's protocol spells it.
 func PowerName(v int) string {
 	switch v {
