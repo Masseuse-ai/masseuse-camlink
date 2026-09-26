@@ -3,10 +3,12 @@ package estim_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/FemLed/masseuse-camlink/internal/ble"
 	"github.com/FemLed/masseuse-camlink/internal/estim"
 	"github.com/FemLed/masseuse-camlink/internal/estim/mastago"
 	"github.com/FemLed/masseuse-camlink/internal/estim/mastago/fakeunit"
@@ -254,5 +256,129 @@ func TestRuntimeUnitDeviceSideChangeShowsInTelemetry(t *testing.T) {
 	}
 	if st := rt.LastStatus(); *st.LevelA != 4 {
 		t.Fatalf("status: %+v", st)
+	}
+}
+
+// twoUnitRuntime is a Runtime over the real Mastago finder and a fake
+// central with two units, so selection can be tried end to end.
+func twoUnitRuntime(t *testing.T) (*estim.Runtime, *fakeunit.Unit, *fakeunit.Unit, *mastago.Finder, *[]estim.Descriptor, *[][]estim.Unit) {
+	t.Helper()
+	a := fakeunit.New("id-a", "MASTOGO G-12AB")
+	b := fakeunit.New("id-b", "MASTOGO G-34CD")
+	c := &fakeunit.Central{Units: []*fakeunit.Unit{a, b}}
+	f := mastago.NewFinder("", nil)
+	f.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return c, nil }
+	f.ScanWindow = 100 * time.Millisecond
+	fs := estim.Finders{f}
+	var reports []estim.Descriptor
+	var lists [][]estim.Unit
+	rt := &estim.Runtime{
+		Connect: func(ctx context.Context) (estim.Driver, error) {
+			d, err := fs.Find(ctx)
+			if err != nil {
+				return nil, err
+			}
+			drv := d.(*mastago.Driver)
+			drv.Gap, drv.Step, drv.Timeout = 0, 0, 500*time.Millisecond
+			drv.Sleep = func(context.Context, time.Duration) error { return nil }
+			return drv, nil
+		},
+		List:     fs.List,
+		Select:   fs.Select,
+		OnDevice: func(_ context.Context, d estim.Descriptor) { reports = append(reports, d) },
+		OnUnits:  func(_ context.Context, us []estim.Unit) { lists = append(lists, us) },
+	}
+	rt.ArmWindow = 20 * time.Minute
+	t.Cleanup(func() { _ = rt.Close(context.Background()) })
+	return rt, a, b, f, &reports, &lists
+}
+
+func TestRuntimeListsAndSelectsAmongUnits(t *testing.T) {
+	ctx := context.Background()
+	rt, a, b, f, reports, lists := twoUnitRuntime(t)
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := rt.Descriptor(); d.ID != "id-a" || !d.Connected || d.Held {
+		t.Fatalf("the first unit found is served, with its id: %+v", d)
+	}
+	// Listing names both, connects to neither, and tells OnUnits once per
+	// change.
+	units, err := rt.ListUnits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 2 || units[0].ID != "id-a" || units[1].ID != "id-b" || units[0].Held || units[1].Held {
+		t.Fatalf("units = %+v", units)
+	}
+	if b.Connections() != 0 {
+		t.Fatal("listing must not connect to the unit not served")
+	}
+	if _, err := rt.ListUnits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(*lists) != 1 {
+		t.Fatalf("OnUnits told %d times; the same list is not news", len(*lists))
+	}
+	if got := rt.Units(); len(got) != 2 {
+		t.Fatalf("Units() = %+v", got)
+	}
+
+	// Selecting the other unit lets the held one go (released to zero,
+	// disconnected) and opens the selected one.
+	a.PushLevel(3)
+	if err := rt.SelectUnit(ctx, "id-b"); err != nil {
+		t.Fatal(err)
+	}
+	if d := rt.Descriptor(); d.ID != "id-b" || d.Label != "Mastago TENS G-34CD" || !d.Connected {
+		t.Fatalf("after selecting id-b: %+v", d)
+	}
+	if a.Connections() != 0 || a.Level() != 0 || a.Outputting() {
+		t.Fatalf("the unit let go must be released and disconnected: conns=%d level=%d out=%v", a.Connections(), a.Level(), a.Outputting())
+	}
+	if f.Pin != "id-b" {
+		t.Fatalf("the finder is pinned to the selection: %q", f.Pin)
+	}
+	n := len(*reports)
+	if n < 3 || (*reports)[n-2].Connected || (*reports)[n-2].ID != "id-a" || !(*reports)[n-1].Connected || (*reports)[n-1].ID != "id-b" {
+		t.Fatalf("reports = %+v; a switch is the unit let go, then the one selected", *reports)
+	}
+
+	// Selecting the unit already served keeps it.
+	before := b.Connections()
+	if err := rt.SelectUnit(ctx, "G-34CD"); err != nil {
+		t.Fatal(err)
+	}
+	if b.Connections() != before || rt.Descriptor().ID != "id-b" {
+		t.Fatal("selecting the unit served must not reconnect it")
+	}
+
+	// Refused while armed: the phone stops the unit first.
+	if err := rt.Arm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.SelectUnit(ctx, "id-a"); !errors.Is(err, estim.ErrArmed) {
+		t.Fatalf("selecting while armed: %v", err)
+	}
+	if rt.Descriptor().ID != "id-b" || !rt.Armed() {
+		t.Fatal("a refused selection changes nothing")
+	}
+	if _, err := rt.Release(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	// Lifting the selection keeps what is held.
+	if err := rt.SelectUnit(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if rt.Descriptor().ID != "id-b" || f.Pin != "" {
+		t.Fatalf("lifting the selection: id=%s pin=%q", rt.Descriptor().ID, f.Pin)
+	}
+	// A selection the finders cannot satisfy: the unit is let go and
+	// nothing is served until it answers.
+	if err := rt.SelectUnit(ctx, "G-99ZZ"); !errors.Is(err, estim.ErrNoDevice) {
+		t.Fatalf("selecting an absent unit: %v", err)
+	}
+	if rt.Connected() {
+		t.Fatal("the unit not selected is not served")
 	}
 }

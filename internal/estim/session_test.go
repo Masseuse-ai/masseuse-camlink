@@ -626,3 +626,115 @@ func TestSessionOutboxBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionDeviceReportNamesTheUnitAndTheList(t *testing.T) {
+	ctx := context.Background()
+	rt, _, _, _, _, _ := twoUnitRuntime(t)
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := &fakeUplink{}
+	s := &estim.Session{Runtime: rt, Uplink: up}
+	rt.OnDevice, rt.OnUnits = s.DeviceChanged, s.UnitsChanged
+	// Before any listing: the id, no units.
+	s.DeviceChanged(ctx, rt.Descriptor())
+	got := up.drain(ctx, s)
+	dev := find(got, "device")
+	if dev == nil || dev["id"] != "id-a" || dev["connected"] != true {
+		t.Fatalf("device = %v", dev)
+	}
+	if _, ok := dev["units"]; ok {
+		t.Fatalf("no units before a listing: %v", dev)
+	}
+	if _, ok := dev["held"]; ok {
+		t.Fatalf("held is only said when true: %v", dev)
+	}
+	// The listing is a device report of its own, connector-level, with
+	// the units.
+	if _, err := rt.ListUnits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got = up.drain(ctx, s)
+	if len(got) != 1 || got[0].sessionID != "" {
+		t.Fatalf("units report must be connector-level: %+v", got)
+	}
+	dev = find(got, "device")
+	units, _ := dev["units"].([]any)
+	if dev["id"] != "id-a" || len(units) != 2 {
+		t.Fatalf("device with units = %v", dev)
+	}
+	first := units[0].(map[string]any)
+	if first["id"] != "id-a" || first["kind"] != "mastago" || first["label"] != "Mastago TENS G-12AB" || first["held"] != false {
+		t.Fatalf("unit = %v", first)
+	}
+}
+
+func TestSessionDeviceSelect(t *testing.T) {
+	ctx := context.Background()
+	rt, a, b, _, _, _ := twoUnitRuntime(t)
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	up := &fakeUplink{}
+	var selected []string
+	s := &estim.Session{Runtime: rt, Uplink: up, Select: func(ctx context.Context, id string) error {
+		selected = append(selected, id)
+		return rt.SelectUnit(ctx, id)
+	}}
+	rt.OnDevice, rt.OnUnits = s.DeviceChanged, s.UnitsChanged
+	// Connector-level control: the phone picked the other unit.
+	s.Handle(ctx, "", control(`{"type":"device_select","id":"id-b"}`))
+	s.Wait()
+	if len(selected) != 1 || selected[0] != "id-b" {
+		t.Fatalf("selected = %v", selected)
+	}
+	if rt.Descriptor().ID != "id-b" || a.Connections() != 0 || b.Connections() != 1 {
+		t.Fatalf("after device_select: id=%s a=%d b=%d", rt.Descriptor().ID, a.Connections(), b.Connections())
+	}
+	got := up.drain(ctx, s)
+	var ids []any
+	for _, batch := range got {
+		for _, m := range batch.messages {
+			if m["type"] == "device" {
+				ids = append(ids, m["id"], m["connected"])
+			}
+		}
+	}
+	if len(ids) != 4 || ids[0] != "id-a" || ids[1] != false || ids[2] != "id-b" || ids[3] != true {
+		t.Fatalf("device reports around a switch = %v", ids)
+	}
+	// Without an id, or without a way to select, the control is ignored.
+	s.Handle(ctx, "", control(`{"type":"device_select"}`))
+	s.Wait()
+	if len(selected) != 1 {
+		t.Fatal("device_select without an id must be ignored")
+	}
+	// Refused while armed: the attached session's current is not cut.
+	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
+	s.Wait()
+	if !rt.Armed() {
+		t.Fatal("attach must arm")
+	}
+	up.drain(ctx, s)
+	s.Handle(ctx, "", control(`{"type":"device_select","id":"id-a"}`))
+	s.Wait()
+	if rt.Descriptor().ID != "id-b" || !rt.Armed() || b.Connections() != 1 {
+		t.Fatal("a device_select while armed must change nothing")
+	}
+	if len(selected) != 2 {
+		t.Fatalf("the hook is asked and refuses: %v", selected)
+	}
+	// Once the phone stops the unit (the service detaches), the switch goes.
+	s.Handle(ctx, "sess-1", json.RawMessage(`{"type":"detach","reason":"stopped"}`))
+	s.Handle(ctx, "", control(`{"type":"device_select","id":"id-a"}`))
+	s.Wait()
+	if rt.Descriptor().ID != "id-a" || b.Connections() != 0 {
+		t.Fatalf("after the stop the switch must go: id=%s b=%d", rt.Descriptor().ID, b.Connections())
+	}
+	none := &estim.Session{Runtime: rt, Uplink: up}
+	none.Handle(ctx, "", control(`{"type":"device_select","id":"id-b"}`))
+	none.Wait()
+	if rt.Descriptor().ID != "id-a" {
+		t.Fatal("a session without a Select hook ignores the control")
+	}
+}

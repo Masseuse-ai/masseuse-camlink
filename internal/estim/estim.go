@@ -92,12 +92,55 @@ func (c Capabilities) HasPowerMode(mode string) bool {
 	return false
 }
 
-// Descriptor is what the connector reports about the device it is serving.
+// Descriptor is what the connector reports about the device it is serving:
+// the selected unit, whether or not it is connected right now.
 type Descriptor struct {
-	Kind         Kind         `json:"kind"`
-	Label        string       `json:"label"`
+	Kind  Kind   `json:"kind"`
+	Label string `json:"label"`
+	// ID is what the system calls the unit (Driver.Port): a Bluetooth
+	// peripheral's identifier or a serial port path, the same string a
+	// Unit carries and a selection names. Empty before any device.
+	ID           string       `json:"id,omitempty"`
 	Connected    bool         `json:"connected"`
 	Capabilities Capabilities `json:"capabilities"`
+	// Held says another program on this computer has the unit open and
+	// the connector shares its link (a Bluetooth unit the vendor's app
+	// holds): that program's commands and the service's would collide.
+	Held bool `json:"held,omitempty"`
+}
+
+// Unit is one stimulation unit this computer can see, served or not: what
+// a Lister reports and the `device` message lists beside the Descriptor,
+// so a person can pick one when there are several.
+type Unit struct {
+	// ID is what the system calls the unit, as Descriptor.ID.
+	ID    string `json:"id"`
+	Kind  Kind   `json:"kind"`
+	Label string `json:"label"`
+	// Held says another program on this computer has the unit open.
+	Held bool `json:"held"`
+}
+
+// A Lister is a Finder that can say which units of its family are in reach
+// without taking any of them.
+type Lister interface {
+	List(ctx context.Context) ([]Unit, error)
+}
+
+// A Selector is a Finder that can be restricted to one unit after it was
+// built: the picker, the remembered choice, the service's `device_select`.
+type Selector interface {
+	// Select restricts the finder to the unit named: an ID, or a name the
+	// family recognizes (the Mastago's advertised name or its suffix).
+	// Empty lifts the restriction. A unit of another family never matches,
+	// so one selection may be given to every family.
+	Select(unit string)
+}
+
+// A HeldReporter is a Driver that knows whether another program had its
+// unit open when it connected (Descriptor.Held).
+type HeldReporter interface {
+	Held() bool
 }
 
 // RoutineState is the modulation state a pattern-based device reports for
@@ -420,6 +463,41 @@ func (fs Finders) Describe(ctx context.Context, out io.Writer) error {
 		}
 	}
 	return firstErr
+}
+
+// List is Lister.List over every finder that can list: the units of all
+// families together, in the finders' order, and the first failure after
+// listing them all, so a family whose bus is unavailable does not hide
+// another's units.
+func (fs Finders) List(ctx context.Context) ([]Unit, error) {
+	var units []Unit
+	var firstErr error
+	for _, f := range fs {
+		l, ok := f.(Lister)
+		if !ok {
+			continue
+		}
+		us, err := l.List(ctx)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		units = append(units, us...)
+		if ctx.Err() != nil {
+			return units, ctx.Err()
+		}
+	}
+	return units, firstErr
+}
+
+// Select is Selector.Select over every finder that can be restricted: the
+// one selection is given to every family, and only the family the unit
+// belongs to finds anything under it.
+func (fs Finders) Select(unit string) {
+	for _, f := range fs {
+		if s, ok := f.(Selector); ok {
+			s.Select(unit)
+		}
+	}
 }
 
 // Close closes every finder that holds something (an io.Closer) and

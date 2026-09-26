@@ -230,9 +230,13 @@ jobs:
     # job's result carries over: this job checks that the bundle's slices
     # strip to the very same bytes. ffmpeg is the one component not rebuilt
     # byte for byte; it is built here from pinned upstream tarballs
-    # (packaging/ffmpeg/build.sh) and covered by darwin.intoto.jsonl.
+    # (packaging/ffmpeg/build.sh) and covered by darwin.intoto.jsonl. macOS
+    # 26, because actool compiles the layered icon (packaging/macos/README.md,
+    # "The icon") only on the system whose asset runtime it uses; ffmpeg
+    # still targets 13.0 (-mmacosx-version-min), and the cache key carries
+    # the image, so the first tag on a new image rebuilds it once.
     needs: goreleaser
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     permissions:
       contents: write # the disk image, checksums-darwin.txt and the source tarballs

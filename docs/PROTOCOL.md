@@ -445,6 +445,42 @@ program (the terminal it runs in) to use Bluetooth; refused, or with
 Bluetooth switched off, the connector logs so once and keeps trying every
 health tick, with no device reported.
 
+A unit another program on this computer has open (the vendor's app, a
+script keeping the unit awake) is served through that program's link: the
+system holds one connection to the unit and both programs write to it, so
+either's commands reach the unit and either's replies may answer the
+other's questions. The connector reports such a unit with `held` true,
+prints on its console that another program has the unit open and should be
+closed before a session, and otherwise treats it as any unit: released to
+zero when found, read while unarmed, driven only once a session attaches.
+It cannot stop the other program's writes; a write of that program's that
+spoils a ramp's read-back fails the command and releases the unit, as any
+failed command does.
+
+**Several units.** The connector serves one unit at a time, the *selected*
+unit; `device` (7.3) describes it, whether or not it is connected right now.
+Every 30 s, and once at start, the connector also lists the units in reach
+without connecting to any (each family's own listing: for the Mastago the
+peripherals the system holds and one scan window), and reports the list in
+the same `device` message as `units`. With no selection the first unit
+found is served, Bluetooth families before serial ones, in registry order.
+A selection restricts every family's finder to the one unit, by its `id`
+(a Bluetooth peripheral's system identifier or a serial port path) or a
+name the family recognizes (the Mastago's advertised name or its suffix);
+a unit of another family never matches, so one selection is given to every
+family. It comes from `-estim-unit <id|name|port>` (remembered in
+`estim.json` in the state directory; `-estim-unit any` forgets it), from a
+number typed at the console when the list has more than one unit (the
+connector prints the numbered list and reads standard input when it is a
+terminal), or from the phone as a `device_select` control (7.3). Applying a
+selection lets go of the unit held when it is another (a release to zero,
+then the disconnect, reported as `device` with `connected` false) and opens
+the selected one (`device` with `connected` true and its `id`); a
+selection is refused while the unit is armed, so an attached session's
+current is never cut from under it: the phone stops the unit first. A
+family's own pin (`-estim-ble`) on the command line is that run's choice
+and no remembered selection overrides it.
+
 The unit speaks `\r\n`-terminated AT lines over one GATT service (`FFF0`:
 write `FFF5`, notifications `FFF4`), one command at a time with at least
 100 ms between writes and a 3 s reply timeout; partial lines are
@@ -533,7 +569,15 @@ it changes:
 
 | type | fields | when |
 |---|---|---|
-| `device` | `kind`, `label`, `connected`, `capabilities` | a device is found or lost |
+| `device` | `kind`, `label`, `connected`, `capabilities`; `id` once a unit has been found; `held` when true; `units` once listed | the selected device is found or lost, or the units in reach change |
+
+`id` is what the system calls the selected unit (a Bluetooth peripheral's
+identifier, a serial port path): the string a `device_select` names.
+`held` says another program on this computer has the unit open (7.1).
+`units` is the list of units in reach, the selected one included, each
+`{id, kind, label, held}`; a connector that has not listed yet sends none.
+A service that knows none of the three drops them and reads the message as
+before.
 
 `capabilities` is `{levelMax, channels, modes, tempo}` and, when they
 apply, `powerModes` (the ranges a session may arm the device in; absent
@@ -571,6 +615,7 @@ Down (service to connector, as `estim` events):
 | `{"type":"control","payload":{"type":"device_command","commandId","sessionId","command":{"verb",...}}}` | run the command (below), acknowledge, report state |
 | `{"type":"heartbeat_ack","serverTime"}` | renew the arm |
 | `{"type":"detach","reason"}` | release and detach without replying |
+| `{"type":"control","payload":{"type":"device_select","id"}}` (connector-level, `sessionId` `""`) | serve the unit with that `id` from `units` (7.1): remember the choice, let go of the unit held if it is another, open the selected one; refused, and logged, while the unit is armed. The outcome is the `device` reports that follow; a connector older than this ignores the control |
 
 Command verbs: `status`; `release`; `set_mode {mode}` (a program number
 from `capabilities.modes`); `set_level {channel:"a", level}`;

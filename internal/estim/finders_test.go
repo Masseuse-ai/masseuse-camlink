@@ -114,3 +114,43 @@ func TestFindersDescribeAndClose(t *testing.T) {
 		t.Fatal("Close did not reach every finder")
 	}
 }
+
+// listingFinder is a stubFinder that can also list and be restricted.
+type listingFinder struct {
+	stubFinder
+	units    []estim.Unit
+	listErr  error
+	selected string
+}
+
+func (f *listingFinder) List(context.Context) ([]estim.Unit, error) { return f.units, f.listErr }
+func (f *listingFinder) Select(unit string)                         { f.selected = unit }
+
+func TestFindersListAndSelectAcrossFamilies(t *testing.T) {
+	ctx := context.Background()
+	ble := &listingFinder{stubFinder: stubFinder{name: "ble"}, units: []estim.Unit{
+		{ID: "id-a", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true},
+		{ID: "id-b", Kind: estim.KindMastago, Label: "Mastago TENS G-34CD"},
+	}}
+	plain := &stubFinder{name: "plain"}
+	serial := &listingFinder{stubFinder: stubFinder{name: "serial"}, listErr: errors.New("no serial ports"),
+		units: []estim.Unit{{ID: "/dev/cu.usbserial-1", Kind: estim.KindEstim2B, Label: "E-Stim Systems 2B"}}}
+	fs := estim.Finders{ble, plain, serial}
+	units, err := fs.List(ctx)
+	if err == nil || err.Error() != "no serial ports" {
+		t.Fatalf("the first failure is reported after listing every family: %v", err)
+	}
+	if len(units) != 3 || units[0].ID != "id-a" || units[1].ID != "id-b" || units[2].ID != "/dev/cu.usbserial-1" {
+		t.Fatalf("units = %+v", units)
+	}
+	// One selection is given to every family that can take one.
+	fs.Select("id-b")
+	if ble.selected != "id-b" || serial.selected != "id-b" {
+		t.Fatalf("selected ble=%q serial=%q", ble.selected, serial.selected)
+	}
+	// A list of finders that cannot list is empty, not an error.
+	only := estim.Finders{plain}
+	if units, err := only.List(ctx); err != nil || len(units) != 0 {
+		t.Fatalf("no lister: %v, %v", units, err)
+	}
+}

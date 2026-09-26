@@ -146,3 +146,94 @@ func TestFinderDescribe(t *testing.T) {
 		t.Errorf("empty describe:\n%s", out.String())
 	}
 }
+
+func TestFinderListsEveryUnitInReach(t *testing.T) {
+	ctx := context.Background()
+	held := fakeunit.New("held-1", "MASTOGO G-12AB")
+	adv := fakeunit.New("adv-1", "MASTOGO G-34CD")
+	off := fakeunit.New("adv-2", "MASTOGO G-56EF")
+	off.AutoOff(0)
+	other := fakeunit.New("adv-3", "Some Speaker")
+	other.NoService = true
+	c := &fakeunit.Central{Units: []*fakeunit.Unit{adv, off, other, held}, Held: []*fakeunit.Unit{held}}
+	// The pin does not narrow the list: it is the choice, the list is what
+	// there is to choose from.
+	f := finderOver(c, "G-34CD")
+	units, err := f.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []estim.Unit{
+		{ID: "held-1", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true},
+		{ID: "adv-1", Kind: estim.KindMastago, Label: "Mastago TENS G-34CD"},
+	}
+	if len(units) != len(want) {
+		t.Fatalf("units = %+v", units)
+	}
+	for i := range want {
+		if units[i] != want[i] {
+			t.Fatalf("unit %d = %+v, want %+v", i, units[i], want[i])
+		}
+	}
+	if c.Scans() != 1 {
+		t.Fatalf("scans = %d; one window lists the advertising units", c.Scans())
+	}
+	// Nothing was connected by the listing.
+	if held.Connections() != 0 || adv.Connections() != 0 {
+		t.Fatal("listing must not connect")
+	}
+	// No Bluetooth: no units, no error; Bluetooth off: reported.
+	f = mastago.NewFinder("", nil)
+	f.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return nil, ble.ErrUnsupported }
+	if units, err := f.List(ctx); err != nil || len(units) != 0 {
+		t.Fatalf("no Bluetooth: %v, %v", units, err)
+	}
+	f = mastago.NewFinder("", nil)
+	f.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return nil, ble.ErrUnavailable }
+	if _, err := f.List(ctx); !errors.Is(err, ble.ErrUnavailable) {
+		t.Fatalf("Bluetooth off: %v", err)
+	}
+}
+
+func TestFinderSelectChangesThePin(t *testing.T) {
+	ctx := context.Background()
+	a := fakeunit.New("id-a", "MASTOGO G-12AB")
+	b := fakeunit.New("id-b", "MASTOGO G-34CD")
+	c := &fakeunit.Central{Units: []*fakeunit.Unit{a, b}}
+	f := finderOver(c, "")
+	f.Select("id-b")
+	drv, err := f.Find(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drv.Port() != "id-b" {
+		t.Fatalf("selected id-b, found %s", drv.Port())
+	}
+	_ = drv.Close(ctx, false)
+	// A serial port path is another family's: nothing here matches it.
+	f.Select("/dev/cu.usbserial-1")
+	if _, err := f.Find(ctx); !errors.Is(err, estim.ErrNoDevice) {
+		t.Fatalf("selected another family's unit: %v", err)
+	}
+	// Empty lifts the restriction.
+	f.Select("")
+	drv, err = f.Find(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drv.Port() != "id-a" {
+		t.Fatalf("unrestricted, found %s", drv.Port())
+	}
+	_ = drv.Close(ctx, false)
+	// The driver knows whether the unit was another program's.
+	held := fakeunit.New("held-1", "MASTOGO G-56EF")
+	c = &fakeunit.Central{Held: []*fakeunit.Unit{held}}
+	drv, err = finderOver(c, "").Find(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer drv.Close(ctx, false)
+	if h, ok := drv.(estim.HeldReporter); !ok || !h.Held() {
+		t.Fatal("a unit found among the held peripherals must report Held")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -269,5 +270,245 @@ func TestDeviceFinderRegistry(t *testing.T) {
 		if _, ok := f.(*mastago.Finder); ok {
 			t.Fatal("-estim-ble=off still registers the Bluetooth finder")
 		}
+	}
+}
+
+// twoUnitLink is an estimLink over a fake central with two units and a
+// pipe for the console picker's stdin, running against svc.
+func twoUnitLink(t *testing.T, svc *estimService, stateDir string) (*estimLink, *fakeunit.Unit, *fakeunit.Unit, *console, io.WriteCloser, func()) {
+	t.Helper()
+	srv := httptest.NewServer(svc.handler())
+	id, err := identity.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	a := fakeunit.New("unit-a", "MASTOGO G-12AB")
+	b := fakeunit.New("unit-b", "MASTOGO G-34CD")
+	central := &fakeunit.Central{Units: []*fakeunit.Unit{a, b}}
+	var out console
+	link := newEstimLink(stateDir, log, func(format string, args ...any) { _, _ = fmt.Fprintf(&out, format, args...) })
+	finder := mastago.NewFinder(link.selection, log)
+	finder.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return central, nil }
+	finder.ScanWindow = 50 * time.Millisecond
+	link.finders = estim.Finders{finder}
+	link.rt.Connect = func(ctx context.Context) (estim.Driver, error) {
+		d, err := link.finders.Find(ctx)
+		if err != nil {
+			return nil, err
+		}
+		drv := d.(*mastago.Driver)
+		drv.Gap, drv.Step, drv.Timeout = 0, 0, 500*time.Millisecond
+		drv.Sleep = func(context.Context, time.Duration) error { return nil }
+		return drv, nil
+	}
+	link.rt.ListInterval = 100 * time.Millisecond
+	pr, pw := io.Pipe()
+	link.stdin = pr
+	link.client = &rendezvous.Client{Service: srv.URL, Identity: id, Version: "test", HTTP: srv.Client(), Logger: log}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); link.run(ctx) }()
+	stop := func() {
+		cancel()
+		_ = pw.Close()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("link did not stop")
+		}
+		srv.Close()
+	}
+	return link, a, b, &out, pw, stop
+}
+
+// TestEstimLinkTwoUnits: with two units in reach the report lists both
+// with the served one's id, the console prints a numbered list, a number
+// typed switches units (remembered in estim.json), a switch is refused
+// while a session has the unit armed, and the phone's device_select goes
+// the same way.
+func TestEstimLinkTwoUnits(t *testing.T) {
+	svc := &estimService{}
+	stateDir := t.TempDir()
+	link, a, b, out, stdin, stop := twoUnitLink(t, svc, stateDir)
+	defer stop()
+
+	_, dev := svc.waitFor(t, "device")
+	if dev["id"] != "unit-a" || dev["connected"] != true {
+		t.Fatalf("device report %v", dev)
+	}
+	waitUntil(t, "the units listed", func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		for _, p := range svc.posts {
+			for _, m := range p.messages {
+				if units, ok := m["units"].([]any); ok && len(units) == 2 {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	waitUntil(t, "the console list", func() bool { return strings.Contains(out.String(), "2  Mastago TENS G-34CD") })
+	if s := out.String(); !strings.Contains(s, "Stimulation units in reach (2)") || !strings.Contains(s, "1  Mastago TENS G-12AB  (serving this one)") || !strings.Contains(s, "Type a number and Enter") {
+		t.Fatalf("console: %q", s)
+	}
+
+	// Typing the other unit's number switches to it and remembers it.
+	if _, err := io.WriteString(stdin, "2\n"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the switch to unit-b", func() bool { return link.rt.Descriptor().ID == "unit-b" && a.Connections() == 0 })
+	if b.Connections() != 1 {
+		t.Fatalf("unit-b connections = %d", b.Connections())
+	}
+	if unit, err := resolveEstimSelection(stateDir, ""); err != nil || unit != "unit-b" {
+		t.Fatalf("remembered selection = %q, %v", unit, err)
+	}
+	waitUntil(t, "the switch reported", func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		for _, p := range svc.posts {
+			for _, m := range p.messages {
+				if m["type"] == "device" && m["id"] == "unit-b" && m["connected"] == true {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	if !strings.Contains(out.String(), "Switching to Mastago TENS G-34CD.") {
+		t.Fatalf("console: %q", out.String())
+	}
+	// A number off the list is said so.
+	if _, err := io.WriteString(stdin, "7\n"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the off-list answer", func() bool { return strings.Contains(out.String(), "no unit 7") })
+
+	// Armed by a session: the switch waits for the phone to stop the unit.
+	mgr := &manager{log: link.log, estim: link, tunnels: map[string]*active{}}
+	mgr.OnEstim("s1", json.RawMessage(`{"type":"control","payload":{"type":"companion_attached","sessionId":"s1"}}`))
+	waitUntil(t, "armed", link.rt.Armed)
+	if _, err := io.WriteString(stdin, "1\n"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the refusal", func() bool { return strings.Contains(out.String(), "Stop the unit on the phone first") })
+	if link.rt.Descriptor().ID != "unit-b" || !link.rt.Armed() {
+		t.Fatal("a switch while armed must change nothing")
+	}
+	// The phone's device_select, connector-level, is refused the same way...
+	mgr.OnEstim("", json.RawMessage(`{"type":"control","payload":{"type":"device_select","id":"unit-a"}}`))
+	link.session.Wait()
+	if link.rt.Descriptor().ID != "unit-b" {
+		t.Fatal("device_select while armed must change nothing")
+	}
+	// ...and goes once the session has stopped the unit.
+	mgr.OnClear("s1", "session ended")
+	mgr.OnEstim("", json.RawMessage(`{"type":"control","payload":{"type":"device_select","id":"unit-a"}}`))
+	waitUntil(t, "the switch to unit-a", func() bool { return link.rt.Descriptor().ID == "unit-a" && b.Connections() == 0 })
+	if unit, _ := resolveEstimSelection(stateDir, ""); unit != "unit-a" {
+		t.Fatalf("remembered selection = %q", unit)
+	}
+}
+
+// TestEstimLinkRemembersTheUnit: a saved selection restricts the finders
+// at the next start; -estim-unit sets it; "any" forgets it; a family's
+// own pin flag is not overridden by a remembered selection.
+func TestEstimLinkRemembersTheUnit(t *testing.T) {
+	stateDir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	quiet := func(string, ...any) {}
+	t.Cleanup(func() { *estimUnit, *estimBLE = "", "" })
+
+	*estimUnit = "G-34CD"
+	link := newEstimLink(stateDir, log, quiet)
+	if link.selection != "G-34CD" {
+		t.Fatalf("selection from the flag = %q", link.selection)
+	}
+	if f, ok := link.finders[0].(*mastago.Finder); !ok || f.Pin != "G-34CD" {
+		t.Fatalf("the finder is pinned to the selection: %+v", link.finders[0])
+	}
+	if unit, err := resolveEstimSelection(stateDir, ""); err != nil || unit != "G-34CD" {
+		t.Fatalf("saved = %q, %v", unit, err)
+	}
+	// The next start without the flag remembers it.
+	*estimUnit = ""
+	link = newEstimLink(stateDir, log, quiet)
+	if link.selection != "G-34CD" || link.finders[0].(*mastago.Finder).Pin != "G-34CD" {
+		t.Fatalf("remembered selection = %q", link.selection)
+	}
+	// A family's own pin on the command line is this run's word.
+	*estimBLE = "G-56EF"
+	link = newEstimLink(stateDir, log, quiet)
+	if link.selection != "" || link.finders[0].(*mastago.Finder).Pin != "G-56EF" {
+		t.Fatalf("-estim-ble overridden: selection=%q pin=%q", link.selection, link.finders[0].(*mastago.Finder).Pin)
+	}
+	*estimBLE = ""
+	// "any" forgets the selection.
+	*estimUnit = "any"
+	link = newEstimLink(stateDir, log, quiet)
+	if link.selection != "" || link.finders[0].(*mastago.Finder).Pin != "" {
+		t.Fatalf("after any: selection=%q", link.selection)
+	}
+	if unit, _ := resolveEstimSelection(stateDir, ""); unit != "" {
+		t.Fatalf("any must forget the saved selection: %q", unit)
+	}
+}
+
+func TestUnitListing(t *testing.T) {
+	units := []estim.Unit{
+		{ID: "id-a", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true},
+		{ID: "id-b", Kind: estim.KindMastago, Label: "Mastago TENS G-34CD"},
+	}
+	serving := &estim.Descriptor{ID: "id-b", Connected: true}
+	got := unitListing(units, serving, true)
+	want := "Stimulation units in reach (2):\n" +
+		"  1  Mastago TENS G-12AB  (another program on this computer has it open)\n" +
+		"  2  Mastago TENS G-34CD  (serving this one)\n" +
+		"Type a number and Enter to serve another unit; the phone can pick one too. A unit in use by a session is switched once the session stops it.\n"
+	if got != want {
+		t.Fatalf("listing:\n%s\nwant:\n%s", got, want)
+	}
+	// Without a console to type at, no instruction; nothing served, no mark.
+	got = unitListing(units, &estim.Descriptor{ID: "id-b", Connected: false}, false)
+	if strings.Contains(got, "Type a number") || strings.Contains(got, "serving") {
+		t.Fatalf("listing without picker:\n%s", got)
+	}
+}
+
+// TestEstimLinkHeldUnitLine: a unit another program has open is served
+// through the shared link, and the console says so.
+func TestEstimLinkHeldUnitLine(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	held := fakeunit.New("held-1", "MASTOGO G-12AB")
+	central := &fakeunit.Central{Held: []*fakeunit.Unit{held}}
+	var out console
+	link := newEstimLink(t.TempDir(), log, func(format string, args ...any) { _, _ = fmt.Fprintf(&out, format, args...) })
+	finder := mastago.NewFinder("", log)
+	finder.Open = func(context.Context, *slog.Logger) (ble.Central, error) { return central, nil }
+	finder.ScanWindow = 50 * time.Millisecond
+	link.finders = estim.Finders{finder}
+	link.rt.Connect = func(ctx context.Context) (estim.Driver, error) {
+		d, err := link.finders.Find(ctx)
+		if err != nil {
+			return nil, err
+		}
+		drv := d.(*mastago.Driver)
+		drv.Gap, drv.Step, drv.Timeout = 0, 0, 500*time.Millisecond
+		drv.Sleep = func(context.Context, time.Duration) error { return nil }
+		return drv, nil
+	}
+	ctx := context.Background()
+	if err := link.rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer link.rt.Close(ctx)
+	d := link.rt.Descriptor()
+	if !d.Held || d.ID != "held-1" {
+		t.Fatalf("descriptor: %+v", d)
+	}
+	if s := out.String(); !strings.Contains(s, "Stimulation device connected: Mastago TENS G-12AB.") || !strings.Contains(s, heldByAnotherLine) {
+		t.Fatalf("console: %q", s)
 	}
 }

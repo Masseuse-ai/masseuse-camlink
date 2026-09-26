@@ -1,8 +1,9 @@
 #!/bin/sh
 # Assemble Masseuse.app: the connector (universal or thin) as the
 # bundle's executable, ffmpeg as a helper, the icon, the notices. Nothing is
-# signed here (sign-notarize.sh does that); the script needs only sh, so
-# ci.yml builds the bundle unsigned on every pull request.
+# signed here (sign-notarize.sh does that); the script needs sh and Xcode 26's
+# actool (for the icon, below), so ci.yml builds the bundle unsigned on every
+# pull request.
 #
 # usage: sh packaging/macos/build-app.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR -o OUTDIR
 #   VERSION     the release version without the v (CFBundleShortVersionString)
@@ -53,6 +54,31 @@ cp "$connector" "$app/Contents/MacOS/$name"
 cp "$ffmpegdir/ffmpeg" "$app/Contents/Helpers/ffmpeg"
 chmod 755 "$app/Contents/MacOS/$name" "$app/Contents/Helpers/ffmpeg"
 cp "$here/masseuse-camlink.icns" "$app/Contents/Resources/masseuse-camlink.icns"
+
+# The icon a second time, for macOS 26, which draws app icons itself from
+# layers (an Icon Composer document compiled into an asset catalog) and
+# shrinks one that comes only as a bitmap onto a grey rounded square, the
+# shape it did not fill. masseuse-camlink.icon is the same mark as the icns,
+# as layers on the full canvas; actool (Xcode 26 or later) compiles it to
+# Assets.car, which CFBundleIconName names; macOS 13 to 15 keep the icns
+# (CFBundleIconFile). actool also writes a small icns of its own beside the
+# catalog: that one is not taken.
+actool=$(xcrun --find actool 2>/dev/null) ||
+  { echo "actool not found: Xcode 26 or later compiles masseuse-camlink.icon (DEVELOPER_DIR selects an Xcode)" >&2; exit 1; }
+actool_version=$("$actool" --version --output-format human-readable-text 2>/dev/null | sed -n 's/^short-bundle-version: //p')
+case "$actool_version" in
+  2[6-9].*|[3-9][0-9].*) ;;
+  *) echo "actool $actool_version is too old for masseuse-camlink.icon: Xcode 26 or later (DEVELOPER_DIR selects an Xcode)" >&2; exit 1 ;;
+esac
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+"$actool" "$here/masseuse-camlink.icon" --compile "$work" --app-icon masseuse-camlink \
+  --platform macosx --minimum-deployment-target 13.0 --target-device mac \
+  --output-partial-info-plist "$work/icon.plist" --output-format human-readable-text > "$work/actool.log" 2>&1 ||
+  { cat "$work/actool.log" >&2; echo "actool could not compile masseuse-camlink.icon" >&2; exit 1; }
+[ -f "$work/Assets.car" ] || { cat "$work/actool.log" >&2; echo "actool wrote no Assets.car" >&2; exit 1; }
+cp "$work/Assets.car" "$app/Contents/Resources/Assets.car"
+
 cp "$repo/LICENSE" "$repo/NOTICE" "$app/Contents/Resources/"
 cp "$here/../ffmpeg/THIRD_PARTY.md" "$app/Contents/Resources/THIRD_PARTY.md"
 cp "$ffmpegdir"/licenses/* "$app/Contents/Resources/licenses/"
@@ -68,6 +94,13 @@ if command -v plutil >/dev/null 2>&1; then
     got=$(plutil -extract "$key" raw -o - "$app/Contents/Info.plist")
     [ "$got" = "$name" ] || { echo "Info.plist $key is $got, not $name" >&2; exit 1; }
   done
+  # The catalog's icon is the one the plist names, and the icns is its namesake.
+  for key in CFBundleIconName CFBundleIconFile; do
+    got=$(plutil -extract "$key" raw -o - "$app/Contents/Info.plist")
+    [ "$got" = "masseuse-camlink" ] || { echo "Info.plist $key is $got, not masseuse-camlink" >&2; exit 1; }
+  done
+  compiled=$(plutil -extract CFBundleIconName raw -o - "$work/icon.plist")
+  [ "$compiled" = "masseuse-camlink" ] || { echo "actool compiled the icon as $compiled, not masseuse-camlink" >&2; exit 1; }
 fi
 echo "assembled $app ($version)"
 find "$app" -type f | sort | sed "s|^$outdir/|  |"

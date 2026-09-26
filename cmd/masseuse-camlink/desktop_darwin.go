@@ -34,6 +34,10 @@ func isTerminal(f *os.File) bool {
 	return err == nil
 }
 
+// stdinInteractive says whether standard input is a terminal someone types
+// at, so the unit picker (estim.go) may read from it.
+func stdinInteractive() bool { return isTerminal(os.Stdin) }
+
 // handToTerminal is what the bundle does when opened: if a connector is
 // already running on this state directory, bring Terminal forward and
 // leave it be; otherwise write the .command file and open it, so Terminal

@@ -14,7 +14,13 @@
 	<string>Masseuse</string>
 	<key>CFBundleExecutable</key>
 	<string>Masseuse</string>
+	<!-- The icon twice: masseuse-camlink.icns for macOS 13 to 15, and for
+	     macOS 26, which draws app icons itself from layers and puts a bare
+	     bitmap on a grey backing, the asset catalog build-app.sh compiles from
+	     masseuse-camlink.icon (README.md here, "The icon"). -->
 	<key>CFBundleIconFile</key>
+	<string>masseuse-camlink</string>
+	<key>CFBundleIconName</key>
 	<string>masseuse-camlink</string>
 	<key>CFBundleIdentifier</key>
 	<string>ai.masseuse.camlink</string>

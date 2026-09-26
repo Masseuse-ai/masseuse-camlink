@@ -59,6 +59,11 @@ type Session struct {
 	Runtime *Runtime
 	Uplink  Uplink
 	Log     *slog.Logger
+	// Select applies a `device_select` from the service: the program's,
+	// which remembers the choice and has the Runtime switch units
+	// (Runtime.SelectUnit); ErrArmed when the unit is armed. Nil ignores
+	// the control.
+	Select func(ctx context.Context, id string) error
 	// Now is the clock (time.Now).
 	Now func() time.Time
 
@@ -206,8 +211,7 @@ func (s *Session) Flush(ctx context.Context) {
 // DeviceChanged reports the device to the service and, when it has just
 // connected while a session is attached, arms it for that session.
 func (s *Session) DeviceChanged(ctx context.Context, d Descriptor) {
-	msg := map[string]any{"type": "device", "kind": d.Kind, "label": d.Label, "connected": d.Connected, "capabilities": d.Capabilities}
-	s.queue("", false, msg)
+	s.queue("", false, s.deviceMessage(d))
 	s.mu.Lock()
 	sid, attached := s.sessionID, s.attached
 	s.mu.Unlock()
@@ -217,6 +221,30 @@ func (s *Session) DeviceChanged(ctx context.Context, d Descriptor) {
 			s.autoArm(ctx, "device connected")
 		}
 	}
+}
+
+// UnitsChanged reports the units in reach to the service: the same
+// `device` message, the served unit's descriptor as it stands with the
+// new list. The Runtime's OnUnits.
+func (s *Session) UnitsChanged(_ context.Context, _ []Unit) {
+	s.queue("", false, s.deviceMessage(s.Runtime.Descriptor()))
+}
+
+// deviceMessage is the connector-level `device` report (PROTOCOL.md 7.3):
+// the selected unit, with `id` once one has been found and `units`, the
+// units in reach, once listed. A service that knows neither drops them.
+func (s *Session) deviceMessage(d Descriptor) map[string]any {
+	msg := map[string]any{"type": "device", "kind": d.Kind, "label": d.Label, "connected": d.Connected, "capabilities": d.Capabilities}
+	if d.ID != "" {
+		msg["id"] = d.ID
+	}
+	if d.Held {
+		msg["held"] = true
+	}
+	if units := s.Runtime.Units(); units != nil {
+		msg["units"] = units
+	}
+	return msg
 }
 
 // Detach releases the device and forgets the session, telling the service
@@ -321,6 +349,8 @@ type controlPayload struct {
 	CommandID any             `json:"commandId"`
 	Command   json.RawMessage `json:"command"`
 	IssuedAt  any             `json:"issuedAt"`
+	// ID is the unit a device_select names (Unit.ID).
+	ID string `json:"id"`
 	// raw is the payload as received, for the controls whose fields are
 	// their own (device_settings).
 	raw json.RawMessage
@@ -457,6 +487,29 @@ func (s *Session) handleControl(ctx context.Context, envelopeSession string, p c
 			defer s.wg.Done()
 			s.runCommand(ctx, sid, p, cmd, perr, isRelease)
 		}()
+	case "device_select":
+		// Connector-level (PROTOCOL.md 7.1): the phone picked another of
+		// the units in reach. Refused while the unit is armed, so an
+		// attached session's current is never cut from under it; the
+		// phone stops the unit first. The outcome is the `device` reports
+		// that follow: the unit let go, then the one selected.
+		id := p.ID
+		if id == "" {
+			s.log().Debug("estim: ignoring device_select without an id")
+			return
+		}
+		if s.Select == nil {
+			s.log().Debug("estim: ignoring device_select: no way to select a unit")
+			return
+		}
+		s.log().Info("estim: unit selected from the phone", "id", id)
+		if err := s.Select(ctx, id); err != nil {
+			if errors.Is(err, ErrArmed) {
+				s.log().Warn("estim: device_select refused: the unit is armed; the phone stops it first", "id", id)
+			} else {
+				s.log().Warn("estim: device_select could not be applied", "id", id, "err", err)
+			}
+		}
 	default:
 		s.log().Debug("estim: ignoring control", "type", p.Type)
 	}

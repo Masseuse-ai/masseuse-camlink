@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +17,12 @@ import (
 	"github.com/FemLed/masseuse-camlink/internal/estim"
 	"github.com/FemLed/masseuse-camlink/internal/rendezvous"
 )
+
+// heldByAnotherLine is printed when the unit served is one another program
+// on this computer has open (the vendor's app, a script keeping it awake):
+// the connector shares the Bluetooth link, so both programs' commands reach
+// the unit and either's replies may answer the other's questions.
+const heldByAnotherLine = "Another program on this computer has this unit open. Close it before a session, or its commands and Masseuse.ai's will collide."
 
 // estimLink serves the stimulation device reachable from this computer
 // (docs/PROTOCOL.md, section 7): it finds the device through the registered
@@ -23,26 +32,61 @@ import (
 // about it needs turning on: a supported device that is switched on
 // nearby is served for whatever session uses this connector.
 type estimLink struct {
-	finders estim.Finders
-	rt      *estim.Runtime
-	session *estim.Session
-	client  *rendezvous.Client
-	log     *slog.Logger
-	out     func(format string, args ...any)
+	finders  estim.Finders
+	rt       *estim.Runtime
+	session  *estim.Session
+	client   *rendezvous.Client
+	log      *slog.Logger
+	out      func(format string, args ...any)
+	stateDir string
+	// stdin is where the console picker reads a number from; nil for no
+	// picker (not a terminal).
+	stdin io.Reader
 
 	mu       sync.Mutex
 	lastDesc *estim.Descriptor
-	ctx      context.Context
+	// units is the list as last printed, in the order the numbers refer to.
+	units []estim.Unit
+	// selection is the unit chosen (estim.json); "" is the first found.
+	selection string
+	pickerOn  bool
+	ctx       context.Context
 }
 
 // newEstimLink prepares the link over the device families the flags leave
-// on.
+// on, restricted to the remembered unit when there is one.
 func newEstimLink(stateDir string, log *slog.Logger, out func(string, ...any)) *estimLink {
-	l := &estimLink{log: log, out: out}
+	l := &estimLink{log: log, out: out, stateDir: stateDir}
 	l.finders = deviceFinders(finderConfig{stateDir: stateDir, log: log})
-	l.rt = &estim.Runtime{Connect: l.finders.Find, Log: log}
+	selection, err := resolveEstimSelection(stateDir, *estimUnit)
+	if err != nil {
+		log.Warn("estim: could not remember the unit selected", "err", err)
+	}
+	// A family's own pin on the command line (-estim-ble) is this run's
+	// word when -estim-unit is not given; a remembered selection would
+	// silently override it otherwise.
+	if strings.TrimSpace(*estimUnit) == "" && familyPinned() {
+		selection = ""
+	}
+	l.selection = selection
+	if selection != "" {
+		l.finders.Select(selection)
+		log.Info("estim: serving the unit selected", "unit", selection)
+	}
+	// Closures over the link, so the finders may be replaced (a test's fake
+	// central) and the Runtime follows.
+	l.rt = &estim.Runtime{
+		Connect: func(ctx context.Context) (estim.Driver, error) { return l.finders.Find(ctx) },
+		List:    func(ctx context.Context) ([]estim.Unit, error) { return l.finders.List(ctx) },
+		Select:  func(unit string) { l.finders.Select(unit) },
+		Log:     log,
+	}
 	l.rt.OnDevice = l.deviceChanged
-	l.session = &estim.Session{Runtime: l.rt, Uplink: l, Log: log}
+	l.rt.OnUnits = l.unitsChanged
+	l.session = &estim.Session{Runtime: l.rt, Uplink: l, Log: log, Select: l.selectUnit}
+	if stdinInteractive() {
+		l.stdin = os.Stdin
+	}
 	return l
 }
 
@@ -66,6 +110,108 @@ func (l *estimLink) run(ctx context.Context) {
 	}
 }
 
+// selectUnit is one selection from wherever it came (the console picker,
+// the phone's device_select): remembered for the next start, then applied
+// by the Runtime, which lets go of another unit held and opens this one.
+// estim.ErrArmed while the unit is armed; the phone stops it first.
+func (l *estimLink) selectUnit(ctx context.Context, id string) error {
+	if l.rt.Armed() {
+		return estim.ErrArmed
+	}
+	l.mu.Lock()
+	l.selection = id
+	l.mu.Unlock()
+	if err := saveEstimSelection(l.stateDir, id); err != nil {
+		l.log.Warn("estim: could not remember the unit selected", "err", err)
+	}
+	return l.rt.SelectUnit(ctx, id)
+}
+
+// unitsChanged prints the units in reach when there is a choice to make,
+// numbered so one can be picked by typing its number, and tells the
+// service the list.
+func (l *estimLink) unitsChanged(ctx context.Context, units []estim.Unit) {
+	l.mu.Lock()
+	l.units = append([]estim.Unit(nil), units...)
+	startPicker := len(units) > 1 && l.stdin != nil && !l.pickerOn
+	if startPicker {
+		l.pickerOn = true
+	}
+	l.mu.Unlock()
+	if len(units) > 1 {
+		desc := l.rt.Descriptor()
+		l.out("%s", unitListing(units, &desc, l.stdin != nil))
+	}
+	if startPicker {
+		go l.readPicks(l.context(), l.stdin)
+	}
+	l.session.UnitsChanged(ctx, units)
+}
+
+// unitListing is the console's numbered list of the units in reach, the
+// served one marked; withPicker adds how to switch.
+func unitListing(units []estim.Unit, serving *estim.Descriptor, withPicker bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Stimulation units in reach (%d):\n", len(units))
+	for i, u := range units {
+		note := ""
+		switch {
+		case serving != nil && serving.Connected && serving.ID == u.ID:
+			note = "  (serving this one)"
+		case u.Held:
+			note = "  (another program on this computer has it open)"
+		}
+		fmt.Fprintf(&b, "  %d  %s%s\n", i+1, u.Label, note)
+	}
+	if withPicker {
+		b.WriteString("Type a number and Enter to serve another unit; the phone can pick one too. A unit in use by a session is switched once the session stops it.\n")
+	}
+	return b.String()
+}
+
+// readPicks reads numbers typed at the console and selects the unit each
+// names in the list last printed. Anything else typed is left alone.
+func (l *estimLink) readPicks(ctx context.Context, in io.Reader) {
+	sc := bufio.NewScanner(in)
+	for sc.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		n, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		l.pick(ctx, n)
+	}
+}
+
+// pick serves the unit numbered n in the list last printed.
+func (l *estimLink) pick(ctx context.Context, n int) {
+	l.mu.Lock()
+	units := append([]estim.Unit(nil), l.units...)
+	l.mu.Unlock()
+	if n < 1 || n > len(units) {
+		l.out("There is no unit %d in the list; the numbers are 1 to %d.\n", n, len(units))
+		return
+	}
+	u := units[n-1]
+	l.out("Switching to %s.\n", u.Label)
+	if err := l.selectUnit(ctx, u.ID); err != nil {
+		switch {
+		case errors.Is(err, estim.ErrArmed):
+			l.out("Not now: a session on your phone is using the unit. Stop the unit on the phone first.\n")
+		case errors.Is(err, estim.ErrNoDevice):
+			l.out("%s did not answer; it is served as soon as it does.\n", u.Label)
+		default:
+			l.out("Could not switch to %s: %v\n", u.Label, err)
+		}
+	}
+}
+
 // context is the link's lifetime, for work started by rendezvous events.
 func (l *estimLink) context() context.Context {
 	l.mu.Lock()
@@ -85,6 +231,9 @@ func (l *estimLink) deviceChanged(ctx context.Context, d estim.Descriptor) {
 	switch {
 	case d.Connected:
 		l.out("Stimulation device connected: %s. It is held at zero until a session on your phone uses this computer.\n", d.Label)
+		if d.Held {
+			l.out("%s\n", heldByAnotherLine)
+		}
 	case l.context().Err() != nil:
 		// The connector is exiting and let go of the device on purpose;
 		// the service is told, the person is not.

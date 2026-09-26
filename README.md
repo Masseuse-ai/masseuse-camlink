@@ -246,11 +246,44 @@ masseuse-camlink estim probe
 
 says what the connector can see over Bluetooth (units already open in
 another program, units advertising), finds the unit, prints what it reports
-and leaves it released. With several units in reach, name yours with
-`-estim-ble G-12AB` (the suffix the unit advertises); `-estim-ble off`
-leaves Bluetooth alone. On Linux the connector talks to BlueZ over D-Bus,
-so your user needs to be allowed to use Bluetooth (usually the `bluetooth`
-group); on Windows there is no Bluetooth backend yet.
+and leaves it released. `-estim-ble off` leaves Bluetooth alone. On Linux
+the connector talks to BlueZ over D-Bus, so your user needs to be allowed
+to use Bluetooth (usually the `bluetooth` group); on Windows there is no
+Bluetooth backend yet.
+
+**Several units.** The connector serves one unit at a time and keeps an eye
+on the others: every half minute it lists the units in reach without
+connecting to them, tells the service the list, and with more than one
+prints them numbered:
+
+```
+Stimulation units in reach (2):
+  1  Mastago TENS G-12AB  (serving this one)
+  2  Mastago TENS G-34CD
+Type a number and Enter to serve another unit; the phone can pick one too. A unit in use by a session is switched once the session stops it.
+```
+
+Type a number to switch; the unit let go is put to zero first. The phone
+offers the same choice on its Unit screen. Either way the choice is
+remembered (`estim.json` in the state directory) and the next start serves
+that unit; `-estim-unit G-34CD` (the suffix the unit advertises, or the
+system's identifier for it) sets it from the command line, and
+`-estim-unit any` forgets it, back to the first unit found. While a session
+has the unit armed a switch waits: stop the unit on the phone first.
+`-estim-ble G-12AB` still pins the Bluetooth family alone for one run.
+
+**A unit another program has open.** If the vendor's app, or anything else
+on this computer, already has the unit open, the connector shares that
+link rather than fighting for it, and says so:
+
+```
+Another program on this computer has this unit open. Close it before a session, or its commands and Masseuse.ai's will collide.
+```
+
+Both programs' commands reach the unit through the one connection, and the
+connector cannot tell the unit's replies to one from the other's. Close the
+other program before a session; a write of its that spoils the connector's
+read-back fails the command and puts the unit to zero.
 
 What travels between the connector and the service for this is described in
 [docs/PROTOCOL.md](docs/PROTOCOL.md), section 7. It does not go through the

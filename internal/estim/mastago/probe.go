@@ -36,7 +36,7 @@ type Finder struct {
 	Open func(ctx context.Context, log *slog.Logger) (ble.Central, error)
 	// Pin, when set, restricts the search to the unit whose advertised
 	// name ("MASTOGO G-12AB"), name suffix ("G-12AB") or system identifier
-	// matches it.
+	// matches it. Select changes it while the program runs.
 	Pin string
 	// ScanWindow bounds one scan (DefaultScanWindow when zero).
 	ScanWindow time.Duration
@@ -106,18 +106,83 @@ func IsUnit(a ble.Advertisement) bool {
 	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(a.Name)), AdvertisedPrefix) || a.HasService(ServiceUUID)
 }
 
+// pin is the Pin as of now, read under the lock Select writes it under.
+func (f *Finder) pin() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return strings.TrimSpace(f.Pin)
+}
+
+// Select is estim.Selector: the Pin from here on. A unit of another
+// family (a serial port path) matches no advertisement, so the program
+// may give one selection to every family.
+func (f *Finder) Select(unit string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Pin = strings.TrimSpace(unit)
+}
+
 // Matches says whether an advertisement is a unit the Pin allows.
 func (f *Finder) Matches(a ble.Advertisement) bool {
 	if !IsUnit(a) {
 		return false
 	}
-	if f.Pin == "" {
+	pin := f.pin()
+	if pin == "" {
 		return true
 	}
-	pin := strings.TrimSpace(f.Pin)
 	name := strings.TrimSpace(a.Name)
 	suffix := strings.TrimSpace(strings.TrimPrefix(strings.ToUpper(name), AdvertisedPrefix))
 	return strings.EqualFold(pin, name) || strings.EqualFold(pin, suffix) || strings.EqualFold(pin, a.ID)
+}
+
+// List is estim.Lister: every unit in reach, the Pin notwithstanding: the
+// peripherals the system already holds for another program (Held), then
+// the units advertising during one scan window. Nothing is connected. A
+// computer without Bluetooth has no units and no error; Bluetooth off or
+// refused is reported as itself.
+func (f *Finder) List(ctx context.Context) ([]estim.Unit, error) {
+	c, err := f.centralFor(ctx)
+	if err != nil {
+		if errors.Is(err, ble.ErrUnsupported) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	// The scan reports on the central's goroutine; the list is read once
+	// the scan is over, under the same lock.
+	var mu sync.Mutex
+	var units []estim.Unit
+	seen := map[string]bool{}
+	held, err := c.ConnectedWithService(ctx, ServiceUUID)
+	if err != nil {
+		f.log().Debug("mastago: listing held peripherals", "err", err)
+	}
+	for _, a := range held {
+		if !IsUnit(a) || seen[a.ID] {
+			continue
+		}
+		seen[a.ID] = true
+		units = append(units, estim.Unit{ID: a.ID, Kind: estim.KindMastago, Label: LabelFor(a.Name), Held: true})
+	}
+	sctx, cancel := context.WithTimeout(ctx, f.window())
+	defer cancel()
+	_, scanErr := c.Scan(sctx, func(a ble.Advertisement) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if IsUnit(a) && !seen[a.ID] {
+			seen[a.ID] = true
+			units = append(units, estim.Unit{ID: a.ID, Kind: estim.KindMastago, Label: LabelFor(a.Name)})
+		}
+		return false
+	})
+	mu.Lock()
+	out := append([]estim.Unit(nil), units...)
+	mu.Unlock()
+	if scanErr != nil && ctx.Err() != nil {
+		return out, ctx.Err()
+	}
+	return out, nil
 }
 
 // Find returns a driver for the first unit that answers, or an error
@@ -160,8 +225,8 @@ func (f *Finder) Find(ctx context.Context) (estim.Driver, error) {
 		if firstErr != nil {
 			return nil, firstErr
 		}
-		if f.Pin != "" {
-			return nil, fmt.Errorf("%w: no unit matching %q is advertising", estim.ErrNoDevice, f.Pin)
+		if pin := f.pin(); pin != "" {
+			return nil, fmt.Errorf("%w: no unit matching %q is advertising", estim.ErrNoDevice, pin)
 		}
 		return nil, fmt.Errorf("%w: no unit is advertising; hold its power button until it switches on", estim.ErrNoDevice)
 	}
@@ -183,6 +248,7 @@ func (f *Finder) connect(ctx context.Context, c ble.Central, a ble.Advertisement
 	if err != nil {
 		return nil, err
 	}
+	drv.held = a.Connected
 	f.log().Info("mastago: unit connected", "unit", conn.Name(), "id", conn.ID(), "held", a.Connected)
 	return drv, nil
 }
@@ -197,8 +263,8 @@ func (f *Finder) Describe(ctx context.Context, out io.Writer) error {
 		fmt.Fprintf(out, "  not available: %v\n", err)
 		return err
 	}
-	if f.Pin != "" {
-		fmt.Fprintf(out, "  pinned to %q\n", f.Pin)
+	if pin := f.pin(); pin != "" {
+		fmt.Fprintf(out, "  pinned to %q\n", pin)
 	}
 	held, err := c.ConnectedWithService(ctx, ServiceUUID)
 	if err != nil {

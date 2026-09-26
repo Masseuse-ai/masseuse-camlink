@@ -45,7 +45,14 @@ type Driver struct {
 	// ArmWindow is the countdown Arm writes; estim.MaxArmWindow unless a
 	// test shortens it.
 	ArmWindow time.Duration
+	// held says the system already held the unit for another program when
+	// this link was opened (estim.HeldReporter).
+	held bool
 }
+
+// Held is estim.HeldReporter: another program on this computer had the
+// unit open when the connector connected, so the two share the link.
+func (d *Driver) Held() bool { return d.held }
 
 // LabelFor is the label for a unit with the advertised name: the unit's
 // own suffix after the vendor prefix ("Mastago TENS G-12AB").

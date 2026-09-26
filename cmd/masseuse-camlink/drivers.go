@@ -1,8 +1,12 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"flag"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/FemLed/masseuse-camlink/internal/estim"
@@ -36,6 +40,60 @@ type finderConfig struct {
 var estimBLE = flag.String("estim-ble", envOr("MASSEUSE_CAMLINK_ESTIM_BLE", ""),
 	`the Bluetooth stimulation unit to serve, by the name it advertises ("G-12AB") or the system's identifier for it, when there are several; "off" to leave Bluetooth alone (default: the first unit found)`)
 
+// The selection across families: which one unit, remembered.
+var estimUnit = flag.String("estim-unit", envOr("MASSEUSE_CAMLINK_ESTIM_UNIT", ""),
+	`the stimulation unit to serve when several are in reach, by the name it advertises ("G-12AB"), the system's identifier for it, or its serial port; remembered for the next start, as is a unit picked from the list this program prints or from the phone; "any" forgets the choice (default: the remembered unit, else the first found)`)
+
+// estimFile remembers the unit selected (the flag, the console picker or
+// the phone's device_select), so the next start serves it again.
+const estimFile = "estim.json"
+
+// estimConfig is the saved selection.
+type estimConfig struct {
+	// Unit is what the selection names: an estim.Unit's ID, or a name the
+	// unit's family recognizes. Empty is no selection: the first found.
+	Unit string `json:"unit"`
+}
+
+// resolveEstimSelection is the unit to serve: the flag when given (and
+// saved; "any" clears the saved choice), else the saved one, else none.
+func resolveEstimSelection(stateDir string, flagValue string) (string, error) {
+	if v := strings.TrimSpace(flagValue); v != "" {
+		if strings.EqualFold(v, "any") {
+			v = ""
+		}
+		return v, saveEstimSelection(stateDir, v)
+	}
+	b, err := os.ReadFile(filepath.Join(stateDir, estimFile))
+	if err != nil {
+		return "", nil
+	}
+	var cfg estimConfig
+	if json.Unmarshal(b, &cfg) != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(cfg.Unit), nil
+}
+
+// saveEstimSelection remembers the selection; empty forgets it.
+func saveEstimSelection(stateDir string, unit string) error {
+	path := filepath.Join(stateDir, estimFile)
+	if unit == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	b, err := json.MarshalIndent(estimConfig{Unit: unit}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
 // families is the registry, in the order tried.
 var families = []deviceFamily{{
 	name: "Mastago TENS (Bluetooth)",
@@ -50,6 +108,22 @@ var families = []deviceFamily{{
 // familyOff says whether a family's flag switches it off.
 func familyOff(flagValue string) bool {
 	return strings.EqualFold(strings.TrimSpace(flagValue), "off")
+}
+
+// familyPins are the families' own pin flags, for familyPinned; a family
+// registered from its own file appends its flag in an init function.
+var familyPins = []*string{estimBLE}
+
+// familyPinned says whether any family's own flag names a unit (not empty,
+// not "off"): that pin is this run's, and no remembered selection
+// overrides it.
+func familyPinned() bool {
+	for _, p := range familyPins {
+		if v := strings.TrimSpace(*p); v != "" && !familyOff(v) {
+			return true
+		}
+	}
+	return false
 }
 
 // deviceFinders builds the finders of every family the flags leave on, in

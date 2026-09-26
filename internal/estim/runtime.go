@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,10 @@ const (
 	MaxArmWindow = 30 * time.Minute
 	// HealthInterval is how often the device is read in full while idle.
 	HealthInterval = 5 * time.Second
+	// DefaultListInterval is how often the units in reach are listed while
+	// the program runs (Runtime.ListInterval). A listing is a scan window
+	// on the Bluetooth family, so it is not the health tick's.
+	DefaultListInterval = 30 * time.Second
 	// TelemetryInterval is the sampling period (2 Hz). A frame costs a few
 	// round trips to the device, so this leaves most of the link for
 	// commands.
@@ -88,13 +93,26 @@ type Runtime struct {
 	// Connect finds a device and opens a session with it. The Runtime
 	// releases every fresh connection before trusting it.
 	Connect func(ctx context.Context) (Driver, error)
+	// List says which units are in reach without taking any (Lister.List
+	// of the finders); nil lists nothing. Run lists every ListInterval so
+	// a unit that appears while another is held is reported.
+	List func(ctx context.Context) ([]Unit, error)
+	// Select restricts the finders to one unit (Selector.Select of the
+	// finders); nil means there is no choosing.
+	Select func(unit string)
 	// OnDevice is told when the device connects or is lost, with the
 	// descriptor to report. Called without any lock held.
 	OnDevice func(ctx context.Context, d Descriptor)
+	// OnUnits is told when the list of units in reach changes. Called
+	// without any lock held.
+	OnUnits func(ctx context.Context, units []Unit)
 	// ArmWindow is how long one arming lasts without renewal (MaxArmWindow
 	// at most; the default).
 	ArmWindow time.Duration
-	Log       *slog.Logger
+	// ListInterval is how often Run lists the units in reach
+	// (DefaultListInterval when zero).
+	ListInterval time.Duration
+	Log          *slog.Logger
 	// Now is the clock (time.Now).
 	Now func() time.Time
 
@@ -112,6 +130,8 @@ type Runtime struct {
 	hasStatus    bool
 	lastError    string
 	last         Descriptor
+	units        []Unit
+	listed       bool
 	frames       int
 	gaps         int
 	readErrors   int
@@ -319,14 +339,17 @@ func (r *Runtime) Open(ctx context.Context) error {
 		}
 		return err
 	}
-	desc := Descriptor{Kind: d.Kind(), Label: d.Label(), Connected: true, Capabilities: d.Capabilities()}
+	desc := Descriptor{Kind: d.Kind(), Label: d.Label(), ID: d.Port(), Connected: true, Capabilities: d.Capabilities()}
+	if h, ok := d.(HeldReporter); ok {
+		desc.Held = h.Held()
+	}
 	r.st.Lock()
 	r.device = d
 	r.lastStatus, r.hasStatus = status, true
 	r.lastError = ""
 	r.last = desc
 	r.st.Unlock()
-	r.log().Info("estim: device ready", "device", d.Label(), "port", d.Port())
+	r.log().Info("estim: device ready", "device", d.Label(), "port", d.Port(), "held", desc.Held)
 	r.notify(ctx, desc)
 	return nil
 }
@@ -335,6 +358,95 @@ func (r *Runtime) notify(ctx context.Context, d Descriptor) {
 	if r.OnDevice != nil {
 		r.OnDevice(ctx, d)
 	}
+}
+
+// Units are the units in reach as last listed (ListUnits), the served one
+// included; nil before any listing.
+func (r *Runtime) Units() []Unit {
+	r.st.Lock()
+	defer r.st.Unlock()
+	return append([]Unit(nil), r.units...)
+}
+
+// ListUnits asks the finders which units are in reach and tells OnUnits
+// when the answer differs from the last. Nothing is connected; a family
+// that cannot be listed is logged and the others' units kept. Run calls
+// it every ListInterval; the program may call it after a selection.
+func (r *Runtime) ListUnits(ctx context.Context) ([]Unit, error) {
+	if r.List == nil {
+		return nil, nil
+	}
+	units, err := r.List(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		r.log().Debug("estim: listing units", "err", err, "units", len(units))
+	}
+	if units == nil {
+		units = []Unit{}
+	}
+	r.st.Lock()
+	changed := !r.listed || !sameUnits(r.units, units)
+	r.units, r.listed = units, true
+	r.st.Unlock()
+	if changed {
+		r.log().Info("estim: units in reach", "units", len(units))
+		if r.OnUnits != nil {
+			r.OnUnits(ctx, append([]Unit(nil), units...))
+		}
+	}
+	return append([]Unit(nil), units...), err
+}
+
+func sameUnits(a, b []Unit) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// ErrArmed is returned by a selection made while the device is armed: the
+// attached session is on the unit held, and the phone stops it first.
+var ErrArmed = errors.New("estim: the unit is armed; stop it first")
+
+// SelectUnit restricts the finders to one unit (the picker, the service's
+// `device_select`): the unit held, when it is another, is released to zero
+// and let go, and the selected one opened. Empty lifts the restriction
+// and keeps whatever is held. Refused while armed.
+func (r *Runtime) SelectUnit(ctx context.Context, unit string) error {
+	if r.Select == nil {
+		return errors.New("estim: no device family can be selected from")
+	}
+	if r.Armed() {
+		return ErrArmed
+	}
+	r.Select(unit)
+	r.st.Lock()
+	held := r.device
+	r.st.Unlock()
+	if held != nil && unit != "" && !isUnit(held, unit) {
+		r.log().Info("estim: another unit selected; letting this one go", "device", held.Label(), "port", held.Port(), "selected", unit)
+		if err := r.Close(ctx); err != nil {
+			r.log().Warn("estim: letting the unit go", "err", err)
+		}
+	}
+	return r.Open(ctx)
+}
+
+// isUnit says whether unit names d: its system identifier, its label, or
+// the label's last word (the Mastago's advertised suffix).
+func isUnit(d Driver, unit string) bool {
+	if d.Port() == unit || strings.EqualFold(d.Label(), unit) {
+		return true
+	}
+	words := strings.Fields(d.Label())
+	return len(words) > 0 && strings.EqualFold(words[len(words)-1], unit)
 }
 
 // fault forgets a device that stopped answering; the caller holds dev.
@@ -659,10 +771,15 @@ func (r *Runtime) Run(ctx context.Context) {
 	if err := r.Open(ctx); err != nil && ctx.Err() == nil {
 		r.logUnavailable(err)
 	}
+	if _, err := r.ListUnits(ctx); err != nil && ctx.Err() == nil {
+		r.log().Debug("estim: listing units at start", "err", err)
+	}
 	health := time.NewTicker(HealthInterval)
 	defer health.Stop()
 	sample := time.NewTicker(TelemetryInterval)
 	defer sample.Stop()
+	list := time.NewTicker(r.listInterval())
+	defer list.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -690,8 +807,21 @@ func (r *Runtime) Run(ctx context.Context) {
 				r.log().Warn("estim: release at arm expiry failed", "err", err)
 			}
 			r.RenewDeviceArm(ctx)
+		case <-list.C:
+			// The listing is this goroutine's, like Open, so the two never
+			// scan the same bus at once.
+			if _, err := r.ListUnits(ctx); err != nil && ctx.Err() == nil {
+				r.log().Debug("estim: listing units", "err", err)
+			}
 		}
 	}
+}
+
+func (r *Runtime) listInterval() time.Duration {
+	if r.ListInterval <= 0 {
+		return DefaultListInterval
+	}
+	return r.ListInterval
 }
 
 // logUnavailable logs why no device is held, once per distinct reason, so
