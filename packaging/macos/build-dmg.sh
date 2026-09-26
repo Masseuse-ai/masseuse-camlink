@@ -1,11 +1,12 @@
 #!/bin/sh
-# Wrap masseuse-camlink.app in a disk image the way Mac users expect: the
-# app and an Applications shortcut side by side, the volume wearing the app's
-# icon. macOS only (hdiutil). The image is signed and notarized afterwards
-# by sign-notarize.sh.
+# Wrap Masseuse.ai.app in a disk image the way Mac users expect: the app and
+# an Applications shortcut side by side, the volume wearing the app's icon.
+# macOS only (hdiutil). The image is signed and notarized afterwards by
+# sign-notarize.sh.
 #
 # usage: sh packaging/macos/build-dmg.sh -a APP -v VERSION -o OUTDIR
-#   writes OUTDIR/masseuse-camlink_VERSION_darwin_all.dmg (compressed, read-only)
+#   writes OUTDIR/Masseuse.ai-VERSION.dmg (compressed, read-only), the
+#   volume named Masseuse.ai
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -15,7 +16,7 @@ while [ $# -gt 0 ]; do
     -a) app="$2"; shift 2 ;;
     -v) version="$2"; shift 2 ;;
     -o) outdir="$2"; shift 2 ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -25,8 +26,8 @@ command -v hdiutil >/dev/null 2>&1 || { echo "hdiutil is needed (macOS)" >&2; ex
 mkdir -p "$outdir"
 outdir=$(cd "$outdir" && pwd)
 
-volume="masseuse-camlink"
-dmg="$outdir/masseuse-camlink_${version}_darwin_all.dmg"
+volume="Masseuse.ai"
+dmg="$outdir/Masseuse.ai-${version}.dmg"
 work=$(mktemp -d "${TMPDIR:-/tmp}/camlink-dmg.XXXXXX")
 mount=""
 cleanup() {

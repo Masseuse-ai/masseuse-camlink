@@ -21,9 +21,14 @@ it offers the download for that computer (Mac, Windows, Linux), and the app
 on your phone can send it the address. The same files are on the
 [releases page](https://github.com/FemLed/masseuse-camlink/releases).
 
-**Mac.** The download is a disk image, `masseuse-camlink_X.Y.Z_darwin_all.dmg`,
-for Apple silicon and Intel alike. Open it, drag `masseuse-camlink` into
-`Applications`, and open it from there. A Terminal window opens with the
+The downloads are called **Masseuse.ai**: that is the one name a person
+sees, on the disk image, the app, the window and the permission prompts.
+`masseuse-camlink` is the program's name for engineers (this repository, the
+command, the archives, the state directory) and the same binary.
+
+**Mac.** The download is a disk image, `Masseuse.ai-X.Y.Z.dmg`, for Apple
+silicon and Intel alike. Open it, drag `Masseuse.ai` into `Applications`,
+and open it from there. A Terminal window titled Masseuse.ai opens with the
 program running in it: it names the camera and microphone it will use and
 shows the pairing code. ffmpeg is included in the app, so there is nothing
 else to install. Leave the window open while you use it; closing it stops
@@ -32,13 +37,28 @@ window back. (The `darwin_*` archives still carry the bare binary for
 people who run it from Terminal; run from anywhere but Terminal, macOS
 refuses a bare binary however it is signed, which is what the app is for.)
 
-**Windows and Linux.** Unpack the archive anywhere and run
+**Windows.** The download is `Masseuse.ai-X.Y.Z-windows.zip`. Extract it
+anywhere and open `Masseuse.ai.exe`; `ffmpeg.exe` is in the same folder, so
+there is nothing else to install. A console window titled Masseuse.ai opens
+with the program running in it, as on a Mac. The package is not yet signed
+with a Windows certificate, so the first time Windows asks whether to run an
+app it does not recognize: *More info*, then *Run anyway*. Video is encoded
+by Windows' own Media Foundation H.264 encoder (the graphics chip's, or the
+software one every Windows edition carries except the N editions, which need
+Microsoft's *Media Feature Pack* from Settings, *Optional features*). On
+Windows the program serves the camera and microphone; it does not reach a
+stimulation device yet (there is no Bluetooth backend for Windows so far,
+see "Your stimulation device"), so a unit is driven from a Mac. The
+`windows_*` archives carry the bare `masseuse-camlink.exe` for people who
+run it from a terminal with their own ffmpeg.
+
+**Linux, and the bare binaries.** Unpack the archive anywhere and run
 `masseuse-camlink` from a terminal. To send the computer's camera it needs
 [ffmpeg](https://ffmpeg.org), which does the capturing and encoding:
 
-- Windows: `winget install Gyan.FFmpeg`, then open a new terminal
 - Linux: `sudo apt install ffmpeg` (or your distribution's package)
-- macOS, when running the bare binary rather than the app: `brew install ffmpeg`
+- Windows, with the bare binary rather than the zip: `winget install Gyan.FFmpeg`, then open a new terminal
+- macOS, with the bare binary rather than the app: `brew install ffmpeg`
 
 Without ffmpeg the program still runs and can send a home network camera.
 On a NAS or Raspberry Pi the container image does that:
@@ -61,13 +81,15 @@ Terminal. VERIFY.md, "The macOS binaries" and "The macOS app", show how to
 check the signer and how to compare them with a rebuild all the same
 (everything in the app but ffmpeg is byte for byte the published binaries;
 ffmpeg is built from pinned upstream sources by the same public workflow,
-`packaging/ffmpeg/THIRD_PARTY.md`).
+`packaging/ffmpeg/THIRD_PARTY.md`). The Windows zip is the published
+`windows_amd64` binary under the name `Masseuse.ai.exe`, byte for byte, with
+an ffmpeg built the same way (VERIFY.md, "The Windows package").
 
 ## Use your computer's camera
 
 ```
 $ masseuse-camlink
-masseuse-camlink v0.6.0
+Masseuse.ai for your computer  (masseuse-camlink v0.8.0)
 Identity 3fK9pQ2m… (state in /Users/you/Library/Application Support/masseuse-camlink)
 Camera: Insta360 Link + Yeti Stereo Microphone (1280x720 30 fps, h264_videotoolbox). It is on only while a session reads it.
 

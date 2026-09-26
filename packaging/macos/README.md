@@ -1,30 +1,39 @@
 # The macOS application bundle and disk image
 
-Mac users get masseuse-camlink as `masseuse-camlink.app` inside
-`masseuse-camlink_<version>_darwin_all.dmg`: one download for Apple silicon
-and Intel, signed with FemLed's Apple Developer ID, notarized and stapled,
-so it opens from the Finder without a Gatekeeper refusal. Gatekeeper
-accepts a double-click only on an application bundle, an installer or a
-disk image; a bare executable, however well signed and notarized, is
-refused as "not an app". That is why the bundle exists.
+Mac users get the connector as `Masseuse.ai.app` inside
+`Masseuse.ai-<version>.dmg`: one download for Apple silicon and Intel,
+signed with FemLed's Apple Developer ID, notarized and stapled, so it opens
+from the Finder without a Gatekeeper refusal. Gatekeeper accepts a
+double-click only on an application bundle, an installer or a disk image; a
+bare executable, however well signed and notarized, is refused as "not an
+app". That is why the bundle exists.
+
+Masseuse.ai is the name a person sees: the app in the Finder, the volume,
+the Terminal window's title, the first line the program prints, the
+permission prompts. masseuse-camlink is the program's name for engineers
+and stays in the bundle identifier (`ai.masseuse.camlink`), the state
+directory (`~/Library/Application Support/masseuse-camlink`) and the
+archives. Releases before v0.8.0 named the app and the image
+masseuse-camlink too.
 
 The bundle's executable is the connector itself (`cmd/masseuse-camlink`),
 the universal binary made from the two signed release binaries with
-`lipo`. Opened from the Finder, it has no terminal to print the pairing
-code to, so it writes a small `.command` file into its state directory and
-asks the system to open it; Terminal runs it, and it runs the connector in
-that window in console mode (`cmd/masseuse-camlink/desktop.go`). If a
-connector is already running on that state directory, opening the app
-again only brings Terminal forward. The bundle is `LSUIElement`, so nothing
-bounces in the Dock. `ffmpeg` ships inside (`Contents/Helpers/ffmpeg`, built
-by `packaging/ffmpeg/build.sh`), and the connector looks there before it
-looks at `PATH`, so there is no Homebrew step.
+`lipo`, under the name `Masseuse.ai`. Opened from the Finder, it has no
+terminal to print the pairing code to, so it writes a small
+`Masseuse.ai.command` file into its state directory and asks the system to
+open it; Terminal runs it, and it runs the connector in that window in
+console mode (`cmd/masseuse-camlink/desktop.go`). If a connector is already
+running on that state directory, opening the app again only brings Terminal
+forward. The bundle is `LSUIElement`, so nothing bounces in the Dock.
+`ffmpeg` ships inside (`Contents/Helpers/ffmpeg`, built by
+`packaging/ffmpeg/build.sh`), and the connector looks there before it looks
+at `PATH`, so there is no Homebrew step.
 
 ```
-masseuse-camlink.app/Contents/
+Masseuse.ai.app/Contents/
   Info.plist                     from Info.plist here, version filled in
   PkgInfo
-  MacOS/masseuse-camlink         the connector, universal, Developer ID + hardened runtime
+  MacOS/Masseuse.ai              the connector, universal, Developer ID + hardened runtime
   Helpers/ffmpeg                 universal, Developer ID + hardened runtime + ffmpeg.entitlements
   Resources/masseuse-camlink.icns
   Resources/LICENSE, NOTICE      the connector's (Apache-2.0)
@@ -36,14 +45,14 @@ masseuse-camlink.app/Contents/
 
 | File | What |
 | --- | --- |
-| `Info.plist` | the bundle's property list, `@VERSION@` filled in by `build-app.sh`; `LSMinimumSystemVersion` 13.0 (Go's floor for macOS binaries), `LSUIElement`, the camera, microphone and Bluetooth usage strings |
+| `Info.plist` | the bundle's property list, `@VERSION@` filled in by `build-app.sh`; `CFBundleName`, `CFBundleDisplayName` and `CFBundleExecutable` all `Masseuse.ai`; `LSMinimumSystemVersion` 13.0 (Go's floor for macOS binaries), `LSUIElement`, the camera, microphone and Bluetooth usage strings |
 | `ffmpeg.entitlements` | camera and microphone, which a hardened-runtime process may open only with these |
 | `build-app.sh` | assembles the bundle from a connector binary, `packaging/ffmpeg/build.sh`'s output and the files here; plain `sh`, runs unsigned in `ci.yml` on every pull request |
 | `sign-notarize.sh` | temporary keychain from the release secrets, `codesign` (ffmpeg first, then the bundle, `--options runtime --timestamp`), `notarytool submit --wait`, `stapler staple`; the same for the disk image. The identity is picked by the certificate's SHA-1 from VERIFY.md, never by its subject, and the subject is never printed |
 | `assess.sh` | the gates: `codesign --verify --deep --strict`, `spctl --assess --type execute` (bundle) and `--type open --context context:primary-signature` (image) answering `accepted` with `source=Notarized Developer ID`, `stapler validate`; the release fails if any is false |
-| `build-dmg.sh` | the app and an `Applications` shortcut on an HFS+ image with the volume icon set, compressed read-only (`hdiutil`); file name `masseuse-camlink_<version>_darwin_all.dmg` |
-| `masseuse-camlink.icns` | the icon (below) |
-| `masseuse-camlink-icon-1024.png` | its 1024 px master |
+| `build-dmg.sh` | the app and an `Applications` shortcut on an HFS+ image named `Masseuse.ai` with the volume icon set, compressed read-only (`hdiutil`); file name `Masseuse.ai-<version>.dmg` |
+| `masseuse-camlink.icns` | the icon (below); the file keeps its name, `CFBundleIconFile` points at it |
+| `masseuse-camlink-icon-1024.png` | its 1024 px master, also the source of the Windows icon (`packaging/windows/`) |
 
 The release workflow (`.github/workflows/release.yml`, job `macos-app`) runs
 them in this order on a macOS runner, after goreleaser has published the
@@ -62,9 +71,9 @@ release secrets):
 
 ```sh
 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o dist/masseuse-camlink ./cmd/masseuse-camlink
-sh packaging/ffmpeg/build.sh -o dist/ffmpeg -a "$(uname -m)"  # a few minutes; one architecture
+sh packaging/ffmpeg/build.sh -t darwin -o dist/ffmpeg -a "$(uname -m)"  # a few minutes; one architecture
 sh packaging/macos/build-app.sh -v 0.0.0 -b dist/masseuse-camlink -f dist/ffmpeg -o dist
-open dist/masseuse-camlink.app                                  # Terminal opens with the connector
+open dist/Masseuse.ai.app                                       # Terminal opens with the connector
 ```
 
 ## The icon

@@ -1,0 +1,22 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": "Masseuse.ai.ico"
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "info": {
+          "0409": {
+            "CompanyName": "FemLed, Inc.",
+            "FileDescription": "Masseuse.ai for your computer",
+            "ProductName": "Masseuse.ai",
+            "LegalCopyright": "Copyright 2026 FemLed. Apache License 2.0.",
+            "Comments": "masseuse-camlink, the connector that sends this computer's camera to a masseuse.ai session. Source and releases: github.com/FemLed/masseuse-camlink"
+          }
+        }
+      }
+    }
+  }
+}

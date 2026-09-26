@@ -222,14 +222,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   macos-app:
-    # The Mac download (packaging/macos/README.md): masseuse-camlink.app,
-    # universal, with ffmpeg inside, in a disk image; app and image signed
-    # with the Developer ID, notarized and stapled. The bundle's executable
-    # is the two darwin binaries goreleaser published, verified against the
-    # signed checksums.txt and joined with lipo, so the reproduce job's
-    # result carries over: this job checks that the bundle's slices strip to
-    # the very same bytes. ffmpeg is the one component not rebuilt byte for
-    # byte; it is built here from pinned upstream tarballs
+    # The Mac download (packaging/macos/README.md): Masseuse.ai.app,
+    # universal, with ffmpeg inside, in Masseuse.ai-<version>.dmg; app and
+    # image signed with the Developer ID, notarized and stapled. The bundle's
+    # executable is the two darwin binaries goreleaser published, verified
+    # against the signed checksums.txt and joined with lipo, so the reproduce
+    # job's result carries over: this job checks that the bundle's slices
+    # strip to the very same bytes. ffmpeg is the one component not rebuilt
+    # byte for byte; it is built here from pinned upstream tarballs
     # (packaging/ffmpeg/build.sh) and covered by darwin.intoto.jsonl.
     needs: goreleaser
     runs-on: macos-15
@@ -287,7 +287,7 @@ jobs:
           key: ffmpeg-${{ hashFiles('packaging/ffmpeg/**') }}-${{ steps.tools.outputs.image }}
       - name: Build ffmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        run: sh packaging/ffmpeg/build.sh -o dist/ffmpeg -w "${RUNNER_TEMP}/ffmpeg-work"
+        run: sh packaging/ffmpeg/build.sh -t darwin -o dist/ffmpeg -w "${RUNNER_TEMP}/ffmpeg-work"
       - name: The bundled ffmpeg runs the connector's own encoding chain
         # internal/capture's real-ffmpeg test: a Source on this binary, the
         # connector's exact arguments, a test picture and tone instead of a
@@ -315,18 +315,18 @@ jobs:
           # Referenced so the runner masks the certificate's subject wherever
           # a tool might print it; the scripts themselves never do.
           MACOS_SIGN_SUBJECT: ${{ secrets.MACOS_SIGN_SUBJECT }}
-        run: sh packaging/macos/sign-notarize.sh app dist/masseuse-camlink.app
+        run: sh packaging/macos/sign-notarize.sh app dist/Masseuse.ai.app
       - name: Gatekeeper accepts the bundle
-        run: sh packaging/macos/assess.sh app dist/masseuse-camlink.app
+        run: sh packaging/macos/assess.sh app dist/Masseuse.ai.app
       - name: The bundle's executable is the archives' binaries
         # Signature stripped, each slice of the universal binary is byte for
         # byte the archive's binary for that architecture, which the
         # reproduce job ties to the proxy rebuild.
         run: |
-          go run ./cmd/machostrip -sha256 dist/masseuse-camlink.app/Contents/MacOS/masseuse-camlink | tee bundle.txt
+          go run ./cmd/machostrip -sha256 dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai | tee bundle.txt
           for arch in arm64 amd64; do
             thin=$(go run ./cmd/machostrip -sha256 "published/${arch}/masseuse-camlink" | cut -d' ' -f1)
-            grep -qF "${thin}  dist/masseuse-camlink.app/Contents/MacOS/masseuse-camlink (${arch})" bundle.txt ||
+            grep -qF "${thin}  dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai (${arch})" bundle.txt ||
               { echo "the bundle's ${arch} slice is not the published darwin/${arch} binary" >&2; exit 1; }
             echo "the bundle's ${arch} slice is the published darwin/${arch} binary (${thin})"
           done
@@ -340,9 +340,9 @@ jobs:
           MACOS_SIGN_SUBJECT: ${{ secrets.MACOS_SIGN_SUBJECT }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          sh packaging/macos/build-dmg.sh -a dist/masseuse-camlink.app -v "$version" -o dist
-          sh packaging/macos/sign-notarize.sh dmg "dist/masseuse-camlink_${version}_darwin_all.dmg"
-          sh packaging/macos/assess.sh dmg "dist/masseuse-camlink_${version}_darwin_all.dmg"
+          sh packaging/macos/build-dmg.sh -a dist/Masseuse.ai.app -v "$version" -o dist
+          sh packaging/macos/sign-notarize.sh dmg "dist/Masseuse.ai-${version}.dmg"
+          sh packaging/macos/assess.sh dmg "dist/Masseuse.ai-${version}.dmg"
       - name: checksums-darwin.txt, signed keyless
         # The image and the ffmpeg source tarballs (the LGPL source offer,
         # packaging/ffmpeg/THIRD_PARTY.md), hashed and signed like
@@ -351,14 +351,14 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           cp dist/ffmpeg/sources/*.tar.* dist/
           cd dist
-          shasum -a 256 "masseuse-camlink_${version}_darwin_all.dmg" ffmpeg-*.tar.xz opus-*.tar.gz > checksums-darwin.txt
+          shasum -a 256 "Masseuse.ai-${version}.dmg" ffmpeg-*.tar.xz opus-*.tar.gz > checksums-darwin.txt
           cat checksums-darwin.txt
           cosign sign-blob --yes --bundle checksums-darwin.txt.sigstore.json checksums-darwin.txt
       - name: Upload to the release
         run: |
           version="${GITHUB_REF_NAME#v}"
           gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
-            "dist/masseuse-camlink_${version}_darwin_all.dmg" \
+            "dist/Masseuse.ai-${version}.dmg" \
             dist/checksums-darwin.txt dist/checksums-darwin.txt.sigstore.json \
             dist/ffmpeg-*.tar.xz dist/opus-*.tar.gz
       - name: Subjects for provenance
@@ -375,4 +375,162 @@ jobs:
     with:
       base64-subjects: ${{ needs.macos-app.outputs.hashes }}
       provenance-name: darwin.intoto.jsonl
+      upload-assets: true
+
+  ffmpeg-windows:
+    # ffmpeg.exe for the Windows download: the same pinned upstream tarballs
+    # as the Mac's, cross-compiled here on Linux with mingw-w64 (a package
+    # away; packaging/ffmpeg/build.sh -t windows), where it cannot run. It
+    # is run, and tested, in windows-app. Independent of goreleaser, so it
+    # builds while the release is assembled.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cross toolchain
+        id: tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nasm pkg-config
+          x86_64-w64-mingw32-gcc --version | head -n 1
+          echo "image=${ImageOS:-ubuntu}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: ffmpeg-cache
+        with:
+          path: dist/ffmpeg-windows
+          key: ffmpeg-windows-${{ hashFiles('packaging/ffmpeg/**') }}-${{ steps.tools.outputs.image }}
+      - name: Build ffmpeg.exe
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: sh packaging/ffmpeg/build.sh -t windows -o dist/ffmpeg-windows -w "${RUNNER_TEMP}/ffmpeg-work"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        with:
+          path: dist/ffmpeg-windows
+          key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ffmpeg-windows
+          path: dist/ffmpeg-windows
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-app:
+    # The Windows download (packaging/windows): Masseuse.ai-<version>-windows.zip
+    # holding the windows_amd64 connector goreleaser published, verified
+    # against the signed checksums.txt and renamed Masseuse.ai.exe (the same
+    # bytes: build-zip.sh checks), ffmpeg.exe from ffmpeg-windows, the
+    # notices and a README. This runner is where the Windows ffmpeg first
+    # runs: the smoke test and the connector's real-ffmpeg test gate the
+    # package. Nothing here is signed with a Windows certificate yet, so
+    # SmartScreen warns at the first start (README.txt says what to click);
+    # Authenticode is its own task.
+    needs: [goreleaser, ffmpeg-windows]
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: write # the zip and checksums-windows.txt
+      id-token: write # keyless signing (Fulcio)
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Media Foundation
+        # Windows Server carries Media Foundation as an optional feature; the
+        # h264_mf encoder, and so the smoke test and the real-ffmpeg test,
+        # need it.
+        shell: pwsh
+        run: |
+          $f = Get-WindowsFeature Server-Media-Foundation
+          if ($f.Installed) { "Media Foundation is present"; exit 0 }
+          $r = Install-WindowsFeature Server-Media-Foundation
+          "installed Media Foundation: success $($r.Success), restart needed $($r.RestartNeeded)"
+          if (-not $r.Success) { exit 1 }
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ffmpeg-windows
+          path: dist/ffmpeg-windows
+      - name: The Windows ffmpeg runs, with what the connector asks of it
+        run: sh packaging/ffmpeg/smoke.sh -t windows dist/ffmpeg-windows/ffmpeg.exe
+      - name: The bundled ffmpeg runs the connector's own encoding chain
+        # internal/capture's real-ffmpeg test on Windows: a Source with the
+        # dshow arguments and h264_mf, a test picture and tone instead of a
+        # camera, the stream read back.
+        run: CAPTURE_REAL_FFMPEG="$(cygpath -w "${PWD}/dist/ffmpeg-windows/ffmpeg.exe")" go test -count=1 -run 'TestRealFFmpegPublishes' -v ./internal/capture/
+      - name: The published windows_amd64 archive, verified
+        # Nothing from the release is used before checksums.txt's keyless
+        # signature and the archive's hash have been checked.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p published dist && cd published
+          for i in $(seq 1 20); do
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              --pattern checksums.txt --pattern checksums.txt.sigstore.json \
+              --pattern "masseuse-camlink_${version}_windows_amd64.zip" && break
+            sleep 15
+          done
+          cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+          grep -E "_windows_amd64\.zip$" checksums.txt | sha256sum -c -
+          7z e -y -o. "masseuse-camlink_${version}_windows_amd64.zip" masseuse-camlink.exe > /dev/null
+          cp masseuse-camlink.exe ../dist/masseuse-camlink.exe
+          ../dist/masseuse-camlink.exe --version
+      - name: The connector carries its Windows resources
+        # The icon and the strings Explorer shows come from the committed
+        # .syso (packaging/windows/make-syso.sh), linked by goreleaser's
+        # proxy build like any other. packaging/windows/verinfo reads them
+        # the way Explorer does (PowerShell's VersionInfo would report them
+        # empty: the resource carries no FileVersion string on purpose).
+        run: |
+          go run ./packaging/windows/verinfo dist/masseuse-camlink.exe | tee dist/verinfo.txt
+          grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
+          grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
+          grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
+      - name: Assemble the zip
+        run: sh packaging/windows/build-zip.sh -v "${GITHUB_REF_NAME#v}" -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -o dist
+      - name: checksums-windows.txt, signed keyless
+        # The zip, hashed and signed like checksums.txt; the ffmpeg source
+        # tarballs are the ones checksums-darwin.txt lists (the same bytes).
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cd dist
+          sha256sum "Masseuse.ai-${version}-windows.zip" > checksums-windows.txt
+          cat checksums-windows.txt
+          cosign sign-blob --yes --bundle checksums-windows.txt.sigstore.json checksums-windows.txt
+      - name: Upload to the release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+            "dist/Masseuse.ai-${version}-windows.zip" \
+            dist/checksums-windows.txt dist/checksums-windows.txt.sigstore.json
+      - name: Subjects for provenance
+        id: hashes
+        run: echo "hashes=$(base64 -w0 < dist/checksums-windows.txt)" >> "$GITHUB_OUTPUT"
+
+  provenance-windows:
+    needs: windows-app
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.windows-app.outputs.hashes }}
+      provenance-name: windows.intoto.jsonl
       upload-assets: true

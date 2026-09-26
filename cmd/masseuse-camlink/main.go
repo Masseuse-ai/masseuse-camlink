@@ -63,31 +63,37 @@ func main() {
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
 		fmt.Fprintln(os.Stderr, "bad -log-level:", err)
-		os.Exit(2)
+		exit(2)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	if !strings.HasPrefix(*service, "https://") {
 		fmt.Fprintln(os.Stderr, "-service must be an https:// URL")
-		os.Exit(2)
+		exit(2)
 	}
-	// SIGHUP is the terminal window closing on the program: the unit is put
-	// back to zero and released on the way out, as on Ctrl-C.
+	// The window this runs in is named after the program (Windows; on a
+	// Mac the bundle's .command file does it), and an error exit keeps a
+	// window that would close with the process open until Enter
+	// (console_windows.go), so the message can be read.
+	consoleSetup()
+	// SIGHUP is the terminal window closing on the program, and SIGTERM is
+	// what Go makes of a Windows console window closing (CTRL_CLOSE_EVENT):
+	// the unit is put back to zero and released on the way out, as on Ctrl-C.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	switch flag.Arg(0) {
 	case "":
 	case "devices":
-		os.Exit(listDevices(ctx, sf.ffmpeg))
+		exit(listDevices(ctx, sf.ffmpeg))
 	case "estim":
 		if flag.Arg(1) != "probe" {
 			fmt.Fprintf(os.Stderr, "unknown estim command %q (the one command is: estim probe)\n", flag.Arg(1))
-			os.Exit(2)
+			exit(2)
 		}
-		os.Exit(probeEstim(ctx, *stateDir, logger))
+		exit(probeEstim(ctx, *stateDir, logger))
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q (the commands are: devices, estim probe)\n", flag.Arg(0))
-		os.Exit(2)
+		exit(2)
 	}
 
 	// Opened from the macOS application bundle there is no terminal to
@@ -96,7 +102,7 @@ func main() {
 	if *appMode || (!*console && launchedFromBundle()) {
 		if err := handToTerminal(*stateDir); err != nil {
 			reportHandoffFailure(err)
-			os.Exit(1)
+			exit(1)
 		}
 		return
 	}
@@ -104,32 +110,34 @@ func main() {
 	release, err := lockInstance(*stateDir)
 	if err != nil {
 		if errors.Is(err, errAlreadyRunning) {
-			fmt.Fprintln(os.Stderr, "masseuse-camlink is already running, in another window. Close that one first, or give this one its own -state-dir.")
+			fmt.Fprintln(os.Stderr, appName+" is already running, in another window. Close that one first, or give this one its own -state-dir.")
 		} else {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		os.Exit(1)
+		exit(1)
 	}
 	defer release()
 	id, err := identity.Load(*stateDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "identity:", err)
-		os.Exit(1)
+		exit(1)
 	}
-	fmt.Printf("masseuse-camlink %s\n", buildinfo.Version())
+	// The window's first line: the name on the download, and the program's
+	// own name and version for anyone comparing with a release.
+	fmt.Printf("%s for your computer  (masseuse-camlink %s)\n", appName, buildinfo.Version())
 	fmt.Printf("Identity %s… (state in %s)\n", id.PublicKeyString()[:8], *stateDir)
 
 	// The connector's own stream and the camera behind it.
 	sink, err := serve.New(serve.Config{StateDir: *stateDir, Logger: logger})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "camera stream:", err)
-		os.Exit(1)
+		exit(1)
 	}
 	defer sink.Close()
 	cfg, err := resolveSourceConfig(*stateDir, sf)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		exit(2)
 	}
 	off, err := buildOffer(ctx, cfg, *stateDir, sink, logger, !sf.any())
 	if err != nil {
@@ -137,7 +145,7 @@ func main() {
 		if errors.Is(err, capture.ErrNoDevice) {
 			fmt.Fprintln(os.Stderr, "Run `masseuse-camlink devices` to see what is connected.")
 		}
-		os.Exit(2)
+		exit(2)
 	}
 	off.describe()
 	if sf.any() {
@@ -189,7 +197,7 @@ func main() {
 	<-estimDone
 	if err != nil && ctx.Err() == nil {
 		logger.Error("rendezvous stopped", "err", err)
-		os.Exit(1)
+		exit(1)
 	}
 	fmt.Println("\nStopped.")
 }
@@ -206,8 +214,10 @@ on your network, to the enclave of a masseuse.ai session.
   masseuse-camlink -camera-url rtsps://user:password@192.168.1.20:322/live
                                       send a camera on your network instead
 
-On a Mac the application bundle (masseuse-camlink.app) runs this same program
-in a Terminal window when opened; -console and -app choose either way by hand.
+The downloads at masseuse.ai/computer are this same program under the name
+Masseuse.ai: on a Mac the application bundle (Masseuse.ai.app) runs it in a
+Terminal window when opened (-console and -app choose either way by hand); on
+Windows, Masseuse.ai.exe opens its own console window, with ffmpeg.exe beside it.
 
 Flags:
 `)

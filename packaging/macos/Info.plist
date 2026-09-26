@@ -2,13 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Template: build-app.sh replaces @VERSION@ with the release version. -->
+	<!-- Template: build-app.sh replaces @VERSION@ with the release version.
+	     The app is called Masseuse.ai wherever a person sees a name (Finder,
+	     the menu bar, the permission prompts); masseuse-camlink is the
+	     program's name for engineers and stays in the bundle identifier. -->
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>masseuse-camlink</string>
+	<string>Masseuse.ai</string>
 	<key>CFBundleExecutable</key>
-	<string>masseuse-camlink</string>
+	<string>Masseuse.ai</string>
 	<key>CFBundleIconFile</key>
 	<string>masseuse-camlink</string>
 	<key>CFBundleIdentifier</key>
@@ -16,7 +19,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>masseuse-camlink</string>
+	<string>Masseuse.ai</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -37,10 +40,10 @@
 	     running under Terminal, which asks in its own name; these are here
 	     for the day the app runs it itself. -->
 	<key>NSCameraUsageDescription</key>
-	<string>masseuse-camlink sends this camera's picture to your masseuse.ai session.</string>
+	<string>Masseuse.ai sends this camera's picture to your masseuse during a session.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>masseuse-camlink sends this microphone's sound to your masseuse.ai session.</string>
+	<string>Masseuse.ai sends this microphone's sound to your masseuse during a session.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>masseuse-camlink drives your stimulation device (a TENS unit) over Bluetooth during a session.</string>
+	<string>Masseuse.ai drives your TENS unit over Bluetooth during a session.</string>
 </dict>
 </plist>

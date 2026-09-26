@@ -10,21 +10,29 @@ carries:
   the SLSA generic generator in a separate, isolated job;
 - container images at `ghcr.io/femled/masseuse-camlink`, signed keyless by
   digest, with SBOMs and their own SLSA container provenance;
-- `masseuse-camlink_X.Y.Z_darwin_all.dmg`: the Mac download, the application
-  bundle in a disk image, built by a second job of the same workflow after
-  the archives are published; listed with the ffmpeg source tarballs in
-  `checksums-darwin.txt`, signed the same way
+- `Masseuse.ai-X.Y.Z.dmg`: the Mac download, the application bundle
+  `Masseuse.ai.app` in a disk image, built by a second job of the same
+  workflow after the archives are published; listed with the ffmpeg source
+  tarballs in `checksums-darwin.txt`, signed the same way
   (`checksums-darwin.txt.sigstore.json`), with its own provenance
-  `darwin.intoto.jsonl`.
+  `darwin.intoto.jsonl`. (Releases before v0.8.0 named the image
+  `masseuse-camlink_X.Y.Z_darwin_all.dmg` and the app `masseuse-camlink.app`.)
+- `Masseuse.ai-X.Y.Z-windows.zip`: the Windows download, the published
+  `windows_amd64` connector as `Masseuse.ai.exe` with an `ffmpeg.exe` built
+  from the same pinned sources beside it, assembled by a third job on a
+  Windows runner; listed in `checksums-windows.txt`, signed the same way
+  (`checksums-windows.txt.sigstore.json`), with provenance
+  `windows.intoto.jsonl`. It carries no Windows code signature yet.
 
 The connectors in the `darwin_*` archives, the application bundle and the
 disk image are in addition signed with an Apple Developer ID and notarized
 ("The macOS binaries" and "The macOS app" below say how to check the signer
 and how to compare them with a rebuild regardless).
 
-`sh scripts/verify-release.sh vX.Y.Z` runs the release checks below (1 to 3);
-`sh scripts/verify-enclave.sh` runs the enclave check (4). (Both are plain
-POSIX sh; the repository stores them without the executable bit.)
+`sh scripts/verify-release.sh vX.Y.Z` runs the release checks below (1 to 3,
+the macOS app and the Windows package included); `sh scripts/verify-enclave.sh`
+runs the enclave check (4). (Both are plain POSIX sh; the repository stores
+them without the executable bit.)
 
 ## 1. Signature
 
@@ -177,15 +185,17 @@ is established by the rebuild above, not by the signature.
 
 ### The macOS app
 
-The Mac download, `masseuse-camlink_X.Y.Z_darwin_all.dmg`, holds
-`masseuse-camlink.app`. Its executable is the two darwin binaries above
-joined into one universal binary with `lipo`, and beside it, in
-`Contents/Helpers/ffmpeg`, an ffmpeg built from pinned upstream sources so
-that the app needs no install step (`packaging/ffmpeg/THIRD_PARTY.md`). The
-release workflow's `macos-app` job (`.github/workflows/release.yml`) builds
-the bundle on a macOS runner from the archives it has just published, after
-verifying them against the signed `checksums.txt`, and signs, notarizes and
-staples the app and then the image (`packaging/macos/`).
+The Mac download, `Masseuse.ai-X.Y.Z.dmg`, holds `Masseuse.ai.app`: the
+connector under the name people see (`CFBundleIdentifier` stays
+`ai.masseuse.camlink`). Its executable, `Contents/MacOS/Masseuse.ai`, is the
+two darwin binaries above joined into one universal binary with `lipo`, and
+beside it, in `Contents/Helpers/ffmpeg`, an ffmpeg built from pinned
+upstream sources so that the app needs no install step
+(`packaging/ffmpeg/THIRD_PARTY.md`). The release workflow's `macos-app` job
+(`.github/workflows/release.yml`) builds the bundle on a macOS runner from
+the archives it has just published, after verifying them against the signed
+`checksums.txt`, and signs, notarizes and staples the app and then the image
+(`packaging/macos/`).
 
 The image and the ffmpeg source tarballs have their own checksum file,
 signed and attested like the first:
@@ -197,7 +207,7 @@ cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums-darwin.txt
 shasum -a 256 -c checksums-darwin.txt
-slsa-verifier verify-artifact masseuse-camlink_X.Y.Z_darwin_all.dmg \
+slsa-verifier verify-artifact Masseuse.ai-X.Y.Z.dmg \
   --provenance-path darwin.intoto.jsonl \
   --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
 ```
@@ -209,12 +219,12 @@ stripped archive binary for that architecture (and of the rebuild).
 per architecture, named as the archives are:
 
 ```sh
-hdiutil attach -readonly -nobrowse masseuse-camlink_X.Y.Z_darwin_all.dmg
+hdiutil attach -readonly -nobrowse Masseuse.ai-X.Y.Z.dmg
 go run github.com/FemLed/masseuse-camlink/cmd/machostrip@vX.Y.Z -sha256 \
-  /Volumes/masseuse-camlink/masseuse-camlink.app/Contents/MacOS/masseuse-camlink
+  /Volumes/Masseuse.ai/Masseuse.ai.app/Contents/MacOS/Masseuse.ai
 # two lines, "(arm64)" and "(amd64)": compare each with the stripped
 # archive binary or the rebuild of the previous section
-hdiutil detach /Volumes/masseuse-camlink
+hdiutil detach /Volumes/Masseuse.ai
 ```
 
 The `macos-app` job makes this comparison itself before it uploads
@@ -232,12 +242,12 @@ the system checks them at a double-click; the release fails if any of these
 does not hold (`packaging/macos/assess.sh`):
 
 ```sh
-codesign --verify --deep --strict --verbose=2 /Volumes/masseuse-camlink/masseuse-camlink.app
-spctl --assess --type execute -vv /Volumes/masseuse-camlink/masseuse-camlink.app
-xcrun stapler validate /Volumes/masseuse-camlink/masseuse-camlink.app
-codesign --verify --strict --verbose=2 masseuse-camlink_X.Y.Z_darwin_all.dmg
-spctl --assess --type open --context context:primary-signature -vv masseuse-camlink_X.Y.Z_darwin_all.dmg
-xcrun stapler validate masseuse-camlink_X.Y.Z_darwin_all.dmg
+codesign --verify --deep --strict --verbose=2 /Volumes/Masseuse.ai/Masseuse.ai.app
+spctl --assess --type execute -vv /Volumes/Masseuse.ai/Masseuse.ai.app
+xcrun stapler validate /Volumes/Masseuse.ai/Masseuse.ai.app
+codesign --verify --strict --verbose=2 Masseuse.ai-X.Y.Z.dmg
+spctl --assess --type open --context context:primary-signature -vv Masseuse.ai-X.Y.Z.dmg
+xcrun stapler validate Masseuse.ai-X.Y.Z.dmg
 ```
 
 Both `spctl` verdicts are `accepted` with `source=Notarized Developer ID`;
@@ -245,6 +255,52 @@ Both `spctl` verdicts are `accepted` with `source=Notarized Developer ID`;
 `TeamIdentifier=B8Z4RP3846` and `flags=0x10000(runtime)` as the bare
 binaries, signed by the certificate listed above. `scripts/verify-release.sh`
 runs all of this as step 8 when the release carries `checksums-darwin.txt`.
+
+### The Windows package
+
+The Windows download, `Masseuse.ai-X.Y.Z-windows.zip`, holds
+`Masseuse.ai.exe`, `ffmpeg.exe`, the licence texts and a `README.txt`.
+`Masseuse.ai.exe` is the connector from the `windows_amd64` archive, byte
+for byte, under the name people see; `ffmpeg.exe` is built from the same
+pinned tarballs as the Mac's ffmpeg by `packaging/ffmpeg/build.sh -t windows`
+(cross-compiled with mingw-w64 on a Linux runner, LGPL configuration, the
+DirectShow input and the Media Foundation H.264 encoder in place of
+AVFoundation and VideoToolbox; `packaging/ffmpeg/THIRD_PARTY.md`). The
+release workflow's `windows-app` job assembles the zip on a Windows runner
+after verifying the archive against the signed `checksums.txt` and running
+the connector's own encoding chain through the `ffmpeg.exe` it packs
+(`packaging/windows/`). Nothing in it carries a Windows code signature yet,
+so SmartScreen asks before the first start; the checks below are what stand
+in for it.
+
+The zip has its own checksum file, signed and attested like the others:
+
+```sh
+cosign verify-blob \
+  --bundle checksums-windows.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/FemLed/masseuse-camlink/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums-windows.txt
+sha256sum -c checksums-windows.txt
+slsa-verifier verify-artifact Masseuse.ai-X.Y.Z-windows.zip \
+  --provenance-path windows.intoto.jsonl \
+  --source-uri github.com/FemLed/masseuse-camlink --source-tag vX.Y.Z
+```
+
+The executable in the zip is the archive's, and so the rebuild of "The
+connector" above with `GOOS=windows GOARCH=amd64`:
+
+```sh
+unzip -p Masseuse.ai-X.Y.Z-windows.zip Masseuse.ai.exe | sha256sum
+unzip -p masseuse-camlink_X.Y.Z_windows_amd64.zip masseuse-camlink.exe | sha256sum
+```
+
+The two hashes match; `scripts/verify-release.sh` checks this as step 9 when
+the release carries `checksums-windows.txt`. The icon and the file
+description Explorer shows come from a resource object committed in the
+source (`cmd/masseuse-camlink/rsrc_windows_amd64.syso`, generated by
+`packaging/windows/make-syso.sh`), so they are part of the rebuild, not
+added afterwards.
 
 ## 4. The enclave your camera streams to
 

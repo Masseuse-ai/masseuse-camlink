@@ -601,6 +601,13 @@ func testSource(t *testing.T, opts Options) (*serve.Server, *Source) {
 // the fake (testSource) or as the wrapper of a real one (realffmpeg_test.go).
 func testSourceWith(t *testing.T, opts Options, ffmpeg string) (*serve.Server, *Source) {
 	t.Helper()
+	return testSourceOn(t, "darwin", opts, ffmpeg)
+}
+
+// testSourceOn is testSourceWith for the given system: the device ids take
+// the form that system's ffmpeg input wants.
+func testSourceOn(t *testing.T, goos string, opts Options, ffmpeg string) (*serve.Server, *Source) {
+	t.Helper()
 	srv, err := serve.New(serve.Config{StateDir: t.TempDir(), Logger: quiet(), DescribeWait: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +615,10 @@ func testSourceWith(t *testing.T, opts Options, ffmpeg string) (*serve.Server, *
 	t.Cleanup(srv.Close)
 	cam := Device{Kind: Video, ID: "0", Name: "Insta360 Link"}
 	mic := Device{Kind: Audio, ID: "1", Name: "Yeti Stereo Microphone"}
-	src := newSource(srv, opts, quiet(), "darwin", ffmpeg, cam, &mic)
+	if goos == "windows" {
+		cam.ID, mic.ID = cam.Name, mic.Name
+	}
+	src := newSource(srv, opts, quiet(), goos, ffmpeg, cam, &mic)
 	src.earlyExit = 2 * time.Second
 	t.Cleanup(src.Stop)
 	return srv, src

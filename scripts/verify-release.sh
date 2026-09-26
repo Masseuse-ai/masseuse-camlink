@@ -14,11 +14,14 @@
 #      checksum file's signature, the disk image's and the ffmpeg source
 #      tarballs' hashes and provenance; on a Mac, that the app's executable
 #      is the archives' binaries (signature stripped, per architecture) and
-#      Gatekeeper's own verdict on the app and the image.
+#      Gatekeeper's own verdict on the app and the image,
+#   9. when the release carries the Windows package (checksums-windows.txt):
+#      its checksum file's signature, the zip's hash and provenance, and
+#      that the executable in the zip is the windows/amd64 archive's.
 #
 # usage: scripts/verify-release.sh vX.Y.Z [download dir]
 # needs: curl, sha256sum (or shasum), cosign (3 or later for the image),
-# slsa-verifier; docker or crane and go optional.
+# slsa-verifier; docker or crane, go and unzip optional.
 set -eu
 
 REPO="FemLed/masseuse-camlink"
@@ -207,17 +210,23 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
       --source-tag "$tag" >/dev/null
     echo "    ok  $f"
   done
-  dmg="masseuse-camlink_${version}_darwin_all.dmg"
-  if [ "$(uname -s)" = "Darwin" ] && [ -s "$dmg" ]; then
+  # The disk image is Masseuse.ai-X.Y.Z.dmg holding Masseuse.ai.app from
+  # v0.8.0; earlier releases named both masseuse-camlink. Either is read off
+  # the checksum file.
+  dmg=$(awk '{print $2}' checksums-darwin.txt | grep -E '\.dmg$' | head -n 1)
+  if [ "$(uname -s)" = "Darwin" ] && [ -n "$dmg" ] && [ -s "$dmg" ]; then
     echo "==> 8b. the app itself (this is a Mac)"
     mount=$(hdiutil attach -readonly -nobrowse -noautoopen "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')
     [ -n "$mount" ] || { echo "    the disk image did not mount" >&2; exit 1; }
-    app="$mount/masseuse-camlink.app"
+    app=$(find "$mount" -maxdepth 1 -name '*.app' | head -n 1)
+    [ -n "$app" ] || { echo "    no application bundle in $dmg" >&2; hdiutil detach "$mount" -quiet; exit 1; }
+    exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
+    echo "    $(basename "$app"), volume $(basename "$mount")"
     if command -v go >/dev/null 2>&1; then
       # The bundle's executable, stripped, is the archives' binaries stripped,
       # architecture by architecture (and so the rebuild of step 7).
       appwork="$(mktemp -d)"
-      go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$app/Contents/MacOS/masseuse-camlink" > "$appwork/bundle.txt"
+      go run "github.com/FemLed/masseuse-camlink/cmd/machostrip@$tag" -sha256 "$exe" > "$appwork/bundle.txt"
       for arch in arm64 amd64; do
         archive="masseuse-camlink_${version}_darwin_${arch}.tar.gz"
         [ -s "$archive" ] || { echo "    skipped $arch (no $archive)"; continue; }
@@ -254,6 +263,45 @@ if [ -s checksums-darwin.txt ] || curl -fsSL -o checksums-darwin.txt "$base/chec
 else
   rm -f checksums-darwin.txt
   echo "==> 8. the macOS app: none in this release (no checksums-darwin.txt)"
+fi
+
+# The Windows package (VERIFY.md 3, "The Windows package"): a third checksum
+# file for the zip, signed and attested like the others, and the executable
+# in the zip is the windows_amd64 archive's byte for byte. Releases before
+# it have no such file.
+if [ -s checksums-windows.txt ] || curl -fsSL -o checksums-windows.txt "$base/checksums-windows.txt" 2>/dev/null; then
+  echo "==> 9. the Windows package: checksum signature, hash and provenance"
+  fetch checksums-windows.txt.sigstore.json
+  fetch windows.intoto.jsonl
+  cosign verify-blob \
+    --bundle checksums-windows.txt.sigstore.json \
+    --certificate-identity-regexp "$WORKFLOW_RE" \
+    --certificate-oidc-issuer "$ISSUER" \
+    checksums-windows.txt
+  awk '{print $2}' checksums-windows.txt | while read -r f; do fetch "$f"; done
+  $SHA -c checksums-windows.txt
+  awk '{print $2}' checksums-windows.txt | while read -r f; do
+    slsa-verifier verify-artifact "$f" \
+      --provenance-path windows.intoto.jsonl \
+      --source-uri "github.com/$REPO" \
+      --source-tag "$tag" >/dev/null
+    echo "    ok  $f"
+  done
+  zipfile=$(awk '{print $2}' checksums-windows.txt | grep -E '\.zip$' | head -n 1)
+  archive="masseuse-camlink_${version}_windows_amd64.zip"
+  if [ -n "$zipfile" ] && [ -s "$zipfile" ] && [ -s "$archive" ] && command -v unzip >/dev/null 2>&1; then
+    packed=$(unzip -p "$zipfile" Masseuse.ai.exe | $SHA | cut -d' ' -f1)
+    published=$(unzip -p "$archive" masseuse-camlink.exe | $SHA | cut -d' ' -f1)
+    [ "$packed" = "$published" ] \
+      || { echo "    MISMATCH: Masseuse.ai.exe in $zipfile is not the published windows/amd64 connector" >&2; exit 1; }
+    echo "    ok  Masseuse.ai.exe is the published windows/amd64 connector: $packed"
+    unzip -l "$zipfile" | grep -q ' ffmpeg.exe$' || { echo "    no ffmpeg.exe in $zipfile" >&2; exit 1; }
+  else
+    echo "    skipped the executable comparison (no unzip, or no $archive)"
+  fi
+else
+  rm -f checksums-windows.txt
+  echo "==> 9. the Windows package: none in this release (no checksums-windows.txt)"
 fi
 
 echo "all checks passed for $tag"

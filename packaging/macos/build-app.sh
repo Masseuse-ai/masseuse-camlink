@@ -1,5 +1,5 @@
 #!/bin/sh
-# Assemble masseuse-camlink.app: the connector (universal or thin) as the
+# Assemble Masseuse.ai.app: the connector (universal or thin) as the
 # bundle's executable, ffmpeg as a helper, the icon, the notices. Nothing is
 # signed here (sign-notarize.sh does that); the script needs only sh, so
 # ci.yml builds the bundle unsigned on every pull request.
@@ -7,11 +7,11 @@
 # usage: sh packaging/macos/build-app.sh -v VERSION -b CONNECTOR -f FFMPEG_DIR -o OUTDIR
 #   VERSION     the release version without the v (CFBundleShortVersionString)
 #   CONNECTOR   the masseuse-camlink binary to bundle (lipo -create'd for a
-#               universal app)
+#               universal app); it becomes Contents/MacOS/Masseuse.ai
 #   FFMPEG_DIR  packaging/ffmpeg/build.sh's output directory: ffmpeg and
 #               licenses/ (their absence is an error: the bundle promises
 #               a camera without an install step)
-#   OUTDIR      OUTDIR/masseuse-camlink.app is (re)created
+#   OUTDIR      OUTDIR/Masseuse.ai.app is (re)created
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,13 +37,15 @@ esac
 [ -f "$ffmpegdir/ffmpeg" ] || { echo "no ffmpeg at $ffmpegdir/ffmpeg (packaging/ffmpeg/build.sh)" >&2; exit 2; }
 [ -d "$ffmpegdir/licenses" ] || { echo "no $ffmpegdir/licenses (packaging/ffmpeg/build.sh)" >&2; exit 2; }
 
-app="$outdir/masseuse-camlink.app"
+# The name people see, everywhere: the bundle, its executable, the Finder.
+name="Masseuse.ai"
+app="$outdir/$name.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources/licenses"
 
-cp "$connector" "$app/Contents/MacOS/masseuse-camlink"
+cp "$connector" "$app/Contents/MacOS/$name"
 cp "$ffmpegdir/ffmpeg" "$app/Contents/Helpers/ffmpeg"
-chmod 755 "$app/Contents/MacOS/masseuse-camlink" "$app/Contents/Helpers/ffmpeg"
+chmod 755 "$app/Contents/MacOS/$name" "$app/Contents/Helpers/ffmpeg"
 cp "$here/masseuse-camlink.icns" "$app/Contents/Resources/masseuse-camlink.icns"
 cp "$repo/LICENSE" "$repo/NOTICE" "$app/Contents/Resources/"
 cp "$here/../ffmpeg/THIRD_PARTY.md" "$app/Contents/Resources/THIRD_PARTY.md"
@@ -56,6 +58,10 @@ if grep -q '@VERSION@' "$app/Contents/Info.plist"; then
 fi
 if command -v plutil >/dev/null 2>&1; then
   plutil -lint "$app/Contents/Info.plist"
+  for key in CFBundleExecutable CFBundleName CFBundleDisplayName; do
+    got=$(plutil -extract "$key" raw -o - "$app/Contents/Info.plist")
+    [ "$got" = "$name" ] || { echo "Info.plist $key is $got, not $name" >&2; exit 1; }
+  done
 fi
 echo "assembled $app ($version)"
 find "$app" -type f | sort | sed "s|^$outdir/|  |"

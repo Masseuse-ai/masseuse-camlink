@@ -13,8 +13,15 @@ import (
 // that window, in console mode. The pieces that need no macOS are here so
 // they can be tested anywhere; desktop_darwin.go does the opening.
 
+// appName is what a person sees the program called: the application
+// bundle, the disk image, the Windows package, the window title, the first
+// line printed. masseuse-camlink is its name for engineers: the repository,
+// the command, the archives, the state directory.
+const appName = "Masseuse.ai"
+
 // commandFile is the name of the file Terminal runs, in the state directory.
-const commandFile = "masseuse-camlink.command"
+// Terminal shows the file's name in the window's title bar.
+const commandFile = appName + ".command"
 
 // bundleExecutable reports whether exe is the main executable of a macOS
 // application bundle: it lies in a <name>.app/Contents/MacOS directory.
@@ -28,9 +35,9 @@ func bundleExecutable(exe string) bool {
 // directory, so the connector in the window is the one the bundle carries.
 func commandScript(exe, stateDir string) string {
 	return "#!/bin/sh\n" +
-		"# Written by masseuse-camlink when opened from its application bundle:\n" +
+		"# Written by " + appName + " (masseuse-camlink) when opened from its application bundle:\n" +
 		"# Terminal runs this file, and this file runs the program in that window.\n" +
-		"printf '\\033]0;masseuse-camlink\\007'\n" +
+		"printf '\\033]0;" + appName + "\\007'\n" +
 		"exec " + shellQuote(exe) + " -console -state-dir " + shellQuote(stateDir) + " \"$@\"\n"
 }
 

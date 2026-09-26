@@ -86,16 +86,74 @@ jobs:
           cp /usr/bin/true dist/ffmpeg/ffmpeg # a Mach-O stand-in, so codesign has nested code to seal
           printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg/licenses/README
           sh packaging/macos/build-app.sh -v 0.0.0 -b dist/masseuse-camlink -f dist/ffmpeg -o dist
-          plutil -lint dist/masseuse-camlink.app/Contents/Info.plist
-          test "$(plutil -extract CFBundleExecutable raw -o - dist/masseuse-camlink.app/Contents/Info.plist)" = masseuse-camlink
-          test "$(lipo -archs dist/masseuse-camlink.app/Contents/MacOS/masseuse-camlink)" = "x86_64 arm64"
-          go run ./cmd/machostrip -sha256 dist/masseuse-camlink.app/Contents/MacOS/masseuse-camlink
+          plutil -lint dist/Masseuse.ai.app/Contents/Info.plist
+          test "$(plutil -extract CFBundleExecutable raw -o - dist/Masseuse.ai.app/Contents/Info.plist)" = Masseuse.ai
+          test "$(plutil -extract CFBundleDisplayName raw -o - dist/Masseuse.ai.app/Contents/Info.plist)" = Masseuse.ai
+          test "$(lipo -archs dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai)" = "x86_64 arm64"
+          go run ./cmd/machostrip -sha256 dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai
           # The bundle's own program, run from a shell, is the console program.
-          dist/masseuse-camlink.app/Contents/MacOS/masseuse-camlink --version
-          codesign --force --deep --sign - dist/masseuse-camlink.app
-          codesign --verify --deep --strict --verbose=2 dist/masseuse-camlink.app
-          sh packaging/macos/build-dmg.sh -a dist/masseuse-camlink.app -v 0.0.0 -o dist
-          hdiutil imageinfo dist/masseuse-camlink_0.0.0_darwin_all.dmg | grep -E '^Format: UDZO'
+          dist/Masseuse.ai.app/Contents/MacOS/Masseuse.ai --version
+          codesign --force --deep --sign - dist/Masseuse.ai.app
+          codesign --verify --deep --strict --verbose=2 dist/Masseuse.ai.app
+          sh packaging/macos/build-dmg.sh -a dist/Masseuse.ai.app -v 0.0.0 -o dist
+          hdiutil imageinfo dist/Masseuse.ai-0.0.0.dmg | grep -E '^Format: UDZO'
+          # The volume is named after the app, so the Finder's sidebar says so.
+          hdiutil attach -readonly -nobrowse -noautoopen dist/Masseuse.ai-0.0.0.dmg | grep -q '/Volumes/Masseuse.ai$'
+          test -d /Volumes/Masseuse.ai/Masseuse.ai.app
+          hdiutil detach /Volumes/Masseuse.ai -quiet
+
+  windows-package:
+    # The Windows download (packaging/windows) assembled with a stand-in
+    # ffmpeg.exe, so a broken script, resource file or console path is
+    # caught here rather than on a tag; and the connector's and capture's
+    # tests run on the system the package is for. The committed resource
+    # objects must be what make-syso.sh produces from winres.json and the
+    # icon (go-winres is deterministic), and the built program must show
+    # Explorer the strings in them.
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go test on Windows
+        run: go test -count=1 ./cmd/masseuse-camlink/ ./internal/capture/
+      - name: The committed resource objects are current
+        run: |
+          sh packaging/windows/make-syso.sh
+          git status --porcelain -- cmd/masseuse-camlink/*.syso
+          test -z "$(git status --porcelain -- cmd/masseuse-camlink/*.syso)" ||
+            { echo "cmd/masseuse-camlink/rsrc_windows_*.syso differ from what packaging/windows/make-syso.sh produces; run it and commit" >&2; exit 1; }
+      - name: Build the connector
+        run: |
+          mkdir -p dist/ffmpeg-windows/licenses
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o dist/masseuse-camlink.exe ./cmd/masseuse-camlink
+          dist/masseuse-camlink.exe --version
+      - name: Explorer's view of the program
+        # packaging/windows/verinfo reads the strings the way Explorer does;
+        # PowerShell's VersionInfo would report them empty, since the
+        # resource carries no FileVersion string on purpose.
+        run: |
+          go run ./packaging/windows/verinfo dist/masseuse-camlink.exe | tee dist/verinfo.txt
+          grep -qx 'ProductName: Masseuse.ai' dist/verinfo.txt
+          grep -qx 'CompanyName: FemLed, Inc.' dist/verinfo.txt
+          grep -qx 'FileDescription: Masseuse.ai for your computer' dist/verinfo.txt
+      - name: The zip, with a stand-in ffmpeg
+        run: |
+          cp dist/masseuse-camlink.exe dist/ffmpeg-windows/ffmpeg.exe
+          printf 'stand-in for the licence texts (ci)\n' > dist/ffmpeg-windows/licenses/README
+          sh packaging/windows/build-zip.sh -v 0.0.0 -b dist/masseuse-camlink.exe -f dist/ffmpeg-windows -o dist
+          7z l -ba dist/Masseuse.ai-0.0.0-windows.zip | tr -d '\r' | grep -q ' Masseuse.ai.exe$'
+          7z l -ba dist/Masseuse.ai-0.0.0-windows.zip | tr -d '\r' | grep -q ' README.txt$'
+          mkdir extracted && (cd extracted && 7z x -y ../dist/Masseuse.ai-0.0.0-windows.zip > /dev/null)
+          extracted/Masseuse.ai.exe --version
+          sha256sum dist/masseuse-camlink.exe extracted/Masseuse.ai.exe | cut -d' ' -f1 | uniq | wc -l | grep -q '^1$'
 
   vulncheck:
     runs-on: ubuntu-latest

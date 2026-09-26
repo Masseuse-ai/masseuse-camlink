@@ -75,7 +75,7 @@ func handToTerminal(stateDir string) error {
 func reportHandoffFailure(err error) {
 	exe, _ := os.Executable()
 	message := fmt.Sprintf("%v. To run it by hand, open Terminal and enter: %s", err, shellQuote(exe))
-	_ = run("/usr/bin/osascript", "-e", fmt.Sprintf("display alert %q message %q as critical", "masseuse-camlink could not open a Terminal window", message))
+	_ = run("/usr/bin/osascript", "-e", fmt.Sprintf("display alert %q message %q as critical", appName+" could not open a Terminal window", message))
 }
 
 func run(name string, args ...string) error {
