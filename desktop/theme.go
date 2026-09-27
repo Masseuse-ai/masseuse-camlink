@@ -15,7 +15,10 @@ import "github.com/wailsapp/wails/v3/pkg/application"
 // "File Edit Help" over the dark page. A custom theme is honoured in both
 // modes: the menu bar is owner-drawn with these colours, and the caption
 // colours go to DWM (Windows 11; Windows 10 keeps the dark caption that
-// Theme: Dark asks for). The popups themselves stay the system's.
+// Theme: Dark asks for). The bar's background brush goes onto its
+// dropdowns as well, whose text Windows draws in the process's colour
+// policy; theme_windows.go sets that policy to dark, so they read white on
+// ink in either mode.
 func windowsTheme() application.ThemeSettings {
 	ink := application.NewRGBPtr(0x0b, 0x0a, 0x10)
 	inkSoft := application.NewRGBPtr(0x15, 0x12, 0x1d)
