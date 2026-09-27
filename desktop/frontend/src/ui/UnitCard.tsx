@@ -12,18 +12,23 @@ import { CHOICE_ROW, CHOICE_ROW_DISABLED } from './Card';
 
 /** Whether a unit is reached over a serial cable, by its id or family. */
 export function isSerial(unit: Pick<Unit, 'id' | 'kind'>): boolean {
-    return unit.id.startsWith('serial:') || /^(\/dev\/|COM\d)/.test(unit.id) || unit.kind === 'mk312bt';
+    return unit.id.startsWith('serial:') || /^(\/dev\/|COM\d)/.test(unit.id) || unit.kind === 'mk312bt' || unit.kind === 'estim-2b';
 }
 
 /**
- * The family's name for people, from its kind; for a helper's family the
- * connector does not know by name, the link it is on (a serial id, else
- * Bluetooth) is what there is to say.
+ * The family's name for people, from its kind (the units masseuse.ai
+ * works with, SupportedUnits); for a helper's family the connector does
+ * not know by name, the link it is on (a serial id, else Bluetooth) is
+ * what there is to say.
  */
 export function familyName(kind: string, id = ''): string {
     switch (kind) {
         case 'mastago':
             return 'Mastago TENS · Bluetooth';
+        case 'dglabs-coyote':
+            return 'DG-Lab Coyote · Bluetooth';
+        case 'estim-2b':
+            return 'E-Stim Systems 2B · USB serial';
         case 'mk312bt':
             return 'ErosTek MK-312BT · USB serial';
         default:

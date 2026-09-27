@@ -382,3 +382,70 @@ func TestRuntimeListsAndSelectsAmongUnits(t *testing.T) {
 		t.Fatal("the unit not selected is not served")
 	}
 }
+
+// TestRuntimeListsAPortOnce: two families that hang off the same kind of
+// link name the same port; the runtime lists it once. Before a probe the
+// row is the first family's; once the device on that port is served, the
+// row is its family's own, and `held` is any family's word.
+func TestRuntimeListsAPortOnce(t *testing.T) {
+	ctx := context.Background()
+	rt, _, _, f, _, lists := twoUnitRuntime(t)
+	// Another family lists unit A's identifier as a possible unit of its
+	// own, ahead of the Bluetooth family, and says it is held.
+	rt.List = func(ctx context.Context) ([]estim.Unit, error) {
+		us, err := f.List(ctx)
+		foreign := estim.Unit{ID: "id-a", Kind: "other", Label: "Other family (id-a)", Held: true}
+		return append([]estim.Unit{foreign}, us...), err
+	}
+	before, err := rt.ListUnits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 2 || before[0].ID != "id-a" || before[0].Kind != "other" || !before[0].Held || before[1].ID != "id-b" {
+		t.Fatalf("before a probe: %+v", before)
+	}
+	if err := rt.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, err := rt.ListUnits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 2 || after[0].ID != "id-a" || after[0].Kind != estim.KindMastago || after[0].Label != "Mastago TENS G-12AB" || !after[0].Held || after[1].ID != "id-b" {
+		t.Fatalf("with unit A served: %+v", after)
+	}
+	if n := len(*lists); n != 2 {
+		t.Fatalf("OnUnits told %d time(s); want the two listings, which differ", n)
+	}
+
+	// The merge itself: order kept, the first row for an unprobed port,
+	// the served family's row for the served port, empty identifiers
+	// never merged.
+	served := estim.Descriptor{ID: "p", Kind: "two"}
+	got := estim.OnePerIDForTest([]estim.Unit{
+		{ID: "p", Kind: "one", Label: "One (p)"},
+		{ID: "q", Kind: "one", Label: "One (q)", Held: true},
+		{ID: "", Kind: "one"},
+		{ID: "p", Kind: "two", Label: "Two (p)"},
+		{ID: "", Kind: "two"},
+		{ID: "q", Kind: "two", Label: "Two (q)"},
+	}, served, true)
+	want := []estim.Unit{
+		{ID: "p", Kind: "two", Label: "Two (p)"},
+		{ID: "q", Kind: "one", Label: "One (q)", Held: true},
+		{ID: "", Kind: "one"},
+		{ID: "", Kind: "two"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("merged = %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("merged[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	// Not connected: the served descriptor is a memory, and the first row stands.
+	if got := estim.OnePerIDForTest([]estim.Unit{{ID: "p", Kind: "one"}, {ID: "p", Kind: "two"}}, served, false); len(got) != 1 || got[0].Kind != "one" {
+		t.Fatalf("not connected: %+v", got)
+	}
+}

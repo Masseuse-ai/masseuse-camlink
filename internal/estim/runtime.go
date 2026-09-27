@@ -404,6 +404,7 @@ func (r *Runtime) ListUnits(ctx context.Context) ([]Unit, error) {
 		units = []Unit{}
 	}
 	r.st.Lock()
+	units = onePerID(units, r.last, r.device != nil)
 	changed := !r.listed || !sameUnits(r.units, units)
 	r.units, r.listed = units, true
 	r.st.Unlock()
@@ -414,6 +415,37 @@ func (r *Runtime) ListUnits(ctx context.Context) ([]Unit, error) {
 		}
 	}
 	return append([]Unit(nil), units...), err
+}
+
+// onePerID lists each unit identifier once. Two families whose units hang
+// off the same kind of link (two serial families, each naming every USB
+// serial adapter as a possible unit of its own, since only a probe can
+// tell) list one port twice; the person sees the port once. The row is
+// the served device's family's when the device is on that port (that
+// family has probed it and knows), else the first family's, in the
+// finders' order; `held` is any family's word. Order is kept.
+func onePerID(units []Unit, served Descriptor, connected bool) []Unit {
+	out := make([]Unit, 0, len(units))
+	at := map[string]int{}
+	for _, u := range units {
+		i, seen := at[u.ID]
+		if !seen || u.ID == "" {
+			at[u.ID] = len(out)
+			out = append(out, u)
+			continue
+		}
+		if connected && u.ID == served.ID && u.Kind == served.Kind && out[i].Kind != served.Kind {
+			// The served family's own row for the port takes the place
+			// of an earlier family's guess.
+			held := out[i].Held
+			out[i] = u
+			out[i].Held = out[i].Held || held
+		}
+		if u.Held {
+			out[i].Held = true
+		}
+	}
+	return out
 }
 
 func sameUnits(a, b []Unit) bool {

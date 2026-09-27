@@ -314,9 +314,10 @@ const (
 	// device whose Capabilities name no LevelMaxDefault of their own.
 	DefaultLevelCap = 85
 	// LevelScaleMax is the top of the widest intensity scale a device
-	// reports (0..99); no setting passes it, and a device's own LevelMax
-	// bounds it further.
-	LevelScaleMax = 99
+	// reports (0..100: a unit whose scale is percent); no setting passes
+	// it, and a device's own LevelMax bounds it further (99 for a unit
+	// whose front panel reads 0..99).
+	LevelScaleMax = 100
 	// LevelDeltaCap bounds one adjust_level step.
 	LevelDeltaCap = 5
 	// TempoPercentCap is the top of the tempo (percent) scale.

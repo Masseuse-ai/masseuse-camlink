@@ -7,3 +7,6 @@ func (s *Session) HeartbeatForTest(ctx context.Context) { s.heartbeat(ctx) }
 
 // TelemetryForTest runs one telemetry batch tick.
 func (s *Session) TelemetryForTest(ctx context.Context) { s.telemetryTick() }
+
+// OnePerIDForTest is onePerID: one row per unit identifier.
+var OnePerIDForTest = onePerID
