@@ -877,8 +877,8 @@ jobs:
             $cn = $c.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
             if ($cn -ne $publisher -or $c.Subject -notmatch 'O="?Principled Labs, Inc\."?') { throw "$f is signed by $($c.Subject), not $publisher" }
             $ekus = @($c.EnhancedKeyUsageList | ForEach-Object ObjectId)
-            if ($ekus -notcontains $identity) { throw "$f: the certificate does not carry the identity's EKU $identity (it has $($ekus -join ', '))" }
-            if ($ekus -notcontains $codeSigning) { throw "$f: the certificate is not a code signing certificate" }
+            if ($ekus -notcontains $identity) { throw "${f}: the certificate does not carry the identity's EKU $identity (it has $($ekus -join ', '))" }
+            if ($ekus -notcontains $codeSigning) { throw "${f}: the certificate is not a code signing certificate" }
             if (-not $s.TimeStamperCertificate) { throw "$f carries no timestamp; the signature would expire with the certificate" }
           }
           "every file is signed by $publisher with a timestamp"
