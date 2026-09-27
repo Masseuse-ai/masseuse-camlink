@@ -609,9 +609,9 @@ jobs:
     # against the signed checksums.txt, ffmpeg.exe from ffmpeg-windows, the
     # unit driver helpers and the notices appended as a payload
     # (internal/payload; packaging/windows/pack), the files inside and the
-    # whole signed with Azure Artifact Signing when the repository has the
-    # credentials (the "Whether this run signs" step; without them the
-    # package ships unsigned, as before v0.13). cmd/pestrip proves that
+    # whole signed with Azure Artifact Signing as Principled Labs, Inc.
+    # (the "The signing credentials" step stops the job when the release
+    # environment lacks them: no release ships unsigned). cmd/pestrip proves that
     # each signed file minus its signature is the file that was verified,
     # that the package minus its signature and payload is the window built
     # here, and that the connector in the payload minus its signature is
@@ -723,23 +723,32 @@ jobs:
           done
       - name: The unit driver helpers for Windows, verified
         run: sh packaging/units/fetch-all.sh windows amd64 dist/units
-      - name: Whether this run signs
-        # Artifact Signing needs the Azure credentials (repository secrets)
-        # and the account (repository variables; packaging/windows/README.md,
-        # "Signing"). Without them the package is built, checked and
-        # published unsigned, and the run says so.
-        id: signing
+      - name: The signing credentials
+        # Artifact Signing needs the Azure identity (the release
+        # environment's secrets) and the account (its variables;
+        # packaging/windows/README.md, "Signing"). Every release is signed:
+        # without them the job stops here, before anything is packed or
+        # published.
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
         run: |
-          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$ENDPOINT" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "signing with Artifact Signing at $ENDPOINT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::no Artifact Signing credentials (secret AZURE_CLIENT_ID, variable ARTIFACT_SIGNING_ENDPOINT): the Windows package ships unsigned"
+          missing=""
+          [ -n "$AZURE_CLIENT_ID" ] || missing="$missing AZURE_CLIENT_ID"
+          [ -n "$AZURE_TENANT_ID" ] || missing="$missing AZURE_TENANT_ID"
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
+          [ -n "$ENDPOINT" ] || missing="$missing ARTIFACT_SIGNING_ENDPOINT"
+          [ -n "$ACCOUNT" ] || missing="$missing ARTIFACT_SIGNING_ACCOUNT"
+          [ -n "$PROFILE" ] || missing="$missing ARTIFACT_SIGNING_PROFILE"
+          if [ -n "$missing" ]; then
+            echo "::error::the Windows package is signed on every release; the release environment lacks:$missing"
+            exit 1
           fi
+          echo "signing with Artifact Signing at $ENDPOINT (account $ACCOUNT, profile $PROFILE)"
       - name: What goes into the package
         # The payload's programs are signed one by one before packing (each
         # runs as a program of its own once unpacked: the connector,
@@ -755,14 +764,12 @@ jobs:
           cp dist/pack/ffmpeg.exe dist/unsigned/ffmpeg.exe
           cp dist/pack/units/*.exe dist/unsigned/units/
       - name: Azure login (OIDC)
-        if: steps.signing.outputs.enabled == 'true'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: Sign the connector, ffmpeg.exe and the helpers (Artifact Signing)
-        if: steps.signing.outputs.enabled == 'true'
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
@@ -807,7 +814,6 @@ jobs:
       - name: Assemble the package
         run: go run ./packaging/windows/pack -v "${GITHUB_REF_NAME#v}" -s dist/shell/Masseuse.exe -b dist/pack/masseuse-camlink.exe -f dist/pack -u dist/pack/units -o dist/Masseuse.exe
       - name: Sign the package (Artifact Signing)
-        if: steps.signing.outputs.enabled == 'true'
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
@@ -851,15 +857,31 @@ jobs:
           n=$(ls dist/pack/units/camlink-unit-*.exe | wc -l | tr -d ' ')
           [ "$(grep -c ' units/camlink-unit-.*\.exe$' dist/payload.txt)" = "$n" ] || { echo "the payload does not carry every helper" >&2; exit 1; }
       - name: Windows' verdict on the signatures
-        if: steps.signing.outputs.enabled == 'true'
+        # Valid, and ours: the signer is Principled Labs, Inc., its
+        # certificate carries the identity validation's own EKU (constant
+        # across Artifact Signing's short-lived certificates, unlike the
+        # thumbprint, which is printed for the log only) and the code
+        # signing EKU, and a timestamp keeps the signature valid after the
+        # certificate expires.
         shell: pwsh
         run: |
+          $publisher = 'Principled Labs, Inc.'
+          $identity = '1.3.6.1.4.1.311.97.220938696.428520490.320658000.645134319'
+          $codeSigning = '1.3.6.1.5.5.7.3.3'
           $files = @('dist/Masseuse.exe', 'dist/pack/masseuse-camlink.exe', 'dist/pack/ffmpeg.exe') + (Get-ChildItem dist/pack/units/*.exe | ForEach-Object FullName)
           foreach ($f in $files) {
             $s = Get-AuthenticodeSignature $f
-            "$($s.Status)  $($s.SignerCertificate.Subject)  $f"
+            $c = $s.SignerCertificate
+            "$($s.Status)  $($c.Subject)  thumbprint $($c.Thumbprint)  $f"
             if ($s.Status -ne 'Valid') { throw "$f is not validly signed: $($s.Status) $($s.StatusMessage)" }
+            $cn = $c.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            if ($cn -ne $publisher -or $c.Subject -notmatch 'O="?Principled Labs, Inc\."?') { throw "$f is signed by $($c.Subject), not $publisher" }
+            $ekus = @($c.EnhancedKeyUsageList | ForEach-Object ObjectId)
+            if ($ekus -notcontains $identity) { throw "$f: the certificate does not carry the identity's EKU $identity (it has $($ekus -join ', '))" }
+            if ($ekus -notcontains $codeSigning) { throw "$f: the certificate is not a code signing certificate" }
+            if (-not $s.TimeStamperCertificate) { throw "$f carries no timestamp; the signature would expire with the certificate" }
           }
+          "every file is signed by $publisher with a timestamp"
       - name: The package runs alone
         # Copied to a directory of its own, as a download is, the window
         # answers --version without opening. The payload, unpacked as the

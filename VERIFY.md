@@ -20,8 +20,8 @@ carries:
   `windows_amd64` connector byte for byte, followed by a payload with an
   `ffmpeg.exe` built from the same pinned sources and the unit driver
   helpers, assembled by a third job on a Windows runner and signed with
-  Azure Artifact Signing (Principled Labs, Inc.) when the release has the
-  credentials; listed in `checksums-windows.txt`, signed the same way
+  Azure Artifact Signing (Principled Labs, Inc.; releases up to v0.30.0
+  were published unsigned); listed in `checksums-windows.txt`, signed the same way
   (`checksums-windows.txt.sigstore.json`), with provenance
   `windows.intoto.jsonl`. `Masseuse.ai-X.Y.Z-windows.zip`, listed and
   attested beside it, holds the same file under the name those releases
@@ -400,18 +400,26 @@ go run github.com/Masseuse-ai/masseuse-camlink/cmd/pestrip@vX.Y.Z -sha256 Masseu
 On Windows, the signatures themselves are checked with Windows' own tools:
 
 ```powershell
-Get-AuthenticodeSignature Masseuse.exe, payload\masseuse-camlink.exe, payload\ffmpeg.exe, payload\units\*.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
+Get-AuthenticodeSignature Masseuse.exe, payload\masseuse-camlink.exe, payload\ffmpeg.exe, payload\units\*.exe |
+  Format-List Status, @{n='Signer'; e={$_.SignerCertificate.Subject}}, @{n='Usages'; e={$_.SignerCertificate.EnhancedKeyUsageList.ObjectId}}, @{n='Timestamp'; e={$_.TimeStamperCertificate.Subject}}
 ```
 
-Every `Status` is `Valid`; the signer's subject names Principled Labs,
-Inc., under a certificate issued by Microsoft's Artifact Signing CA
-(Microsoft Identity Verification Root Certificate Authority 2020) and
-timestamped by `timestamp.acs.microsoft.com`; the certificates are
-short-lived by design and the timestamp is what keeps the signature valid.
-A release published without the signing credentials carries no signature,
-and the checks above are what stand in for it. The signature says who
-published the file; what the connector does is established by the rebuild,
-not by the signature.
+Every `Status` is `Valid`; every `Signer` is `CN="Principled Labs, Inc.",
+O="Principled Labs, Inc.", L=Tiburon, S=California, C=US`, under a
+certificate issued by Microsoft's Artifact Signing CA (Microsoft Identity
+Verification Root Certificate Authority 2020) and timestamped by
+`timestamp.acs.microsoft.com`. The certificates are short-lived by design,
+so their thumbprints and serial numbers change from one release to the
+next and identify nothing; the timestamp is what keeps the signature
+valid, and the identity is in `Usages`: beside the code signing usage
+`1.3.6.1.5.5.7.3.3`, every certificate carries
+`1.3.6.1.4.1.311.97.220938696.428520490.320658000.645134319`, the usage
+Artifact Signing issues to this identity validation alone. The release
+workflow requires the same subject, usages and timestamp on every file
+before it publishes. Releases up to v0.30.0 were published unsigned; for
+them the checks above are what stand in for the signature. The signature
+says who published the file; what the connector does is established by
+the rebuild, not by the signature.
 
 The icon and the file description Explorer shows come from resource
 objects committed in the source (`cmd/masseuse-camlink/rsrc_windows_amd64.syso`

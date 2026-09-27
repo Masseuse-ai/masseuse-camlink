@@ -27,12 +27,14 @@ comes back.
   THIRD_PARTY.md    what ffmpeg.exe is and how it was built
   licenses\         the licence texts that come with ffmpeg (LGPL 2.1) and Opus
 
-Windows may ask before the first start whether to run an app it does not
-recognize while the program's publisher is still new to it: "More info",
-then "Run anyway". The file is listed, with its checksum, in the release
-it came from, and every release is built in public and verifiable:
-https://github.com/Masseuse-ai/masseuse-camlink (VERIFY.md, "The Windows
-package").
+Masseuse.exe and the programs in this folder are signed by Principled
+Labs, Inc. (right-click, Properties, Digital Signatures). Windows may
+still ask before the first start whether to run an app it has not met
+yet while the publisher is new to it; the prompt names the publisher, and
+"More info", then "Run anyway" opens it. The file is listed, with its
+checksum, in the release it came from, and every release is built in
+public and verifiable: https://github.com/Masseuse-ai/masseuse-camlink
+(VERIFY.md, "The Windows package").
 
 Video is encoded by Windows' own H.264 encoder (Media Foundation). The N
 editions of Windows ship without it: install Microsoft's "Media Feature
