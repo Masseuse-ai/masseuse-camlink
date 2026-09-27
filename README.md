@@ -409,10 +409,10 @@ phone: the highest intensity the unit may be set to (15 of its 25 until you
 choose; never more than 25). It holds for that session only; the next starts
 from the default. If you lower it below where the unit is running, the
 connector puts the unit to zero first and arms it again within the new
-bound. Everything else is fixed: the connector moves the intensity one step
-at a time, reading it back at every step, selects only the unit's own 32
-programs, and refuses an intensity the unit itself refuses because the
-pads are not on the skin. The service can only ask for what the connector
+bound. Everything else is fixed: the connector raises the intensity one
+step at a time, reading it back at every step, lowers it in one write, read
+back, selects only the unit's own 32 programs, and refuses an intensity the
+unit itself refuses because the pads are not on the skin. The service can only ask for what the connector
 allows; those limits are in this program's source, not on the service.
 
 To check the unit without a session:
