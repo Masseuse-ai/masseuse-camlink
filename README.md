@@ -291,9 +291,11 @@ SHA-256 from the camera's own settings to pin it yourself. The camera's
 password stays on your computer and is used on your network only. Sessions
 then pull the camera only while they are watching.
 
-Other flags: `-service https://masseuse.ai` (the rendezvous service),
-`-state-dir DIR` (where the identity key, pairings and camera choice live),
-`-log-level debug`, `-version`.
+Other flags: `-service https://masseuse.ai` (the rendezvous service; an
+`http://` address is accepted for a service running on this computer
+only, `127.0.0.1` or `localhost`, for development), `-state-dir DIR` (where
+the identity key, pairings and camera choice live), `-log-level debug`,
+`-version`.
 
 ## Use OBS with your phone's camera
 
