@@ -434,7 +434,7 @@ jobs:
           test "$n" -gt 0 || { echo "the bundle carries no helpers" >&2; exit 1; }
           echo "${n} helper(s) in the bundle, each the manifest's"
           dist/Masseuse.app/Contents/MacOS/masseuse-camlink -state-dir "${RUNNER_TEMP}/probe-state" -estim-ble off estim probe > probe.txt 2>&1 || true
-          grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt ||
+          grep -F "Unit drivers: Mastogo (built in) + ${n} helper(s)" probe.txt ||
             { cat probe.txt; echo "the bundle's connector does not find its helpers" >&2; exit 1; }
       - name: The bundle's connector is the archives' binaries
         # Signature stripped, each slice of the universal connector inside
@@ -873,7 +873,7 @@ jobs:
           "$alone/Masseuse.exe" --version
           n=$(ls dist/pack/units/camlink-unit-*.exe | wc -l | tr -d ' ')
           dist/payload-check/masseuse-camlink.exe -state-dir "$state" -estim-ble off estim probe > probe.txt 2>&1 || true
-          grep -F "Unit drivers: Mastago (built in) + ${n} helper(s)" probe.txt ||
+          grep -F "Unit drivers: Mastogo (built in) + ${n} helper(s)" probe.txt ||
             { cat probe.txt; echo "the package's connector does not find its helpers" >&2; exit 1; }
           dist/payload-check/masseuse-camlink.exe -state-dir "$state" devices
       - name: The zip for installs before 0.13
