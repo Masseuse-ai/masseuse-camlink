@@ -51,7 +51,7 @@ func TestRuntimeUnitOpenReleasesAndDescribes(t *testing.T) {
 		t.Fatalf("a fresh connection must be released: level=%d outputting=%v", u.Level(), u.Outputting())
 	}
 	d := rt.Descriptor()
-	if d.Kind != estim.KindMastago || d.Label != "Mastago TENS G-12AB" || !d.Connected || d.Capabilities.LevelMax != 25 {
+	if d.Kind != estim.KindMastago || d.Label != "Mastogo Wireless TENS (G-12AB)" || !d.Connected || d.Capabilities.LevelMax != 25 {
 		t.Fatalf("descriptor: %+v", d)
 	}
 	if s := rt.Settings(); s.PowerMode != estim.PowerModeNormal || s.LevelMax != 15 {
@@ -330,7 +330,7 @@ func TestRuntimeListsAndSelectsAmongUnits(t *testing.T) {
 	if err := rt.SelectUnit(ctx, "id-b"); err != nil {
 		t.Fatal(err)
 	}
-	if d := rt.Descriptor(); d.ID != "id-b" || d.Label != "Mastago TENS G-34CD" || !d.Connected {
+	if d := rt.Descriptor(); d.ID != "id-b" || d.Label != "Mastogo Wireless TENS (G-34CD)" || !d.Connected {
 		t.Fatalf("after selecting id-b: %+v", d)
 	}
 	if a.Connections() != 0 || a.Level() != 0 || a.Outputting() {
@@ -411,7 +411,7 @@ func TestRuntimeListsAPortOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after) != 2 || after[0].ID != "id-a" || after[0].Kind != estim.KindMastago || after[0].Label != "Mastago TENS G-12AB" || !after[0].Held || after[1].ID != "id-b" {
+	if len(after) != 2 || after[0].ID != "id-a" || after[0].Kind != estim.KindMastago || after[0].Label != "Mastogo Wireless TENS (G-12AB)" || !after[0].Held || after[1].ID != "id-b" {
 		t.Fatalf("with unit A served: %+v", after)
 	}
 	if n := len(*lists); n != 2 {

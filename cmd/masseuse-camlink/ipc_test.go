@@ -47,10 +47,10 @@ func TestIPCReporterHelloComesFirst(t *testing.T) {
 	// startup is over (the unit runtime starts early).
 	r.Banner("v0.13.0", "ab12cd34", "/state")
 	r.Update(updateOff, "", "Updates are off (-no-update).")
-	r.Units([]estim.Unit{{ID: "u1", Kind: "mastago", Label: "Mastago TENS G-12AB"}}, nil, false)
+	r.Units([]estim.Unit{{ID: "u1", Kind: "mastago", Label: "Mastogo Wireless TENS (G-12AB)"}}, nil, false)
 	r.Source(sourceReport{Kind: "capture", Label: "FaceTime HD Camera + MacBook Pro Microphone", Ready: true, Shape: "1280x720 30 fps, h264_videotoolbox", Camera: "FaceTime HD Camera", Mic: "MacBook Pro Microphone",
 		Share: &shareReport{Ready: true, Address: "rtsp://127.0.0.1:7446/phone-abc"}})
-	r.Drivers("Unit drivers: Mastago (built in); no helpers in /x/units.")
+	r.Drivers("Unit drivers: Mastogo (built in); no helpers in /x/units.")
 	r.PairedCount(2)
 	r.Awake(awakeHeld, "")
 	if got := []byte(out.String()); len(got) != 0 {
@@ -177,13 +177,13 @@ func TestIPCReporterDeviceCarriesStatusAndArm(t *testing.T) {
 	r := newIPCReporter(&out, slog.New(slog.DiscardHandler))
 	r.Ready()
 	level, battery := 7, 80
-	d := estim.Descriptor{Kind: "mastago", Label: "Mastago TENS G-12AB", ID: "u1", Connected: true,
+	d := estim.Descriptor{Kind: "mastago", Label: "Mastogo Wireless TENS (G-12AB)", ID: "u1", Connected: true,
 		Capabilities: estim.Capabilities{LevelMax: 25, Channels: []string{"A", "B"}, Modes: []int{1, 2}}}
 	r.DeviceState(d, estim.Status{LevelA: &level, BatteryPercent: &battery}, true, 12)
 	lines := ipcLines(t, []byte(out.String()))
 	// Past the hello and the two standings Ready writes.
 	desc := lines[3]["descriptor"].(map[string]any)
-	if desc["label"] != "Mastago TENS G-12AB" || desc["connected"] != true {
+	if desc["label"] != "Mastogo Wireless TENS (G-12AB)" || desc["connected"] != true {
 		t.Fatalf("descriptor %v", desc)
 	}
 	if st := desc["status"].(map[string]any); st["levelA"] != float64(7) || st["batteryPercent"] != float64(80) {
@@ -585,7 +585,7 @@ func TestConsoleReporterLines(t *testing.T) {
 	c.Source(sourceReport{Kind: "capture", Label: "Cam + Mic", Ready: true, Shape: "1280x720 30 fps, libx264",
 		Face:  &faceReport{Label: "OBS Virtual Camera", Ready: true, Shape: "1280x720 30 fps, libx264"},
 		Share: &shareReport{Ready: true, Address: "rtsp://127.0.0.1:7446/phone-abc"}})
-	c.Drivers("Unit drivers: Mastago (built in); no helpers in /x/units.")
+	c.Drivers("Unit drivers: Mastogo (built in); no helpers in /x/units.")
 	c.PairedCount(0)
 	c.PairedCount(2)
 	c.Awake(awakeUnsupported, "")
@@ -619,7 +619,7 @@ Front-facing camera: OBS Virtual Camera (1280x720 30 fps, libx264). It is on onl
 Your phone's picture: sessions are asked to send it here, and programs on this computer can open it at
   rtsp://127.0.0.1:7446/phone-abc
   (OBS: a Media Source with Local File unticked, that address as the Input, Network Buffering 0 MB.)
-Unit drivers: Mastago (built in); no helpers in /x/units.
+Unit drivers: Mastogo (built in); no helpers in /x/units.
 Paired with 2 phone(s). Sessions that use this camera connect automatically.
 This computer stays awake while Masseuse.ai runs (the screen may go dark; keep the lid open).
 

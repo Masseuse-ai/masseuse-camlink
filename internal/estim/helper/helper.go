@@ -106,8 +106,12 @@ type Hello struct {
 // Found is `find`'s answer: the device opened, as the Host needs to present
 // it before any other call.
 type Found struct {
-	Kind         estim.Kind         `json:"kind"`
-	Label        string             `json:"label"`
+	Kind  estim.Kind `json:"kind"`
+	Label string     `json:"label"`
+	// Identity: the unit's name in three parts (`maker`, `model`, `tag`;
+	// estim.IdentityReporter). A helper that predates them sends none
+	// and the Host names the unit from Label.
+	estim.Identity
 	Port         string             `json:"port"`
 	Capabilities estim.Capabilities `json:"capabilities"`
 	// Held: another program on this computer has the unit open (estim.HeldReporter).

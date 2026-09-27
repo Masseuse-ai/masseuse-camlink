@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 		os.Exit(n)
 	}
 	out := json.NewEncoder(os.Stdout)
-	_ = out.Encode(map[string]any{"type": "hello", "hello": map[string]any{"version": "v9.9.9", "identity": "abcd1234", "stateDir": "/tmp/x", "updates": "on", "awake": true, "drivers": "Unit drivers: Mastago (built in).", "phones": 1}})
+	_ = out.Encode(map[string]any{"type": "hello", "hello": map[string]any{"version": "v9.9.9", "identity": "abcd1234", "stateDir": "/tmp/x", "updates": "on", "awake": true, "drivers": "Unit drivers: Mastogo (built in).", "phones": 1}})
 	_ = out.Encode(map[string]any{"type": "source", "kind": "capture", "label": "Cam", "ready": true, "face": nil})
 	_ = out.Encode(map[string]any{"type": "link", "state": "active"})
 	_ = out.Encode(map[string]any{"type": "device", "descriptor": map[string]any{"kind": "mastago", "label": "Unit", "connected": true, "capabilities": map[string]any{"levelMax": 25}, "armed": map[string]any{"levelBound": 10}}})

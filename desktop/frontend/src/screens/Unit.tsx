@@ -22,7 +22,7 @@ import { Card, CardLabel, Well } from '../ui/Card';
 import { Page } from '../ui/Page';
 import { Scene } from '../ui/Scene';
 import { SupportedUnits, TRADEMARK_LINE } from '../ui/SupportedUnits';
-import { UnitCard, linkName, unitName } from '../ui/UnitCard';
+import { UnitCard, linkName, unitTitle } from '../ui/UnitCard';
 
 /** The connector's word on a unit gone, by the reason it knows (cmd/masseuse-camlink/estim.go). */
 export function disconnectedLine(reason: string | undefined): { title: string; text: string } {
@@ -52,7 +52,7 @@ function ServingCard({ unit }: { unit: Descriptor }) {
             <CardLabel icon={Zap} tone={armed ? 'rose' : 'dim'} trailing={armed ? <Badge variant="rose">Armed by a session</Badge> : <Badge variant="mint">Held at zero</Badge>}>
                 Serving
             </CardLabel>
-            <h2 className="type-title text-bone">{unitName(unit.kind, unit.label)}</h2>
+            <h2 className="type-title text-bone">{unitTitle(unit)}</h2>
             <p className="type-secondary mt-0.5 text-bone/55">{linkName(unit)}</p>
             <p className="type-body mt-3 text-bone/75">
                 {armed
@@ -245,7 +245,7 @@ export function Unit() {
                         <CardLabel icon={Power} trailing={<Badge variant="amber">Disconnected</Badge>}>
                             Last served
                         </CardLabel>
-                        <h2 className="type-title text-bone">{unit ? unitName(unit.kind, unit.label) : ''}</h2>
+                        <h2 className="type-title text-bone">{unit ? unitTitle(unit) : ''}</h2>
                         <Alert variant="warn" className="mt-3">
                             <TriangleAlert />
                             <AlertTitle>{gone.title}</AlertTitle>

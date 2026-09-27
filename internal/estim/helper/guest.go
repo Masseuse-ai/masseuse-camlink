@@ -241,7 +241,7 @@ func (g *guest) dispatch(ctx context.Context, env envelope) (any, error) {
 		g.mu.Lock()
 		g.driver = d
 		g.mu.Unlock()
-		found := Found{Kind: d.Kind(), Label: d.Label(), Port: d.Port(), Capabilities: d.Capabilities()}
+		found := Found{Kind: d.Kind(), Label: d.Label(), Identity: estim.IdentityOf(d), Port: d.Port(), Capabilities: d.Capabilities()}
 		if h, ok := d.(estim.HeldReporter); ok {
 			found.Held = h.Held()
 		}

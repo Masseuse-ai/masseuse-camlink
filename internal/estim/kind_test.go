@@ -38,6 +38,52 @@ func TestDriverKindIsKnown(t *testing.T) {
 	}
 }
 
+func TestIdentityLabels(t *testing.T) {
+	// The one-string label composes the three parts; the tag in
+	// parentheses only when there is one.
+	cases := []struct {
+		id   estim.Identity
+		want string
+	}{
+		{estim.Identity{Maker: "Mastogo", Model: "Wireless TENS", Tag: "G-12AB"}, "Mastogo Wireless TENS (G-12AB)"},
+		{estim.Identity{Maker: "E-Stim Systems", Model: "2B"}, "E-Stim Systems 2B"},
+		{estim.Identity{Model: "2B", Tag: "COM5"}, "2B (COM5)"},
+		{estim.Identity{Tag: "4A56"}, "4A56"},
+		{estim.Identity{}, ""},
+	}
+	for _, c := range cases {
+		if got := estim.LabelOf(c.id); got != c.want {
+			t.Errorf("LabelOf(%+v) = %q, want %q", c.id, got, c.want)
+		}
+	}
+	// Read back out of a label, for a helper that predates the parts: the
+	// trailing parenthesis is the tag, the rest the model, no maker.
+	from := []struct {
+		label string
+		want  estim.Identity
+	}{
+		{"DG-Lab Coyote 3.0 (7C3B)", estim.Identity{Model: "DG-Lab Coyote 3.0", Tag: "7C3B"}},
+		{"E-Stim Systems 2B (cu.usbserial-FTCILMWQ)", estim.Identity{Model: "E-Stim Systems 2B", Tag: "cu.usbserial-FTCILMWQ"}},
+		{"E-Stim Systems 2B", estim.Identity{Model: "E-Stim Systems 2B"}},
+		{"  Some unit  ", estim.Identity{Model: "Some unit"}},
+		{"(odd)", estim.Identity{Model: "(odd)"}},
+		{"", estim.Identity{}},
+	}
+	for _, c := range from {
+		if got := estim.IdentityFromLabel(c.label); got != c.want {
+			t.Errorf("IdentityFromLabel(%q) = %+v, want %+v", c.label, got, c.want)
+		}
+	}
+	// The Mastogo driver names its unit in three parts, and its label is
+	// the three composed.
+	if id := mastago.IdentityFor("MASTOGO G-12AB"); id != (estim.Identity{Maker: "Mastogo", Model: "Wireless TENS", Tag: "G-12AB"}) || mastago.LabelFor("MASTOGO G-12AB") != estim.LabelOf(id) {
+		t.Fatalf("mastago identity %+v, label %q", id, mastago.LabelFor("MASTOGO G-12AB"))
+	}
+	if mastago.LabelFor("MASTOGO") != "Mastogo Wireless TENS" || mastago.TagFor(" MASTOGO ") != "" {
+		t.Fatalf("a unit advertising the prefix alone has no tag: %q", mastago.LabelFor("MASTOGO"))
+	}
+}
+
 func TestDefaultSettingsFor(t *testing.T) {
 	if got := estim.DefaultSettingsFor(estim.Capabilities{}); got != estim.DefaultSettings() {
 		t.Fatalf("no caps: %+v", got)

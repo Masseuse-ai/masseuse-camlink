@@ -33,7 +33,7 @@ func TestFinderPrefersHeldUnits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer drv.Close(ctx, false)
-	if drv.Port() != "held-1" || drv.Label() != "Mastago TENS G-12AB" {
+	if drv.Port() != "held-1" || drv.Label() != "Mastogo Wireless TENS (G-12AB)" {
 		t.Fatalf("found %s %s", drv.Port(), drv.Label())
 	}
 	if c.Scans() != 0 {
@@ -163,9 +163,10 @@ func TestFinderListsEveryUnitInReach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Each unit named in three parts as well as in one string.
 	want := []estim.Unit{
-		{ID: "held-1", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true},
-		{ID: "adv-1", Kind: estim.KindMastago, Label: "Mastago TENS G-34CD"},
+		{ID: "held-1", Kind: estim.KindMastago, Label: "Mastogo Wireless TENS (G-12AB)", Identity: estim.Identity{Maker: "Mastogo", Model: "Wireless TENS", Tag: "G-12AB"}, Held: true},
+		{ID: "adv-1", Kind: estim.KindMastago, Label: "Mastogo Wireless TENS (G-34CD)", Identity: estim.Identity{Maker: "Mastogo", Model: "Wireless TENS", Tag: "G-34CD"}},
 	}
 	if len(units) != len(want) {
 		t.Fatalf("units = %+v", units)

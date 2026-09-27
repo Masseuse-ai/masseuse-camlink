@@ -141,10 +141,10 @@ func helpersLine(dir string, found []deviceFamily) string {
 	}
 	switch {
 	case dir == "":
-		return "Unit drivers: Mastago (built in); helpers off (-estim-helpers none)."
+		return "Unit drivers: Mastogo (built in); helpers off (-estim-helpers none)."
 	case len(found) == 0:
-		return fmt.Sprintf("Unit drivers: Mastago (built in); no helpers in %s.", dir)
+		return fmt.Sprintf("Unit drivers: Mastogo (built in); no helpers in %s.", dir)
 	default:
-		return fmt.Sprintf("Unit drivers: Mastago (built in) + %d helper(s): %s.", len(found), strings.Join(names, ", "))
+		return fmt.Sprintf("Unit drivers: Mastogo (built in) + %d helper(s): %s.", len(found), strings.Join(names, ", "))
 	}
 }

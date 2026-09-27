@@ -39,7 +39,7 @@ func connect(t *testing.T, u *fakeunit.Unit) *mastago.Driver {
 func TestConnectVerifiesTheUnitAnswers(t *testing.T) {
 	u := fakeunit.New("id-1", "MASTOGO G-12AB")
 	drv := connect(t, u)
-	if drv.Kind() != estim.KindMastago || drv.Label() != "Mastago TENS G-12AB" || drv.Port() != "id-1" {
+	if drv.Kind() != estim.KindMastago || drv.Label() != "Mastogo Wireless TENS (G-12AB)" || drv.Port() != "id-1" {
 		t.Fatalf("identity: %q %q %q", drv.Kind(), drv.Label(), drv.Port())
 	}
 	if cmds := u.Commands(); len(cmds) != 1 || cmds[0] != "AT+CMODE?" {

@@ -19,11 +19,13 @@ export const mics: Record<string, Device> = {
     brio: { kind: 'audio', id: '3', name: 'Logitech BRIO Microphone' },
 };
 
+// Each unit named in three parts as the drivers name them (maker, model,
+// tag) and in the one string the parts compose.
 export const units: Record<string, Unit> = {
-    g12ab: { id: 'ble:6F1D2C3B-8A4E-4F0B-9C2D-1E2F3A4B5C6D', kind: 'mastago', label: 'Mastago TENS G-12AB', held: false },
-    g34cd: { id: 'ble:0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D', kind: 'mastago', label: 'Mastago TENS G-34CD', held: false },
-    g34cdHeld: { id: 'ble:0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D', kind: 'mastago', label: 'Mastago TENS G-34CD', held: true },
-    mk312: { id: 'serial:/dev/cu.usbserial-1420', kind: 'mk312bt', label: 'MK-312BT on /dev/cu.usbserial-1420', held: false },
+    g12ab: { id: 'ble:6F1D2C3B-8A4E-4F0B-9C2D-1E2F3A4B5C6D', kind: 'mastago', label: 'Mastogo Wireless TENS (G-12AB)', maker: 'Mastogo', model: 'Wireless TENS', tag: 'G-12AB', held: false },
+    g34cd: { id: 'ble:0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D', kind: 'mastago', label: 'Mastogo Wireless TENS (G-34CD)', maker: 'Mastogo', model: 'Wireless TENS', tag: 'G-34CD', held: false },
+    g34cdHeld: { id: 'ble:0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D', kind: 'mastago', label: 'Mastogo Wireless TENS (G-34CD)', maker: 'Mastogo', model: 'Wireless TENS', tag: 'G-34CD', held: true },
+    mk312: { id: 'serial:/dev/cu.usbserial-1420', kind: 'mk312bt', label: 'ErosTek MK-312BT (cu.usbserial-1420)', maker: 'ErosTek', model: 'MK-312BT', tag: 'cu.usbserial-1420', held: false },
 };
 
 export function descriptorFor(unit: Unit, extra: Partial<Descriptor> = {}): Descriptor {
@@ -31,6 +33,9 @@ export function descriptorFor(unit: Unit, extra: Partial<Descriptor> = {}): Desc
     return {
         kind: unit.kind,
         label: unit.label,
+        maker: unit.maker,
+        model: unit.model,
+        tag: unit.tag,
         id: unit.id,
         connected: true,
         held: unit.held,
@@ -62,7 +67,7 @@ export const hello = (over: Partial<Hello> = {}): Hello => ({
     stateDir: '/Users/you/Library/Application Support/masseuse-camlink',
     updates: 'on',
     awake: true,
-    drivers: 'Mastago (built in) + 1 helper: mk312',
+    drivers: 'Mastogo (built in) + 1 helper: mk312',
     phones: 0,
     ...over,
 });

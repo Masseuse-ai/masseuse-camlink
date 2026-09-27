@@ -385,7 +385,7 @@ whenever the dead connection is noticed.
 If an electrical stimulation device the connector supports is within reach
 of the same computer, the connector serves it too: the service that runs
 your session sees its status and can adjust it, within limits the connector
-holds to. The reference device is the Mastago TENS unit (the Bluetooth
+holds to. The reference device is the Mastogo Wireless TENS unit (the Bluetooth
 unit that advertises as `MASTOGO G-xxxx`). Nothing to set up: switch the
 unit on and start the connector; the first time, macOS asks whether the
 terminal may use Bluetooth (Windows asks nothing: Bluetooth only has to be
@@ -394,7 +394,7 @@ whether it is advertising or already open in the vendor's own app on this
 computer, and says
 
 ```
-Stimulation device connected: Mastago TENS G-12AB. It is held at zero until a session on your phone uses this computer.
+Stimulation device connected: Mastogo Wireless TENS (G-12AB). It is held at zero until a session on your phone uses this computer.
 ```
 
 and holds the unit paused at zero, with its own buttons live, until a
@@ -437,8 +437,8 @@ prints them numbered:
 
 ```
 Stimulation units in reach (2):
-  1  Mastago TENS G-12AB  (serving this one)
-  2  Mastago TENS G-34CD
+  1  Mastogo Wireless TENS (G-12AB)  (serving this one)
+  2  Mastogo Wireless TENS (G-34CD)
 Type a number and Enter to serve another unit; the phone can pick one too. A unit in use by a session is switched once the session stops it.
 ```
 
@@ -482,7 +482,7 @@ program, which holds every helper's unit to the same limits as the
 Mastago. The first line about them in the window says which were found:
 
 ```
-Unit drivers: Mastago (built in) + 1 helper(s): example.
+Unit drivers: Mastogo (built in) + 1 helper(s): example.
 ```
 
 `-estim-helpers <dir>` looks in another directory; `-estim-helpers none`
