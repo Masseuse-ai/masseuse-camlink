@@ -84,7 +84,7 @@ func TestHelpersLine(t *testing.T) {
 		t.Fatalf("none = %q", got)
 	}
 	found := []deviceFamily{{name: "alpha (helper)"}, {name: "beta (helper)"}}
-	if got := helpersLine("/opt/units", found); got != "Unit drivers: Mastago (built in) + 2 helper(s): alpha, beta." {
+	if got := helpersLine("/opt/units", found); got != "Unit drivers: Mastogo (built in) + 2 helper(s): alpha, beta." {
 		t.Fatalf("two = %q", got)
 	}
 }

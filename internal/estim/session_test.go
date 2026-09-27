@@ -504,8 +504,12 @@ func TestSessionServiceDetachAndDeviceReports(t *testing.T) {
 		t.Fatalf("device report must be connector-level: %+v", got)
 	}
 	dev := got[0].messages[0]
-	if dev["type"] != "device" || dev["kind"] != "mastago" || dev["connected"] != true || dev["label"] != "Mastago TENS G-12AB" {
+	if dev["type"] != "device" || dev["kind"] != "mastago" || dev["connected"] != true || dev["label"] != "Mastogo Wireless TENS (G-12AB)" {
 		t.Fatalf("device = %v", dev)
+	}
+	// The unit's name in three parts beside the one-string label.
+	if dev["maker"] != "Mastogo" || dev["model"] != "Wireless TENS" || dev["tag"] != "G-12AB" {
+		t.Fatalf("device identity = %v", dev)
 	}
 	caps := dev["capabilities"].(map[string]any)
 	if caps["levelMax"] != 25.0 || caps["levelMaxDefault"] != 15.0 || caps["tempo"] != false || caps["timer"] != true || caps["loadDetect"] != true || len(caps["modes"].([]any)) != 32 {
@@ -650,8 +654,40 @@ func TestSessionDeviceReportNamesTheUnitAndTheList(t *testing.T) {
 		t.Fatalf("device with units = %v", dev)
 	}
 	first := units[0].(map[string]any)
-	if first["id"] != "id-a" || first["kind"] != "mastago" || first["label"] != "Mastago TENS G-12AB" || first["held"] != false {
+	if first["id"] != "id-a" || first["kind"] != "mastago" || first["label"] != "Mastogo Wireless TENS (G-12AB)" || first["held"] != false {
 		t.Fatalf("unit = %v", first)
+	}
+	// Each unit named in three parts beside its label.
+	if first["maker"] != "Mastogo" || first["model"] != "Wireless TENS" || first["tag"] != "G-12AB" {
+		t.Fatalf("unit identity = %v", first)
+	}
+}
+
+// A lister that predates the three-part name gives only a label: the
+// runtime reads the model and the tag out of it and names no maker, so
+// the list is never without a model.
+func TestRuntimeNamesAUnitFromItsLabelAlone(t *testing.T) {
+	ctx := context.Background()
+	rt := &estim.Runtime{
+		Connect: func(context.Context) (estim.Driver, error) { return nil, estim.ErrNoDevice },
+		List: func(context.Context) ([]estim.Unit, error) {
+			return []estim.Unit{
+				{ID: "/dev/cu.usbserial-1", Kind: "other", Label: "Other 2B (cu.usbserial-1)"},
+				{ID: "id-b", Kind: "other", Label: "Other 2B", Identity: estim.Identity{Maker: "Other", Model: "2B", Tag: "b"}},
+			}, nil
+		},
+	}
+	t.Cleanup(func() { _ = rt.Close(ctx) })
+	units, err := rt.ListUnits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 2 || units[0].Identity != (estim.Identity{Model: "Other 2B", Tag: "cu.usbserial-1"}) {
+		t.Fatalf("units = %+v", units)
+	}
+	// One that named itself is left as it is.
+	if units[1].Identity != (estim.Identity{Maker: "Other", Model: "2B", Tag: "b"}) {
+		t.Fatalf("named unit = %+v", units[1])
 	}
 }
 
@@ -667,7 +703,7 @@ func TestSessionSendsNoDeviceReportBeforeAnyUnitIsKnown(t *testing.T) {
 	rt := &estim.Runtime{
 		Connect: func(context.Context) (estim.Driver, error) { return nil, held },
 		List: func(context.Context) ([]estim.Unit, error) {
-			return []estim.Unit{{ID: "id-a", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true}}, nil
+			return []estim.Unit{{ID: "id-a", Kind: estim.KindMastago, Label: "Mastogo Wireless TENS (G-12AB)", Held: true}}, nil
 		},
 	}
 	t.Cleanup(func() { _ = rt.Close(ctx) })

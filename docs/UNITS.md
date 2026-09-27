@@ -52,9 +52,9 @@ left out, and the connector runs on without it. The window's line says
 what was found:
 
 ```
-Unit drivers: Mastago (built in) + 1 helper(s): example.
-Unit drivers: Mastago (built in); no helpers in /path/to/units.
-Unit drivers: Mastago (built in); helpers off (-estim-helpers none).
+Unit drivers: Mastogo (built in) + 1 helper(s): example.
+Unit drivers: Mastogo (built in); no helpers in /path/to/units.
+Unit drivers: Mastogo (built in); helpers off (-estim-helpers none).
 ```
 
 `masseuse-camlink estim probe` prints the same line, then each family's
@@ -119,7 +119,7 @@ them (PROTOCOL.md 7.3): `Unit`, `Capabilities`, `Status`, `Frame`,
 | `describe` | none | `{"text": "..."}` | what the family can see, for `estim probe`: text as the helper's `Describe` writes it, lines ending in `\n` |
 | `list` | none | `{"units": [Unit, ...]}` | the family's units in reach, without taking any (`estim.Lister`); `unsupported` if the family cannot list |
 | `select` | `{"unit": "<id or name>"}` | `{}` | restrict the family to one unit; `""` lifts it (`estim.Selector`). A unit of another family never matches |
-| `find` | none | `{"kind", "label", "port", "capabilities": Capabilities, "held": bool, "renewsArm": bool}` | find and open the device; `no_device` when none. A device still open from an earlier `find` is closed (restoring the unit) before the search |
+| `find` | none | `{"kind", "label", "maker", "model", "tag", "port", "capabilities": Capabilities, "held": bool, "renewsArm": bool}` | find and open the device; `no_device` when none. A device still open from an earlier `find` is closed (restoring the unit) before the search. `maker`, `model` and `tag` are the unit's name in three parts (`estim.Identity`: the maker, the model, and what tells this unit from another of its family, a port's base name or a short id); `label` is the three in one string. A helper whose driver is an `estim.IdentityReporter` sends them (as `list` does on each `Unit`); the connector names a unit without them from its label |
 | `release` | none | `{}` | the device to zero, output stopped, its own controls live; a device with several power ranges back in the one it was found in at `find` (its own setting), whatever range `arm` selected |
 | `arm` | `{"powerMode": "normal" or "high"}` | `{}` | arm in the range |
 | `renewArm` | `{"until": "<RFC 3339>"}` | `{}` | bring the device's own countdown up to the time (`estim.ArmRenewer`); only sent when `find` said `renewsArm` |
@@ -157,9 +157,9 @@ the failure is a loss, reported as not connected with that reason.
 → {"id":1,"method":"hello"}
 ← {"id":1,"result":{"protocol":1,"name":"example","kinds":["examplekind"]}}
 → {"id":2,"method":"list"}
-← {"id":2,"result":{"units":[{"id":"/dev/cu.usbserial-10","kind":"examplekind","label":"Example unit","held":false}]}}
+← {"id":2,"result":{"units":[{"id":"/dev/cu.usbserial-10","kind":"examplekind","label":"Example Unit (cu.usbserial-10)","maker":"Example","model":"Unit","tag":"cu.usbserial-10","held":false}]}}
 → {"id":3,"method":"find"}
-← {"id":3,"result":{"kind":"examplekind","label":"Example unit","port":"/dev/cu.usbserial-10","capabilities":{"levelMax":99,"channels":["a"],"modes":[0,1,2],"tempo":true,"powerModes":["normal","high"]},"held":false,"renewsArm":false}}
+← {"id":3,"result":{"kind":"examplekind","label":"Example Unit (cu.usbserial-10)","maker":"Example","model":"Unit","tag":"cu.usbserial-10","port":"/dev/cu.usbserial-10","capabilities":{"levelMax":99,"channels":["a"],"modes":[0,1,2],"tempo":true,"powerModes":["normal","high"]},"held":false,"renewsArm":false}}
 → {"id":4,"method":"release"}
 ← {"id":4,"result":{}}
 → {"id":5,"method":"arm","params":{"powerMode":"normal"}}

@@ -30,7 +30,14 @@ export interface Unit {
     id: string;
     /** The device family: "mastago" (Bluetooth), a helper's own name ("mk312bt", USB serial). */
     kind: string;
+    /** The unit's name in one string (estim.LabelOf): the three parts below composed. */
     label: string;
+    /** The maker ("DG-LAB", "Mastogo"); absent when the driver did not name it. */
+    maker?: string;
+    /** The model ("Coyote 3.0"; "Wireless TENS" where the maker names its category). */
+    model?: string;
+    /** What tells this unit from another of its family: a short id, a port's base name, an advertised suffix. */
+    tag?: string;
     /** Another program on this computer has it open. */
     held: boolean;
 }
@@ -39,6 +46,9 @@ export interface Unit {
 export interface Descriptor {
     kind: string;
     label: string;
+    maker?: string;
+    model?: string;
+    tag?: string;
     id?: string;
     connected: boolean;
     held?: boolean;
@@ -94,7 +104,7 @@ export interface Hello {
     /** The computer is held awake while this runs. */
     awake: boolean;
     awakeNote?: string;
-    /** The unit drivers line: "Mastago (built in) + 1 helper: mk312". */
+    /** The unit drivers line: "Mastogo (built in) + 1 helper: mk312". */
     drivers: string;
     /** How many phones are paired already. */
     phones: number;

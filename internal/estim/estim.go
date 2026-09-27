@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -88,11 +89,75 @@ func (c Capabilities) HasPowerMode(mode string) bool {
 	return false
 }
 
+// Identity names a unit for people in three parts, declared once by the
+// driver that recognizes it and never parsed out of a label: the maker
+// ("DG-LAB", "Mastogo"), the model ("Coyote 3.0"; "Wireless TENS" for a
+// maker that names the category and not the unit) and the tag that tells
+// one unit of the family from another (a Bluetooth unit's short id, a
+// serial port's base name, an advertised suffix). It rides in the
+// Descriptor and in each Unit (PROTOCOL.md 7.3: `maker`, `model`, `tag`),
+// so each screen composes what it needs: the maker and the model as a
+// title, the model alone in a strip, the tag only beside a twin of the
+// family. The one-string Label beside it (LabelOf) is for a reader that
+// predates the three.
+type Identity struct {
+	Maker string `json:"maker,omitempty"`
+	Model string `json:"model,omitempty"`
+	Tag   string `json:"tag,omitempty"`
+}
+
+// LabelOf is the one-string label for an identity: the maker and the
+// model, then the tag in parentheses when there is one ("Mastogo Wireless
+// TENS (G-12AB)").
+func LabelOf(id Identity) string {
+	name := strings.TrimSpace(strings.TrimSpace(id.Maker) + " " + strings.TrimSpace(id.Model))
+	tag := strings.TrimSpace(id.Tag)
+	switch {
+	case tag == "":
+		return name
+	case name == "":
+		return tag
+	default:
+		return name + " (" + tag + ")"
+	}
+}
+
+// IdentityFromLabel reads what it can of an identity out of a one-string
+// label, for a unit driver helper that predates the three fields: a
+// trailing parenthesis is the tag and the rest the model; the maker is
+// not known.
+func IdentityFromLabel(label string) Identity {
+	label = strings.TrimSpace(label)
+	if i := strings.LastIndex(label, "("); i > 0 && strings.HasSuffix(label, ")") {
+		return Identity{Model: strings.TrimSpace(label[:i]), Tag: strings.TrimSpace(label[i+1 : len(label)-1])}
+	}
+	return Identity{Model: label}
+}
+
+// An IdentityReporter is a Driver that names its unit in three parts.
+type IdentityReporter interface {
+	Identity() Identity
+}
+
+// IdentityOf is d's identity: the driver's own when it reports one with a
+// model, else read out of its label.
+func IdentityOf(d Driver) Identity {
+	if ir, ok := d.(IdentityReporter); ok {
+		if id := ir.Identity(); id.Model != "" {
+			return id
+		}
+	}
+	return IdentityFromLabel(d.Label())
+}
+
 // Descriptor is what the connector reports about the device it is serving:
 // the selected unit, whether or not it is connected right now.
 type Descriptor struct {
 	Kind  Kind   `json:"kind"`
 	Label string `json:"label"`
+	// Identity is the unit's name in three parts (maker, model, tag);
+	// Label is the same in one string.
+	Identity
 	// ID is what the system calls the unit (Driver.Port): a Bluetooth
 	// peripheral's identifier or a serial port path, the same string a
 	// Unit carries and a selection names. Empty before any device.
@@ -154,6 +219,10 @@ type Unit struct {
 	ID    string `json:"id"`
 	Kind  Kind   `json:"kind"`
 	Label string `json:"label"`
+	// Identity is the unit's name in three parts, as Descriptor.Identity;
+	// a Lister that predates it leaves it empty and the Runtime reads it
+	// out of Label.
+	Identity
 	// Held says another program on this computer has the unit open.
 	Held bool `json:"held"`
 }
@@ -410,7 +479,9 @@ func LevelMaxFor(caps Capabilities, settings Settings) int {
 // called one at a time; the Runtime serializes them.
 type Driver interface {
 	Kind() Kind
-	// Label names the device for people ("Mastago TENS G-12AB").
+	// Label names the device for people in one string ("Mastogo Wireless
+	// TENS (G-12AB)"); a driver that is an IdentityReporter names it in
+	// three parts as well, and the label is LabelOf them.
 	Label() string
 	// Port is where the device is attached: a serial port path, or the
 	// system's identifier for a Bluetooth peripheral.

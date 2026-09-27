@@ -19,15 +19,20 @@ export interface SupportedUnit {
     mark: string;
 }
 
-/** In the order the masseuse.ai app lists them. */
+/**
+ * In the order the masseuse.ai app lists them: the maker and the model as
+ * the drivers name them (the `maker` and `model` of a unit's report), the
+ * mark standing for the maker in the row and the model written beside it.
+ * Mastogo names its category of units, not each unit.
+ */
 export const SUPPORTED_UNITS: readonly SupportedUnit[] = [
-    { maker: 'Mastogo', model: 'Mastogo units', link: 'Bluetooth', mark: mastogo },
-    { maker: 'DG-Lab', model: 'DG-Lab Coyote', link: 'Bluetooth', mark: dgLab },
-    { maker: 'E-Stim Systems', model: 'E-Stim Systems 2B', link: 'Serial link cable', mark: estimSystems },
-    { maker: 'ErosTek', model: 'ErosTek MK-312BT', link: 'Serial link cable', mark: erostek },
+    { maker: 'Mastogo', model: 'Wireless TENS', link: 'Bluetooth', mark: mastogo },
+    { maker: 'DG-LAB', model: 'Coyote 3.0', link: 'Bluetooth', mark: dgLab },
+    { maker: 'E-Stim Systems', model: '2B', link: 'Serial link cable', mark: estimSystems },
+    { maker: 'ErosTek', model: 'MK-312BT', link: 'Serial link cable', mark: erostek },
 ];
 
-export const TRADEMARK_LINE = 'Mastogo, DG-Lab, E-Stim Systems and ErosTek are trademarks of their owners, who are not affiliated with masseuse.ai.';
+export const TRADEMARK_LINE = 'Mastogo, DG-LAB, E-Stim Systems and ErosTek are trademarks of their owners, who are not affiliated with masseuse.ai.';
 
 interface Props {
     /** `list`: full rows with the marks in a well (the dialog); `compact`: 44-pt rows, the marks smaller (the empty state). */
@@ -46,7 +51,7 @@ export function SupportedUnits({ layout = 'list', trademark = true, className }:
                 line; the widest mark (E-Stim Systems, 6:1) sets the well. */}
             <ul className={cn(compact ? 'space-y-1.5' : 'space-y-2')} aria-label="Units Masseuse.ai works with">
                 {SUPPORTED_UNITS.map((unit) => (
-                    <li key={unit.model} className={cn('flex min-w-0 items-center rounded-2xl bg-white/6 ring-1 ring-white/10', compact ? 'h-11 gap-3 px-1.5' : 'gap-3.5 p-3')}>
+                    <li key={`${unit.maker} ${unit.model}`} className={cn('flex min-w-0 items-center rounded-2xl bg-white/6 ring-1 ring-white/10', compact ? 'h-11 gap-3 px-1.5' : 'gap-3.5 p-3')}>
                         <div className={cn('grid shrink-0 place-items-center rounded-xl bg-ink px-2 ring-1 ring-white/10', compact ? 'h-8 w-[104px]' : 'h-14 w-40')}>
                             <img src={unit.mark} alt={unit.maker} className={cn('w-full object-contain', compact ? 'max-h-4.5' : 'max-h-10')} />
                         </div>

@@ -454,6 +454,7 @@ type proxyDriver struct {
 
 func (d *proxyDriver) Kind() estim.Kind                 { return d.found.Kind }
 func (d *proxyDriver) Label() string                    { return d.found.Label }
+func (d *proxyDriver) Identity() estim.Identity         { return d.found.Identity }
 func (d *proxyDriver) Port() string                     { return d.found.Port }
 func (d *proxyDriver) Capabilities() estim.Capabilities { return d.found.Capabilities }
 func (d *proxyDriver) Held() bool                       { return d.found.Held }

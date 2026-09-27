@@ -274,7 +274,7 @@ func TestHostServesAMastagoFamilyThroughAGuest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Kind() != estim.KindMastago || d.Label() != "Mastago TENS G-34CD" || d.Port() != "id-b" || d.Capabilities().LevelMax != 25 {
+	if d.Kind() != estim.KindMastago || d.Label() != "Mastogo Wireless TENS (G-34CD)" || d.Port() != "id-b" || d.Capabilities().LevelMax != 25 {
 		t.Fatalf("found = %s %s %s %+v", d.Kind(), d.Label(), d.Port(), d.Capabilities())
 	}
 	if h, ok := d.(estim.HeldReporter); !ok || h.Held() {

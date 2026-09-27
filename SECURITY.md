@@ -46,7 +46,7 @@ are acknowledged within three business days.
 - Its identity is an Ed25519 key stored with mode 0600 in its state
   directory. Deleting the directory revokes every pairing.
 - If a supported electrical stimulation device is within reach of the same
-  computer (the reference device is the Mastago TENS unit, over Bluetooth
+  computer (the reference device is the Mastogo Wireless TENS unit, over Bluetooth
   Low Energy), the connector relays the service's commands to it and its
   status back, over the same authenticated channel it uses for camera
   dials; the camera tunnel carries none of it. The connector holds the

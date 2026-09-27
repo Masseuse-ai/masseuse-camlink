@@ -187,7 +187,7 @@ func TestEstimLinkBluetoothUnit(t *testing.T) {
 	go func() { defer close(done); link.run(ctx) }()
 
 	sid, dev := svc.waitFor(t, "device")
-	if sid != "" || dev["kind"] != "mastago" || dev["connected"] != true || dev["label"] != "Mastago TENS G-12AB" {
+	if sid != "" || dev["kind"] != "mastago" || dev["connected"] != true || dev["label"] != "Mastogo Wireless TENS (G-12AB)" {
 		t.Fatalf("device report %q %v", sid, dev)
 	}
 	caps, _ := dev["capabilities"].(map[string]any)
@@ -197,7 +197,7 @@ func TestEstimLinkBluetoothUnit(t *testing.T) {
 	if unit.Level() != 0 || unit.Outputting() {
 		t.Fatal("a fresh connection must be released")
 	}
-	if !strings.Contains(out.String(), "Stimulation device connected") || link.rt.Descriptor().Label != "Mastago TENS G-12AB" {
+	if !strings.Contains(out.String(), "Stimulation device connected") || link.rt.Descriptor().Label != "Mastogo Wireless TENS (G-12AB)" {
 		t.Fatalf("console: %q, descriptor %+v", out.String(), link.rt.Descriptor())
 	}
 	mgr := &manager{log: log, estim: link, tunnels: map[string]*active{}}
@@ -282,7 +282,7 @@ func TestDeviceFinderRegistry(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := finderConfig{stateDir: t.TempDir(), log: log}
 	names := familyNames()
-	if len(names) == 0 || names[0] != "Mastago TENS (Bluetooth)" {
+	if len(names) == 0 || names[0] != "Mastogo Wireless TENS (Bluetooth)" {
 		t.Fatalf("families = %v; the Bluetooth unit is tried first", names)
 	}
 	// Every family on.
@@ -385,8 +385,8 @@ func TestEstimLinkTwoUnits(t *testing.T) {
 		}
 		return false
 	})
-	waitUntil(t, "the console list", func() bool { return strings.Contains(out.String(), "2  Mastago TENS G-34CD") })
-	if s := out.String(); !strings.Contains(s, "Stimulation units in reach (2)") || !strings.Contains(s, "1  Mastago TENS G-12AB  (serving this one)") || !strings.Contains(s, "Type a number and Enter") {
+	waitUntil(t, "the console list", func() bool { return strings.Contains(out.String(), "2  Mastogo Wireless TENS (G-34CD)") })
+	if s := out.String(); !strings.Contains(s, "Stimulation units in reach (2)") || !strings.Contains(s, "1  Mastogo Wireless TENS (G-12AB)  (serving this one)") || !strings.Contains(s, "Type a number and Enter") {
 		t.Fatalf("console: %q", s)
 	}
 
@@ -413,7 +413,7 @@ func TestEstimLinkTwoUnits(t *testing.T) {
 		}
 		return false
 	})
-	if !strings.Contains(out.String(), "Switching to Mastago TENS G-34CD.") {
+	if !strings.Contains(out.String(), "Switching to Mastogo Wireless TENS (G-34CD).") {
 		t.Fatalf("console: %q", out.String())
 	}
 	// A number off the list is said so.
@@ -494,14 +494,14 @@ func TestEstimLinkRemembersTheUnit(t *testing.T) {
 
 func TestUnitListing(t *testing.T) {
 	units := []estim.Unit{
-		{ID: "id-a", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true},
-		{ID: "id-b", Kind: estim.KindMastago, Label: "Mastago TENS G-34CD"},
+		{ID: "id-a", Kind: estim.KindMastago, Label: "Mastogo Wireless TENS (G-12AB)", Held: true},
+		{ID: "id-b", Kind: estim.KindMastago, Label: "Mastogo Wireless TENS (G-34CD)"},
 	}
 	serving := &estim.Descriptor{ID: "id-b", Connected: true}
 	got := unitListing(units, serving, true)
 	want := "Stimulation units in reach (2):\n" +
-		"  1  Mastago TENS G-12AB  (another program on this computer has it open)\n" +
-		"  2  Mastago TENS G-34CD  (serving this one)\n" +
+		"  1  Mastogo Wireless TENS (G-12AB)  (another program on this computer has it open)\n" +
+		"  2  Mastogo Wireless TENS (G-34CD)  (serving this one)\n" +
 		"Type a number and Enter to serve another unit; the phone can pick one too. A unit in use by a session is switched once the session stops it.\n"
 	if got != want {
 		t.Fatalf("listing:\n%s\nwant:\n%s", got, want)
@@ -544,7 +544,7 @@ func TestEstimLinkHeldUnitLine(t *testing.T) {
 	if !d.Held || d.ID != "held-1" {
 		t.Fatalf("descriptor: %+v", d)
 	}
-	if s := out.String(); !strings.Contains(s, "Stimulation device connected: Mastago TENS G-12AB.") || !strings.Contains(s, heldByAnotherLine) {
+	if s := out.String(); !strings.Contains(s, "Stimulation device connected: Mastogo Wireless TENS (G-12AB).") || !strings.Contains(s, heldByAnotherLine) {
 		t.Fatalf("console: %q", s)
 	}
 }

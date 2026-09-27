@@ -11,9 +11,17 @@ import (
 	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
-// LabelPrefix starts the label people see; the unit's own suffix
-// ("G-12AB") follows it.
-const LabelPrefix = "Mastago TENS"
+// Maker and Model name the unit for people (estim.Identity). Mastogo
+// names its category of units, not each unit, so the model is the
+// category's name; the unit's own suffix ("G-12AB") is its tag.
+const (
+	Maker = "Mastogo"
+	Model = "Wireless TENS"
+)
+
+// LabelPrefix starts the one-string label people see; the unit's own tag
+// follows it in parentheses.
+const LabelPrefix = Maker + " " + Model
 
 // LevelMaxDefault is the intensity cap that applies until the attached
 // session sets its own: a little over half the unit's scale.
@@ -40,8 +48,8 @@ func Capabilities() estim.Capabilities { return capabilities }
 // Driver is the estim.Driver for one connected unit.
 type Driver struct {
 	*Device
-	label string
-	log   *slog.Logger
+	identity estim.Identity
+	log      *slog.Logger
 	// ArmWindow is the countdown Arm writes; estim.MaxArmWindow unless a
 	// test shortens it.
 	ArmWindow time.Duration
@@ -54,15 +62,21 @@ type Driver struct {
 // unit open when the connector connected, so the two share the link.
 func (d *Driver) Held() bool { return d.held }
 
-// LabelFor is the label for a unit with the advertised name: the unit's
-// own suffix after the vendor prefix ("Mastago TENS G-12AB").
-func LabelFor(name string) string {
-	suffix := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), AdvertisedPrefix))
-	if suffix == "" {
-		return LabelPrefix
-	}
-	return LabelPrefix + " " + suffix
+// TagFor is a unit's tag from its advertised name: the unit's own suffix
+// after the vendor prefix ("G-12AB" from "MASTOGO G-12AB"); empty when the
+// name is the prefix alone.
+func TagFor(name string) string {
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), AdvertisedPrefix))
 }
+
+// IdentityFor names a unit with the advertised name in three parts.
+func IdentityFor(name string) estim.Identity {
+	return estim.Identity{Maker: Maker, Model: Model, Tag: TagFor(name)}
+}
+
+// LabelFor is the one-string label for a unit with the advertised name
+// ("Mastogo Wireless TENS (G-12AB)").
+func LabelFor(name string) string { return estim.LabelOf(IdentityFor(name)) }
 
 // Connect starts the protocol on an open link and verifies the unit
 // answers (AT+CMODE?). It does not touch the outputs; the Runtime releases
@@ -80,14 +94,17 @@ func Connect(ctx context.Context, conn ble.Conn, log *slog.Logger) (*Driver, err
 		_ = conn.Close()
 		return nil, fmt.Errorf("mastago: %s did not answer as a unit: %w", conn.Name(), err)
 	}
-	return &Driver{Device: dev, label: LabelFor(conn.Name()), log: log, ArmWindow: estim.MaxArmWindow}, nil
+	return &Driver{Device: dev, identity: IdentityFor(conn.Name()), log: log, ArmWindow: estim.MaxArmWindow}, nil
 }
 
 // Kind is estim.KindMastago.
 func (d *Driver) Kind() estim.Kind { return estim.KindMastago }
 
-// Label names the unit for people.
-func (d *Driver) Label() string { return d.label }
+// Label names the unit for people in one string.
+func (d *Driver) Label() string { return estim.LabelOf(d.identity) }
+
+// Identity names the unit in three parts (estim.IdentityReporter).
+func (d *Driver) Identity() estim.Identity { return d.identity }
 
 // Port is the system's identifier for the unit.
 func (d *Driver) Port() string { return d.ID() }

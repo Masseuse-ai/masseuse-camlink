@@ -163,7 +163,7 @@ func (f *Finder) List(ctx context.Context) ([]estim.Unit, error) {
 			continue
 		}
 		seen[a.ID] = true
-		units = append(units, estim.Unit{ID: a.ID, Kind: estim.KindMastago, Label: LabelFor(a.Name), Held: true})
+		units = append(units, estim.Unit{ID: a.ID, Kind: estim.KindMastago, Label: LabelFor(a.Name), Identity: IdentityFor(a.Name), Held: true})
 	}
 	sctx, cancel := context.WithTimeout(ctx, f.window())
 	defer cancel()
@@ -172,7 +172,7 @@ func (f *Finder) List(ctx context.Context) ([]estim.Unit, error) {
 		defer mu.Unlock()
 		if IsUnit(a) && !seen[a.ID] {
 			seen[a.ID] = true
-			units = append(units, estim.Unit{ID: a.ID, Kind: estim.KindMastago, Label: LabelFor(a.Name)})
+			units = append(units, estim.Unit{ID: a.ID, Kind: estim.KindMastago, Label: LabelFor(a.Name), Identity: IdentityFor(a.Name)})
 		}
 		return false
 	})
@@ -257,7 +257,7 @@ func (f *Finder) connect(ctx context.Context, c ble.Central, a ble.Advertisement
 // the system already holds, and the units advertising during one scan
 // window, with the ones the Pin would skip marked.
 func (f *Finder) Describe(ctx context.Context, out io.Writer) error {
-	fmt.Fprintf(out, "Bluetooth (Mastago TENS units, service %s):\n", strings.ToUpper(ServiceUUID.Short()))
+	fmt.Fprintf(out, "Bluetooth (%s units, service %s):\n", LabelPrefix, strings.ToUpper(ServiceUUID.Short()))
 	c, err := f.centralFor(ctx)
 	if err != nil {
 		fmt.Fprintf(out, "  not available: %v\n", err)

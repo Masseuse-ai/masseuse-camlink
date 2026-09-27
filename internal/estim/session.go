@@ -276,6 +276,13 @@ func (s *Session) deviceMessage(d Descriptor) map[string]any {
 		return nil
 	}
 	msg := map[string]any{"type": "device", "kind": d.Kind, "label": d.Label, "connected": d.Connected, "capabilities": d.Capabilities}
+	// The unit's name in three parts (Identity), each when the driver
+	// gave it; a service that predates them reads `label`.
+	for key, value := range map[string]string{"maker": d.Maker, "model": d.Model, "tag": d.Tag} {
+		if value != "" {
+			msg[key] = value
+		}
+	}
 	if d.ID != "" {
 		msg["id"] = d.ID
 	}

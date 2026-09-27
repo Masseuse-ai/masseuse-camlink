@@ -525,7 +525,7 @@ session on the paired phone uses this connector, attached to that session
 for as long as it lasts. The service's control plane decides what the device
 does; the connector holds it to fixed bounds and fails closed.
 
-The reference device is the Mastago TENS unit (the `MASTOGO G-xxxx`
+The reference device is the Mastogo Wireless TENS unit (the `MASTOGO G-xxxx`
 Bluetooth Low Energy unit; `kind` `mastago`): one output channel,
 intensity 0..25, 32 programs fixed in its firmware, a countdown, electrode
 contact detection, one power range. The design is device-neutral: a driver
@@ -697,13 +697,25 @@ it changes:
 
 | type | fields | when |
 |---|---|---|
-| `device` | `kind`, `label`, `connected`, `capabilities`; `id` once a unit has been found; `held` when true; `units` once listed; `reason` while not connected | the selected device is found or lost, or the units in reach change |
+| `device` | `kind`, `label`, `connected`, `capabilities`; `maker`, `model`, `tag` when the driver names them; `id` once a unit has been found; `held` when true; `units` once listed; `reason` while not connected | the selected device is found or lost, or the units in reach change |
 
+`maker`, `model` and `tag` are the unit's name in three parts, declared by
+the driver that recognizes it (connectors from v0.29.0): the maker
+("DG-LAB", "Mastogo"), the model ("Coyote 3.0"; "Wireless TENS" where the
+maker names its category and not the unit) and the tag that tells this
+unit from another of its family (a Bluetooth unit's short id, a serial
+port's base name, an advertised suffix). Each is at most 64 characters.
+The service composes what a screen needs: the maker and the model as a
+title, the model alone in a strip, the tag only beside a twin. `label` is
+the three in one string ("Mastogo Wireless TENS (G-12AB)") for a service
+that predates them; a unit whose driver does not name the parts has its
+`model` and `tag` read out of its label by the connector and no `maker`.
 `id` is what the system calls the selected unit (a Bluetooth peripheral's
 identifier, a serial port path): the string a `device_select` names.
 `held` says another program on this computer has the unit open (7.1).
 `units` is the list of units in reach, the selected one included, each
-`{id, kind, label, held}`; a connector that has not listed yet sends none.
+`{id, kind, label, maker, model, tag, held}` (the three name parts as on
+the device); a connector that has not listed yet sends none.
 `reason`, sent while `connected` is false, is why the unit went, so the
 service can say what to do about it: `idle_off` (the unit switched itself
 off after sitting idle at zero, as a Mastago does after a few minutes; its
@@ -741,7 +753,7 @@ name, which the connector passes through as it is:
 
 | `kind` | device | driver |
 |---|---|---|
-| `mastago` | Mastago TENS unit, Bluetooth Low Energy | in this program |
+| `mastago` | Mastogo Wireless TENS unit, Bluetooth Low Energy | in this program |
 | `tens` | any other transcutaneous electrical nerve stimulation unit | none yet |
 | any other | the helper's family | a unit driver helper |
 

@@ -322,11 +322,16 @@ straight to the room, as today, with no detour and no added delay.
 
 ### Names
 
-The connector reports units by the labels its drivers give them
-(`Mastago TENS G-12AB`, the Mastago family's kind `mastago`); the list of
-units that work uses the makers' names as the phone app has them, `Mastogo`
-among them, as the unit advertises itself. Both stand; the list is the
-brand's, the labels are the connector's.
+A driver names its unit in three parts (`estim.Identity`: the maker, the
+model, and the tag that tells one unit of a family from another; the
+family's kind stays its wire word, `mastago` for the Mastogo units), and
+the one-string label beside them is the three composed
+(`Mastogo Wireless TENS (G-12AB)`). The screens compose from the parts: the
+Unit page's rows and Serving card title a unit "Maker Model" over the link
+it is on, the Ready tile names the model alone, and the tag shows only in
+a row's caption when two units of one family are listed. The list of units
+that work (`SupportedUnits`) uses the same makers and models under the
+makers' marks.
 
 ## 5. Before a tag
 

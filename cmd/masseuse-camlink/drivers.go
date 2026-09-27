@@ -14,7 +14,7 @@ import (
 )
 
 // The stimulation device families this build can serve. Each family is
-// registered with the command-line flags it needs: the Mastago TENS unit
+// registered with the command-line flags it needs: the Mastogo Wireless TENS unit
 // over Bluetooth, the connector's reference device, from this file; any
 // other from a file of its own, appended to families in an init function,
 // so that a build without the family drops the one file. The Runtime tries
@@ -96,7 +96,7 @@ func saveEstimSelection(stateDir string, unit string) error {
 
 // families is the registry, in the order tried.
 var families = []deviceFamily{{
-	name: "Mastago TENS (Bluetooth)",
+	name: mastago.LabelPrefix + " (Bluetooth)",
 	finder: func(cfg finderConfig) estim.Finder {
 		if familyOff(*estimBLE) {
 			return nil

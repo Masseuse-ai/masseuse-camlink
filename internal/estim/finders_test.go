@@ -129,8 +129,8 @@ func (f *listingFinder) Select(unit string)                         { f.selected
 func TestFindersListAndSelectAcrossFamilies(t *testing.T) {
 	ctx := context.Background()
 	ble := &listingFinder{stubFinder: stubFinder{name: "ble"}, units: []estim.Unit{
-		{ID: "id-a", Kind: estim.KindMastago, Label: "Mastago TENS G-12AB", Held: true},
-		{ID: "id-b", Kind: estim.KindMastago, Label: "Mastago TENS G-34CD"},
+		{ID: "id-a", Kind: estim.KindMastago, Label: "Mastogo Wireless TENS (G-12AB)", Held: true},
+		{ID: "id-b", Kind: estim.KindMastago, Label: "Mastogo Wireless TENS (G-34CD)"},
 	}}
 	plain := &stubFinder{name: "plain"}
 	serial := &listingFinder{stubFinder: stubFinder{name: "serial"}, listErr: errors.New("no serial ports"),

@@ -356,7 +356,7 @@ func (r *Runtime) Open(ctx context.Context) error {
 		}
 		return err
 	}
-	desc := Descriptor{Kind: d.Kind(), Label: d.Label(), ID: d.Port(), Connected: true, Capabilities: d.Capabilities()}
+	desc := Descriptor{Kind: d.Kind(), Label: d.Label(), Identity: IdentityOf(d), ID: d.Port(), Connected: true, Capabilities: d.Capabilities()}
 	if h, ok := d.(HeldReporter); ok {
 		desc.Held = h.Held()
 	}
@@ -402,6 +402,12 @@ func (r *Runtime) ListUnits(ctx context.Context) ([]Unit, error) {
 	}
 	if units == nil {
 		units = []Unit{}
+	}
+	// A family that predates the three-part name is named from its label.
+	for i := range units {
+		if units[i].Model == "" {
+			units[i].Identity = IdentityFromLabel(units[i].Label)
+		}
 	}
 	r.st.Lock()
 	units = onePerID(units, r.last, r.device != nil)
@@ -492,14 +498,18 @@ func (r *Runtime) SelectUnit(ctx context.Context, unit string) error {
 	return r.Open(ctx)
 }
 
-// isUnit says whether unit names d: its system identifier, its label, or
-// the label's last word (the Mastago's advertised suffix).
+// isUnit says whether unit names d: its system identifier, its label, its
+// tag (the Mastogo's advertised suffix, a Coyote's short id), or the
+// label's last word with any parentheses off.
 func isUnit(d Driver, unit string) bool {
 	if d.Port() == unit || strings.EqualFold(d.Label(), unit) {
 		return true
 	}
+	if tag := IdentityOf(d).Tag; tag != "" && strings.EqualFold(tag, unit) {
+		return true
+	}
 	words := strings.Fields(d.Label())
-	return len(words) > 0 && strings.EqualFold(words[len(words)-1], unit)
+	return len(words) > 0 && strings.EqualFold(strings.Trim(words[len(words)-1], "()"), unit)
 }
 
 // fault forgets a device that stopped answering; the caller holds dev.
