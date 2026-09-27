@@ -22,7 +22,7 @@ import { Card, CardLabel, Well } from '../ui/Card';
 import { Page } from '../ui/Page';
 import { Scene } from '../ui/Scene';
 import { SupportedUnits, TRADEMARK_LINE } from '../ui/SupportedUnits';
-import { UnitCard, familyName } from '../ui/UnitCard';
+import { UnitCard, linkName, unitName } from '../ui/UnitCard';
 
 /** The connector's word on a unit gone, by the reason it knows (cmd/masseuse-camlink/estim.go). */
 export function disconnectedLine(reason: string | undefined): { title: string; text: string } {
@@ -52,8 +52,8 @@ function ServingCard({ unit }: { unit: Descriptor }) {
             <CardLabel icon={Zap} tone={armed ? 'rose' : 'dim'} trailing={armed ? <Badge variant="rose">Armed by a session</Badge> : <Badge variant="mint">Held at zero</Badge>}>
                 Serving
             </CardLabel>
-            <h2 className="type-title text-bone">{unit.label}</h2>
-            <p className="type-secondary mt-0.5 text-bone/55">{familyName(unit.kind, unit.id)}</p>
+            <h2 className="type-title text-bone">{unitName(unit.kind, unit.label)}</h2>
+            <p className="type-secondary mt-0.5 text-bone/55">{linkName(unit)}</p>
             <p className="type-body mt-3 text-bone/75">
                 {armed
                     ? `A session on your phone has it armed, up to ${armed.levelBound} of ${unit.capabilities.levelMax}. It goes back to zero when the session ends, when the service goes quiet, or when you close this window.`
@@ -216,7 +216,7 @@ export function Unit() {
                     <ScrollArea className="min-h-0 flex-1" viewportClassName="pb-0.5">
                         <RadioGroup value={choice} onValueChange={(v) => void select(String(v))} disabled={armed} className="gap-2">
                             {units.map((u) => (
-                                <UnitCard key={u.id} unit={u} serving={unit} disabled={armed} />
+                                <UnitCard key={u.id} unit={u} serving={unit} disabled={armed} disambiguate={units.some((other) => other.id !== u.id && other.kind === u.kind)} />
                             ))}
                         </RadioGroup>
                     </ScrollArea>
@@ -245,7 +245,7 @@ export function Unit() {
                         <CardLabel icon={Power} trailing={<Badge variant="amber">Disconnected</Badge>}>
                             Last served
                         </CardLabel>
-                        <h2 className="type-title text-bone">{unit?.label}</h2>
+                        <h2 className="type-title text-bone">{unit ? unitName(unit.kind, unit.label) : ''}</h2>
                         <Alert variant="warn" className="mt-3">
                             <TriangleAlert />
                             <AlertTitle>{gone.title}</AlertTitle>
