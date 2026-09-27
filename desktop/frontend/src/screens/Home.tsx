@@ -28,7 +28,7 @@ import { MediaAccessAlert, mediaStanding, useMediaAsk } from '../ui/MediaAccess'
 import { Page } from '../ui/Page';
 import { Scene } from '../ui/Scene';
 import { StatusChip, type Tone } from '../ui/StatusChip';
-import { familyName } from '../ui/UnitCard';
+import { linkName, unitName } from '../ui/UnitCard';
 
 function rate(bps: number): string {
     if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} Mb/s`;
@@ -228,8 +228,8 @@ export function Home() {
             <SummaryCard
                 icon={Zap}
                 label="Unit"
-                value={unit?.connected ? unit.label : unit ? unit.label : 'No unit'}
-                note={unit?.connected ? (unit.armed ? `Armed · up to ${unit.armed.levelBound} of ${unit.capabilities.levelMax}` : `${familyName(unit.kind, unit.id)} · held at zero`) : unit ? 'Disconnected; reconnects on its own' : 'Optional; found on its own when switched on'}
+                value={unit ? unitName(unit.kind, unit.label) : 'No unit'}
+                note={unit?.connected ? (unit.armed ? `Armed · up to ${unit.armed.levelBound} of ${unit.capabilities.levelMax}` : `${linkName(unit)} · held at zero`) : unit ? 'Disconnected; reconnects on its own' : 'Optional; found on its own when switched on'}
                 badge={unit?.connected ? (unit.armed ? { text: 'Armed', variant: 'rose' } : { text: 'Held at zero', variant: 'mint' }) : unit ? { text: 'Disconnected', variant: 'amber' } : undefined}
                 step="unit"
                 disabled={Boolean(unit?.armed)}
