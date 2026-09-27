@@ -143,8 +143,10 @@ Native, built in `desktop/menu.go`, in each platform's shape.
 - Windows: **File** (Check for updates… · the same two status lines · Quit
   Masseuse.ai Ctrl+Q) · **Edit** · **Help** (… · About Masseuse.ai). The
   title bar and the menu bar are drawn in the brand's colours whatever mode
-  Windows itself is in (`desktop/theme.go`; the dropdowns stay the
-  system's).
+  Windows itself is in (`desktop/theme.go`), and the dropdowns are dark
+  under them in either mode: the bar's background reaches them, and
+  `desktop/theme_windows.go` sets the process's menu colour policy to dark
+  so Windows draws their text light.
 - The status lines say what the connector's first lines and update lines
   say in the terminal today (`Masseuse.ai v0.13.0 · masseuse-camlink`; `Up
   to date`, `Looking for a newer release…`, `v0.13.1 downloaded and
