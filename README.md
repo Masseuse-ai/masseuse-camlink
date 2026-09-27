@@ -59,11 +59,12 @@ drivers inside itself and unpacks them under
 nothing to extract and nothing else to install (releases before 0.13 were
 a zip, and opening the program from inside Explorer's zip preview left
 ffmpeg and the drivers behind in the zip; the one file has nothing to lose
-that way). The package is signed by Principled Labs, Inc. with Azure
-Artifact Signing; while a release is still new to Microsoft, Windows may
-ask before the first start whether to run it: *More info*, then *Run
-anyway* (a release published without the signing credentials is unsigned
-and always asks). Video is encoded by Windows' own Media Foundation H.264
+that way). The package and the programs inside it are signed by Principled
+Labs, Inc. with Azure Artifact Signing (every release; VERIFY.md says how
+to check the signer). While a release is still new to Microsoft,
+SmartScreen may ask before the first start whether to run it; the prompt
+names the publisher, and *More info*, then *Run anyway* opens it. Video is
+encoded by Windows' own Media Foundation H.264
 encoder (the graphics chip's, or the software one every Windows edition
 carries except the N editions, which need Microsoft's *Media Feature Pack*
 from Settings, *Optional features*). The program serves the camera and

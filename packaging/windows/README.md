@@ -17,7 +17,7 @@ Masseuse.exe               the desktop window (desktop/, docs/DESKTOP.md), built
   THIRD_PARTY.md           ffmpeg's provenance and licence
   licenses/                the texts from the ffmpeg and opus tarballs built
   <manifest, footer>       each file's name, size and SHA-256; where the payload begins and ends
-<Authenticode signature>   Azure Artifact Signing, Principled Labs, Inc., when the release has the credentials
+<Authenticode signature>   Azure Artifact Signing, Principled Labs, Inc., on every release
 ```
 
 The first time it runs, the window unpacks the payload under the state
@@ -81,18 +81,19 @@ the FTDI driver comes from Windows Update).
 
 ## Signing
 
-Every program in the package is Authenticode-signed when the release runs
-with the credentials: `ffmpeg.exe` and each helper before packing (each
-runs as a program of its own once unpacked, and Smart App Control judges
-every one), then `Masseuse.exe` with the payload inside it. The
-signatures are made by [Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/)
+Every program in the package is Authenticode-signed on every release:
+`ffmpeg.exe` and each helper before packing (each runs as a program of
+its own once unpacked, and Smart App Control judges every one), then
+`Masseuse.exe` with the payload inside it. The signatures are made by
+[Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/)
 (Trusted Signing, renamed): Microsoft's own CA, short-lived certificates,
 RFC 3161 timestamps, RSA (Smart App Control does not accept ECC), and no
 key anywhere: the workflow logs in to Azure with GitHub's OIDC token, the
 same way it signs keyless with cosign. The publisher Windows shows is the
 validated legal entity, **Principled Labs, Inc.**
 
-What the repository needs, all set in Settings:
+What the repository needs, all on the `release` environment (Settings,
+Environments):
 
 | kind | name | value |
 | --- | --- | --- |
@@ -111,9 +112,18 @@ app registration with a **federated credential** for GitHub Actions whose
 subject is `repo:Masseuse-ai/masseuse-camlink:environment:release` (the
 `windows-app` job runs in the `release` environment for exactly this; the
 environment needs no protection rules), and that application given the
-role *Artifact Signing Certificate Profile Signer* on the account. Without
-the secret and the endpoint variable, the "Whether this run signs" step
-says so and the package ships unsigned.
+role *Artifact Signing Certificate Profile Signer* on the account. The
+"The signing credentials" step stops the job when any of the six is
+missing: no release is published unsigned.
+
+The certificate itself changes every few days (Artifact Signing issues
+short-lived certificates), so its thumbprint and serial number identify
+nothing for long. What stays is the subject, `CN=Principled Labs, Inc.`,
+and the enhanced key usage the identity validation is issued under,
+`1.3.6.1.4.1.311.97.220938696.428520490.320658000.645134319`, beside the
+code signing usage `1.3.6.1.5.5.7.3.3`; the workflow's "Windows' verdict"
+step requires both on every signed file, together with a timestamp, and
+`VERIFY.md` has a reader check the same.
 
 Signing is a per-build input, so a rebuild can never match a release byte
 for byte; `cmd/pestrip` (`internal/pesig`) removes the signature, the way
