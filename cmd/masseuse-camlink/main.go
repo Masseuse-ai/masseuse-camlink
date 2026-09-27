@@ -16,7 +16,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -37,7 +36,7 @@ import (
 
 func main() {
 	var (
-		service    = flag.String("service", envOr("MASSEUSE_CAMLINK_SERVICE", "https://masseuse.ai"), "the masseuse.ai service")
+		service    = flag.String("service", envOr("MASSEUSE_CAMLINK_SERVICE", "https://masseuse.ai"), "the masseuse.ai service (https; http for a service on this computer)")
 		stateDir   = flag.String("state-dir", envOr("MASSEUSE_CAMLINK_STATE_DIR", defaultStateDir()), "where the identity key, pairings and camera choice live")
 		logLevel   = flag.String("log-level", "info", "debug, info, warn or error")
 		version    = flag.Bool("version", false, "print the version and exit")
@@ -73,8 +72,8 @@ func main() {
 		exit(2)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	if !strings.HasPrefix(*service, "https://") {
-		fmt.Fprintln(os.Stderr, "-service must be an https:// URL")
+	if !serviceURLAllowed(*service) {
+		fmt.Fprintln(os.Stderr, "-service must be an https:// URL (http:// for a service on this computer only)")
 		exit(2)
 	}
 	// The Windows package carries ffmpeg.exe and the unit driver helpers
