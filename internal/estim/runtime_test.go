@@ -143,7 +143,7 @@ func TestRuntimeSettings(t *testing.T) {
 	}
 	defaults := rt.Settings()
 	// Refused whole; nothing changes.
-	for _, bad := range []estim.Settings{{PowerMode: "low", LevelMax: 10}, {PowerMode: "normal", LevelMax: 100}, {PowerMode: "", LevelMax: 10}, {PowerMode: "normal", LevelMax: -1}} {
+	for _, bad := range []estim.Settings{{PowerMode: "low", LevelMax: 10}, {PowerMode: "normal", LevelMax: 101}, {PowerMode: "", LevelMax: 10}, {PowerMode: "normal", LevelMax: -1}} {
 		if released, err := rt.SetSettings(ctx, bad); err == nil || released {
 			t.Errorf("%+v accepted", bad)
 		}
@@ -689,7 +689,7 @@ func TestParseSettings(t *testing.T) {
 		t.Fatalf("%+v %v", s, err)
 	}
 	for _, bad := range []string{
-		`{"powerMode":"low","levelMax":15}`, `{"powerMode":"NORMAL","levelMax":15}`, `{"powerMode":"normal","levelMax":100}`,
+		`{"powerMode":"low","levelMax":15}`, `{"powerMode":"NORMAL","levelMax":15}`, `{"powerMode":"normal","levelMax":101}`,
 		`{"powerMode":"normal","levelMax":-1}`, `{"powerMode":"normal","levelMax":15.5}`, `{"powerMode":"normal","levelMax":"15"}`,
 		`{"powerMode":"normal"}`, `{"levelMax":15}`, `{}`, `[]`, `null`, ``, `{"powerMode":null,"levelMax":15}`,
 	} {

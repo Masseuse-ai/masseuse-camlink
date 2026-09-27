@@ -689,7 +689,7 @@ session:
 | `armed` | `armed`, `expiresAt` (RFC 3339 or null), `heldOff` (always false) | with `device_status` |
 | `device_telemetry` | `frames` (at most 32) | every 2 s while attached, when frames were sampled |
 | `device_ack` | `commandId`, `ok`, `result` or `error`, `status`; `code` on a refusal | for every command |
-| `device_settings` | `powerMode` (`normal` or `high`), `levelMax` (0..99) | the settings in force: after every attach and every `device_settings` control |
+| `device_settings` | `powerMode` (`normal` or `high`), `levelMax` (0..100, the device's own `levelMax` at most) | the settings in force: after every attach and every `device_settings` control |
 | `detached` | `reason` | when the connector detaches on its own |
 
 and at connector level (`sessionId` `""`), after every hello and whenever

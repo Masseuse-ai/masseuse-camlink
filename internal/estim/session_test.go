@@ -235,7 +235,7 @@ func TestSessionSettings(t *testing.T) {
 	for _, bad := range []string{
 		`{"type":"device_settings","sessionId":"other","powerMode":"normal","levelMax":5}`,
 		`{"type":"device_settings","sessionId":"sess-1","powerMode":"low","levelMax":5}`,
-		`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":100}`,
+		`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal","levelMax":101}`,
 		`{"type":"device_settings","sessionId":"sess-1","powerMode":"normal"}`,
 	} {
 		s.Handle(ctx, "sess-1", control(bad))
