@@ -9,13 +9,11 @@
 // never sees the camera or the microphone, and it speaks to the service
 // only through the connector.
 //
-// The two ends live here. The Host side is the connector's: it spawns the
-// helper and presents it as an estim.Finder (with Lister and Selector) whose
-// Find returns a Driver that forwards every call. The guest side, Serve, is
-// what a helper program runs: it answers the Host's requests from a real
-// Finder and Driver. Both ends are in the connector's module, so a helper
-// built from a tree that carries this package (the private one does) needs
-// no exported API.
+// The wire, and the guest side a helper program runs (Main, Serve), are
+// the unit driver SDK's, github.com/Masseuse-ai/camlink-unit-sdk/helper,
+// aliased here; the Host side is this package's: it spawns the helper and
+// presents it as an estim.Finder (with Lister and Selector) whose Find
+// returns a Driver that forwards every call.
 //
 // Wire: newline-delimited JSON on the helper's stdin and stdout. A request
 // is {"id", "method", "params"}; its answer {"id", "result"} or {"id",
@@ -30,187 +28,67 @@
 // estim.ErrCancelled, "armed" estim.ErrArmed.
 package helper
 
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"strings"
+import sdk "github.com/Masseuse-ai/camlink-unit-sdk/helper"
 
-	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
-)
-
-// Protocol is the version both ends speak; `hello` reports it.
-const Protocol = 1
+// Protocol is the version both ends speak; `hello` reports it. Version 2
+// added the actuator model (`actuate`, `readings`, and `find`'s
+// `actuators` and `sensors`); a helper of version 1 is served as before.
+const Protocol = sdk.Protocol
 
 // Prefix is what a helper program's file name starts with in the units
 // directory: `camlink-unit-<name>` (`.exe` on Windows).
-const Prefix = "camlink-unit-"
+const Prefix = sdk.Prefix
 
 // Methods.
 const (
-	MethodHello     = "hello"
-	MethodDescribe  = "describe"
-	MethodList      = "list"
-	MethodSelect    = "select"
-	MethodFind      = "find"
-	MethodRelease   = "release"
-	MethodArm       = "arm"
-	MethodRenewArm  = "renewArm"
-	MethodStatus    = "status"
-	MethodTelemetry = "telemetry"
-	MethodExecute   = "execute"
-	MethodClose     = "close"
-	// MethodCancel is a notification from the Host: the execute with the
-	// id given should stop as soon as it can (estim.Driver.Execute's
-	// cancelled).
-	MethodCancel = "cancel"
+	MethodHello     = sdk.MethodHello
+	MethodDescribe  = sdk.MethodDescribe
+	MethodList      = sdk.MethodList
+	MethodSelect    = sdk.MethodSelect
+	MethodFind      = sdk.MethodFind
+	MethodRelease   = sdk.MethodRelease
+	MethodArm       = sdk.MethodArm
+	MethodRenewArm  = sdk.MethodRenewArm
+	MethodStatus    = sdk.MethodStatus
+	MethodTelemetry = sdk.MethodTelemetry
+	MethodExecute   = sdk.MethodExecute
+	MethodActuate   = sdk.MethodActuate
+	MethodReadings  = sdk.MethodReadings
+	MethodClose     = sdk.MethodClose
+	MethodCancel    = sdk.MethodCancel
 )
 
 // Error codes.
 const (
-	CodeNoDevice    = "no_device"
-	CodeLoss        = "loss"
-	CodeCancelled   = "cancelled"
-	CodeArmed       = "armed"
-	CodeNoDriver    = "no_driver"
-	CodeUnsupported = "unsupported"
-	CodeError       = "error"
+	CodeNoDevice    = sdk.CodeNoDevice
+	CodeLoss        = sdk.CodeLoss
+	CodeCancelled   = sdk.CodeCancelled
+	CodeArmed       = sdk.CodeArmed
+	CodeNoActuator  = sdk.CodeNoActuator
+	CodeNoDriver    = sdk.CodeNoDriver
+	CodeUnsupported = sdk.CodeUnsupported
+	CodeError       = sdk.CodeError
 )
 
-// envelope is one line either way. A request has Method (and ID unless it
-// is a notification); an answer has ID and Result or Error.
-type envelope struct {
-	ID     *uint64         `json:"id,omitempty"`
-	Method string          `json:"method,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *wireError      `json:"error,omitempty"`
-}
+// The wire types and the guest side.
+type (
+	Hello      = sdk.Hello
+	Found      = sdk.Found
+	Options    = sdk.Options
+	CodedError = sdk.CodedError
+)
 
-type wireError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Reason  string `json:"reason,omitempty"`
-}
+var (
+	// Serve answers a Host on in/out from a finder: what a helper program
+	// runs. Main wraps it with the flags the Host passes.
+	Serve = sdk.Serve
+	Main  = sdk.Main
+	// ErrExited says the helper process ended while a call was waiting.
+	ErrExited = sdk.ErrExited
+)
 
-// Hello is what a helper says about itself.
-type Hello struct {
-	Protocol int `json:"protocol"`
-	// Name is the family's name, what messages call it: the file name's
-	// suffix, as a rule ("example" for camlink-unit-example).
-	Name string `json:"name"`
-	// Kinds the helper's driver may report (estim.Kind).
-	Kinds []estim.Kind `json:"kinds"`
-}
-
-// Found is `find`'s answer: the device opened, as the Host needs to present
-// it before any other call.
-type Found struct {
-	Kind  estim.Kind `json:"kind"`
-	Label string     `json:"label"`
-	// Identity: the unit's name in three parts (`maker`, `model`, `tag`;
-	// estim.IdentityReporter). A helper that predates them sends none
-	// and the Host names the unit from Label.
-	estim.Identity
-	Port         string             `json:"port"`
-	Capabilities estim.Capabilities `json:"capabilities"`
-	// Held: another program on this computer has the unit open (estim.HeldReporter).
-	Held bool `json:"held"`
-	// RenewsArm: the driver has a countdown to renew (estim.ArmRenewer).
-	RenewsArm bool `json:"renewsArm"`
-}
-
-type describeResult struct {
-	Text string `json:"text"`
-}
-
-type listResult struct {
-	Units []estim.Unit `json:"units"`
-}
-
-type selectParams struct {
-	Unit string `json:"unit"`
-}
-
-type armParams struct {
-	PowerMode string `json:"powerMode"`
-}
-
-type renewArmParams struct {
-	// Until is RFC 3339 with nanoseconds.
-	Until string `json:"until"`
-}
-
-type statusResult struct {
-	Status estim.Status `json:"status"`
-}
-
-type telemetryResult struct {
-	Frame estim.Frame `json:"frame"`
-}
-
-type executeParams struct {
-	Command  estim.Command `json:"command"`
-	LevelMax int           `json:"levelMax"`
-}
-
-type executeResult struct {
-	Result estim.Result `json:"result"`
-}
-
-type closeParams struct {
-	Restore bool `json:"restore"`
-}
-
-type cancelParams struct {
-	ID uint64 `json:"id"`
-}
-
-// ErrExited says the helper process ended (or never started) while a call
-// was waiting on it. Driver calls report it as a loss (the unit stopped
-// answering, as far as the connector can tell).
-var ErrExited = errors.New("helper: the helper program ended")
-
-// toWire turns a Go error into its wire form, keeping the connector's own
-// errors recognizable on the other side.
-func toWire(err error) *wireError {
-	var loss *estim.LossError
-	switch {
-	case errors.As(err, &loss):
-		return &wireError{Code: CodeLoss, Message: err.Error(), Reason: loss.Reason}
-	case errors.Is(err, estim.ErrNoDevice):
-		return &wireError{Code: CodeNoDevice, Message: err.Error()}
-	case errors.Is(err, estim.ErrCancelled):
-		return &wireError{Code: CodeCancelled, Message: err.Error()}
-	case errors.Is(err, estim.ErrArmed):
-		return &wireError{Code: CodeArmed, Message: err.Error()}
-	}
-	return &wireError{Code: CodeError, Message: err.Error()}
-}
-
-// fromWire is toWire's inverse.
-func fromWire(e *wireError) error {
-	if e == nil {
-		return nil
-	}
-	switch e.Code {
-	case CodeLoss:
-		return &estim.LossError{Reason: e.Reason, Err: errors.New(e.Message)}
-	case CodeNoDevice:
-		// The message is most often ErrNoDevice's own text with a detail
-		// after it; wrapping keeps errors.Is without saying it twice.
-		if detail, ok := strings.CutPrefix(e.Message, estim.ErrNoDevice.Error()); ok {
-			detail = strings.TrimPrefix(detail, ": ")
-			if detail == "" {
-				return estim.ErrNoDevice
-			}
-			return fmt.Errorf("%w: %s", estim.ErrNoDevice, detail)
-		}
-		return fmt.Errorf("%w: %s", estim.ErrNoDevice, e.Message)
-	case CodeCancelled:
-		return estim.ErrCancelled
-	case CodeArmed:
-		return estim.ErrArmed
-	}
-	return fmt.Errorf("helper: %s: %s", e.Code, e.Message)
-}
+// ExitGrace and ExitCloseGrace are Serve's, for the tests that time them.
+const (
+	ExitGrace      = sdk.ExitGrace
+	ExitCloseGrace = sdk.ExitCloseGrace
+)

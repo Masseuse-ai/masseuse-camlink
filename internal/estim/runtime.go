@@ -356,7 +356,7 @@ func (r *Runtime) Open(ctx context.Context) error {
 		}
 		return err
 	}
-	desc := Descriptor{Kind: d.Kind(), Label: d.Label(), Identity: IdentityOf(d), ID: d.Port(), Connected: true, Capabilities: d.Capabilities()}
+	desc := Descriptor{Kind: d.Kind(), Label: d.Label(), Identity: IdentityOf(d), ID: d.Port(), Connected: true, Capabilities: d.Capabilities(), Actuators: ActuatorsOf(d), Sensors: SensorsOf(d)}
 	if h, ok := d.(HeldReporter); ok {
 		desc.Held = h.Held()
 	}
@@ -465,10 +465,6 @@ func sameUnits(a, b []Unit) bool {
 	}
 	return true
 }
-
-// ErrArmed is returned by a selection made while the device is armed: the
-// attached session is on the unit held, and the phone stops it first.
-var ErrArmed = errors.New("estim: the unit is armed; stop it first")
 
 // SelectUnit restricts the finders to one unit (the picker, the service's
 // `device_select`): the unit held, when it is another, is released to zero

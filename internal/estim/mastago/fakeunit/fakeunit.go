@@ -452,6 +452,9 @@ func (c *Conn) Read(ctx context.Context, service, char ble.UUID) ([]byte, error)
 // Disconnected is closed when the link drops.
 func (c *Conn) Disconnected() <-chan struct{} { return c.disconnected }
 
+// MTU is the default payload: the fake negotiates nothing.
+func (c *Conn) MTU() int { return ble.DefaultMTU }
+
 // Close drops the link.
 func (c *Conn) Close() error {
 	c.drop()

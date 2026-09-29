@@ -107,25 +107,29 @@ device call is in flight.
 ### 3.1 Methods
 
 Each one is one method of the connector's `estim.Finder` or `estim.Driver`
-(`internal/estim/estim.go`), so their meaning is documented there and in
-PROTOCOL.md section 7; the wire shapes are these. Types named in
-backticks are the connector's, serialized as its own protocol serializes
-them (PROTOCOL.md 7.3): `Unit`, `Capabilities`, `Status`, `Frame`,
-`Command`, `Result`.
+(the unit driver SDK's `unit.Finder` and `unit.Driver`,
+`github.com/Masseuse-ai/camlink-unit-sdk/unit`, which `internal/estim`
+aliases), so their meaning is documented there and in PROTOCOL.md
+section 7; the wire shapes are these. Types named in backticks are the
+SDK's, serialized as the connector's own protocol serializes them
+(PROTOCOL.md 7.3): `Unit`, `Capabilities`, `Status`, `Frame`, `Command`,
+`Result`, `Actuator`, `Sensor`, `Actuate`, `Reading`.
 
 | method | params | result | what |
 | --- | --- | --- | --- |
-| `hello` | none | `{"protocol": 1, "name": "<name>", "kinds": ["<kind>", ...]}` | who the helper is; `protocol` must be `1`, `name` the family's short name, `kinds` every `kind` its drivers may report |
+| `hello` | none | `{"protocol": 2, "name": "<name>", "kinds": ["<kind>", ...]}` | who the helper is; `protocol` is `1` or `2` (version 2 only added to version 1, and the connector serves both), `name` the family's short name, `kinds` every `kind` its drivers may report |
 | `describe` | none | `{"text": "..."}` | what the family can see, for `estim probe`: text as the helper's `Describe` writes it, lines ending in `\n` |
 | `list` | none | `{"units": [Unit, ...]}` | the family's units in reach, without taking any (`estim.Lister`); `unsupported` if the family cannot list |
 | `select` | `{"unit": "<id or name>"}` | `{}` | restrict the family to one unit; `""` lifts it (`estim.Selector`). A unit of another family never matches |
-| `find` | none | `{"kind", "label", "maker", "model", "tag", "port", "capabilities": Capabilities, "held": bool, "renewsArm": bool}` | find and open the device; `no_device` when none. A device still open from an earlier `find` is closed (restoring the unit) before the search. `maker`, `model` and `tag` are the unit's name in three parts (`estim.Identity`: the maker, the model, and what tells this unit from another of its family, a port's base name or a short id); `label` is the three in one string. A helper whose driver is an `estim.IdentityReporter` sends them (as `list` does on each `Unit`); the connector names a unit without them from its label |
+| `find` | none | `{"kind", "label", "maker", "model", "tag", "port", "capabilities": Capabilities, "held": bool, "renewsArm": bool, "actuators": [Actuator, ...], "sensors": [Sensor, ...]}` | find and open the device; `no_device` when none. A device still open from an earlier `find` is closed (restoring the unit) before the search. `maker`, `model` and `tag` are the unit's name in three parts (`estim.Identity`: the maker, the model, and what tells this unit from another of its family, a port's base name or a short id); `label` is the three in one string. A helper whose driver is an `estim.IdentityReporter` sends them (as `list` does on each `Unit`); the connector names a unit without them from its label |
 | `release` | none | `{}` | the device to zero, output stopped, its own controls live; a device with several power ranges back in the one it was found in at `find` (its own setting), whatever range `arm` selected |
 | `arm` | `{"powerMode": "normal" or "high"}` | `{}` | arm in the range |
 | `renewArm` | `{"until": "<RFC 3339>"}` | `{}` | bring the device's own countdown up to the time (`estim.ArmRenewer`); only sent when `find` said `renewsArm` |
 | `status` | none | `{"status": Status}` | a full reading |
 | `telemetry` | none | `{"frame": Frame}` | one 2 Hz sample |
 | `execute` | `{"command": Command, "levelMax": n}` | `{"result": Result}` | one command, the level never set past `levelMax`. Long: a ramp takes as long as its steps. `cancelled` if the `cancel` notification ended it early |
+| `actuate` | `{"command": Actuate}` | `{}` | version 2: one instruction to one of the actuators `find` listed (`unit.Actuating`), checked by both ends against that list; `no_actuator` for an id the device has not, `unsupported` from a device without actuators |
+| `readings` | none | `{"readings": [Reading, ...]}` | version 2: the sensors' values now (`unit.Sensing`); `unsupported` from a device without sensors |
 | `close` | `{"restore": bool}` | `{}` | close the link, restoring the unit's own controls when asked |
 
 The notification: `{"method": "cancel", "params": {"id": n}}` names an
@@ -155,7 +159,7 @@ the failure is a loss, reported as not connected with that reason.
 
 ```
 → {"id":1,"method":"hello"}
-← {"id":1,"result":{"protocol":1,"name":"example","kinds":["examplekind"]}}
+← {"id":1,"result":{"protocol":2,"name":"example","kinds":["examplekind"]}}
 → {"id":2,"method":"list"}
 ← {"id":2,"result":{"units":[{"id":"/dev/cu.usbserial-10","kind":"examplekind","label":"Example Unit (cu.usbserial-10)","maker":"Example","model":"Unit","tag":"cu.usbserial-10","held":false}]}}
 → {"id":3,"method":"find"}
@@ -239,10 +243,13 @@ in this repository, in the open.
 ## 5. Writing a helper
 
 A helper is any program that speaks section 3 on its standard input and
-output. Written in Go against this module, it is a few lines: implement
-`estim.Finder` (with `estim.Lister` and `estim.Selector` if the family
-can list and select) and `estim.Driver` (with `estim.HeldReporter` and
-`estim.ArmRenewer` where they apply) as the Mastago driver does, then
+output. Written in Go against the unit driver SDK,
+`github.com/Masseuse-ai/camlink-unit-sdk` (a module of its own, so a
+family's driver needs nothing of this tree), it is a few lines: implement
+`unit.Finder` (with `unit.Lister` and `unit.Selector` if the family can
+list and select) and `unit.Driver` (with `unit.HeldReporter`,
+`unit.ArmRenewer`, and `unit.Actuating` and `unit.Sensing` where they
+apply) as the Mastago driver does, then
 
 ```go
 package main
@@ -250,26 +257,28 @@ package main
 import (
 	"log/slog"
 
-	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
-	"github.com/Masseuse-ai/masseuse-camlink/internal/estim/helper"
+	"github.com/Masseuse-ai/camlink-unit-sdk/helper"
+	"github.com/Masseuse-ai/camlink-unit-sdk/unit"
 )
 
 func main() {
-	helper.Main(func(stateDir string, log *slog.Logger) (estim.Finder, helper.Options, error) {
+	helper.Main(func(stateDir string, log *slog.Logger) (unit.Finder, helper.Options, error) {
 		f := newFinder(stateDir, log) // yours
-		return f, helper.Options{Name: "example", Kinds: []estim.Kind{"examplekind"}, Log: log}, nil
+		return f, helper.Options{Name: "example", Kinds: []unit.Kind{"examplekind"}, Log: log}, nil
 	})
 }
 ```
 
 `helper.Main` reads `--state-dir` and `--log-level`, logs to standard
 error, and runs `helper.Serve`, which dispatches each request to the
-finder and the driver it returned, carries `estim.LossError` reasons,
-`estim.ErrNoDevice`, `estim.ErrCancelled` and `estim.ErrArmed` across as
+finder and the driver it returned, carries `unit.LossError` reasons,
+`unit.ErrNoDevice`, `unit.ErrCancelled` and `unit.ErrArmed` across as
 their codes, and closes the device (restoring the unit) when the
-connector goes away. Build it as `camlink-unit-<name>` and put it in the
-units directory; `masseuse-camlink -estim-helpers <dir> estim probe`
-shows what the connector makes of it.
+connector goes away. The SDK's `ble` and `serialport` packages are the
+transports the connector's own driver uses. Build it as
+`camlink-unit-<name>` and put it in the units directory;
+`masseuse-camlink -estim-helpers <dir> estim probe` shows what the
+connector makes of it.
 
 In another language, mind: one JSON object per line, answers may come in
 any order but each request gets exactly one, `hello` first, nothing but
@@ -277,6 +286,6 @@ protocol on standard output, and `close` with `restore` true must leave
 the unit as the person's own controls expect it.
 
 The connector's side of the protocol is `internal/estim/helper` (`Host`
-and the proxy driver); its tests run a real Mastago driver through a
-guest over pipes and a spawned helper process, and are the reference for
-the wire shapes.
+and the proxy driver, on the SDK's wire types); its tests run a real
+Mastago driver through the SDK's guest over pipes and a spawned helper
+process, and are the reference for the wire shapes.

@@ -292,6 +292,15 @@ func (s *Session) deviceMessage(d Descriptor) map[string]any {
 	if !d.Connected && d.Reason != "" {
 		msg["reason"] = d.Reason
 	}
+	// The actuator model, for a unit that is more than its intensity
+	// channels (7.3, `actuators` and `sensors`); a service that predates
+	// it reads `capabilities` alone.
+	if len(d.Actuators) > 0 {
+		msg["actuators"] = d.Actuators
+	}
+	if len(d.Sensors) > 0 {
+		msg["sensors"] = d.Sensors
+	}
 	if units := s.Runtime.Units(); units != nil {
 		msg["units"] = units
 	}

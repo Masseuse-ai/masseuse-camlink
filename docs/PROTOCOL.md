@@ -697,7 +697,7 @@ it changes:
 
 | type | fields | when |
 |---|---|---|
-| `device` | `kind`, `label`, `connected`, `capabilities`; `maker`, `model`, `tag` when the driver names them; `id` once a unit has been found; `held` when true; `units` once listed; `reason` while not connected | the selected device is found or lost, or the units in reach change |
+| `device` | `kind`, `label`, `connected`, `capabilities`; `maker`, `model`, `tag` when the driver names them; `id` once a unit has been found; `held` when true; `units` once listed; `reason` while not connected; `actuators` and `sensors` when the driver describes them | the selected device is found or lost, or the units in reach change |
 
 `maker`, `model` and `tag` are the unit's name in three parts, declared by
 the driver that recognizes it (connectors from v0.29.0): the maker
@@ -744,6 +744,19 @@ one), `timer` (the device has a countdown the connector arms to the arm
 window) and `loadDetect` (the device reports electrode contact). For the
 Mastago: `{levelMax: 25, channels: ["a"], modes: [0..31], tempo: false,
 levelMaxDefault: 15, timer: true, loadDetect: true}`.
+
+`actuators` and `sensors`, when present, describe a unit that is more
+than its intensity channels: each actuator `{id, kind, label, max,
+signed, timed, colored, patterns}` (`kind` one of `vibrate`, `rotate`,
+`oscillate`, `reciprocate`, `suction`, `inflate`, `constrict`, `heat`,
+`light`, `position`, `shock`, `estim`, `switch`, `sound`; `max` the top of
+its own scale, zero always off), each sensor `{id, kind, label, min,
+max}` (`kind` one of `battery`, `pressure`, `position`, `button`,
+`motion`, `temperature`, `depth`). They are the unit driver SDK's
+actuator model (`github.com/Masseuse-ai/camlink-unit-sdk/unit`), reported
+as the helper declared them; the connector drives such a unit through
+`capabilities` as before and passes the description through for a service
+that reads it. A service that knows neither field drops them.
 
 `kind` names the device family and is what the service keys its behaviour
 on. The driver in this program reports one name; a unit driver helper

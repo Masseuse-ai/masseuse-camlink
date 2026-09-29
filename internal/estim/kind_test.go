@@ -16,12 +16,12 @@ func TestKindsAreKnownAndStable(t *testing.T) {
 		if estim.Kinds[i] != k {
 			t.Fatalf("Kinds[%d] = %q, want %q", i, estim.Kinds[i], k)
 		}
-		if !k.Known() {
+		if !estim.Known(k) {
 			t.Fatalf("%q should be known", k)
 		}
 	}
 	for _, k := range []estim.Kind{"", "MASTAGO", "Mastago", "other"} {
-		if k.Known() {
+		if estim.Known(k) {
 			t.Fatalf("%q should not be known", k)
 		}
 	}
@@ -30,7 +30,7 @@ func TestKindsAreKnownAndStable(t *testing.T) {
 func TestDriverKindIsKnown(t *testing.T) {
 	// The driver this program carries reports a kind from the list the
 	// service validates against.
-	if k := estim.KindMastago; !k.Known() {
+	if k := estim.KindMastago; !estim.Known(k) {
 		t.Fatalf("driver kind %q is not in Kinds", k)
 	}
 	if mastago.LabelPrefix == "" {
