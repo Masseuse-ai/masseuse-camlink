@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	sdk "github.com/Masseuse-ai/camlink-unit-sdk/helper"
 	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
@@ -44,7 +45,7 @@ type Host struct {
 	proc    Process
 	hello   *Hello
 	nextID  uint64
-	pending map[uint64]chan envelope
+	pending map[uint64]chan sdk.Envelope
 	writeMu sync.Mutex
 	writer  io.Writer
 	exited  chan struct{}
@@ -179,7 +180,7 @@ func (h *Host) ensure(ctx context.Context) error {
 	h.mu.Lock()
 	h.proc = proc
 	h.exited = exited
-	h.pending = map[uint64]chan envelope{}
+	h.pending = map[uint64]chan sdk.Envelope{}
 	h.hello = nil
 	h.writeMu.Lock()
 	h.writer = proc.Stdin
@@ -199,7 +200,10 @@ func (h *Host) ensure(ctx context.Context) error {
 		_ = proc.Kill()
 		return fmt.Errorf("helper: %s did not say hello: %w", h.Path, err)
 	}
-	if hello.Protocol != Protocol {
+	// Version 2 only added to version 1, so a helper of either is served;
+	// one from the future is not, since it may expect answers this
+	// connector cannot give.
+	if hello.Protocol < 1 || hello.Protocol > Protocol {
 		_ = proc.Kill()
 		return fmt.Errorf("helper: %s speaks protocol %d, this connector %d", h.Path, hello.Protocol, Protocol)
 	}
@@ -212,7 +216,7 @@ func (h *Host) ensure(ctx context.Context) error {
 	selection := h.selection
 	h.mu.Unlock()
 	if selection != nil {
-		if err := h.call(ctx, MethodSelect, selectParams{Unit: *selection}, nil); err != nil {
+		if err := h.call(ctx, MethodSelect, sdk.SelectParams{Unit: *selection}, nil); err != nil {
 			h.log().Warn("helper: the remembered selection was not taken", "helper", hello.Name, "err", err)
 		}
 	}
@@ -263,7 +267,7 @@ func (h *Host) readStdout(r io.Reader, exited chan struct{}) {
 		if len(strings.TrimSpace(string(line))) == 0 {
 			continue
 		}
-		var env envelope
+		var env sdk.Envelope
 		if err := json.Unmarshal(line, &env); err != nil {
 			h.log().Warn("helper: unreadable line from the program", "path", h.Path, "err", err)
 			continue
@@ -283,11 +287,11 @@ func (h *Host) readStdout(r io.Reader, exited chan struct{}) {
 	}
 	h.mu.Lock()
 	pending := h.pending
-	h.pending = map[uint64]chan envelope{}
+	h.pending = map[uint64]chan sdk.Envelope{}
 	h.mu.Unlock()
 	close(exited)
 	for _, ch := range pending {
-		ch <- envelope{Error: &wireError{Code: CodeLoss, Message: ErrExited.Error(), Reason: estim.ReasonStoppedAnswering}}
+		ch <- sdk.Envelope{Error: &sdk.WireError{Code: CodeLoss, Message: ErrExited.Error(), Reason: estim.ReasonStoppedAnswering}}
 	}
 }
 
@@ -317,12 +321,12 @@ func (h *Host) call(ctx context.Context, method string, params any, out any) err
 	}
 	h.nextID++
 	id := h.nextID
-	ch := make(chan envelope, 1)
+	ch := make(chan sdk.Envelope, 1)
 	h.pending[id] = ch
 	exited := h.exited
 	h.mu.Unlock()
 
-	if err := h.send(envelope{ID: &id, Method: method, Params: mustJSON(params)}); err != nil {
+	if err := h.send(sdk.Envelope{ID: &id, Method: method, Params: mustJSON(params)}); err != nil {
 		h.mu.Lock()
 		delete(h.pending, id)
 		h.mu.Unlock()
@@ -331,7 +335,7 @@ func (h *Host) call(ctx context.Context, method string, params any, out any) err
 	select {
 	case env := <-ch:
 		if env.Error != nil {
-			return fromWire(env.Error)
+			return sdk.FromWire(env.Error)
 		}
 		if out != nil && len(env.Result) > 0 {
 			if err := json.Unmarshal(env.Result, out); err != nil {
@@ -351,10 +355,10 @@ func (h *Host) call(ctx context.Context, method string, params any, out any) err
 
 // notify sends a notification (no answer expected).
 func (h *Host) notify(method string, params any) error {
-	return h.send(envelope{Method: method, Params: mustJSON(params)})
+	return h.send(sdk.Envelope{Method: method, Params: mustJSON(params)})
 }
 
-func (h *Host) send(env envelope) error {
+func (h *Host) send(env sdk.Envelope) error {
 	line, err := json.Marshal(env)
 	if err != nil {
 		return err
@@ -404,7 +408,7 @@ func (h *Host) Describe(ctx context.Context, out io.Writer) error {
 		fmt.Fprintf(out, "Helper %s: could not be started (%v)\n", h.Path, err)
 		return err
 	}
-	var res describeResult
+	var res sdk.DescribeResult
 	if err := h.call(ctx, MethodDescribe, nil, &res); err != nil {
 		fmt.Fprintf(out, "Helper %s: %v\n", h.Name(), err)
 		return err
@@ -418,7 +422,7 @@ func (h *Host) List(ctx context.Context) ([]estim.Unit, error) {
 	if err := h.ensure(ctx); err != nil {
 		return nil, err
 	}
-	var res listResult
+	var res sdk.ListResult
 	if err := h.call(ctx, MethodList, nil, &res); err != nil {
 		return nil, err
 	}
@@ -437,7 +441,7 @@ func (h *Host) Select(unit string) {
 	if err := h.ensure(ctx); err != nil {
 		return
 	}
-	if err := h.call(ctx, MethodSelect, selectParams{Unit: unit}, nil); err != nil {
+	if err := h.call(ctx, MethodSelect, sdk.SelectParams{Unit: unit}, nil); err != nil {
 		h.log().Warn("helper: select not taken", "helper", h.Name(), "err", err)
 	}
 }
@@ -464,7 +468,7 @@ func (d *proxyDriver) Release(ctx context.Context) error {
 }
 
 func (d *proxyDriver) Arm(ctx context.Context, powerMode string) error {
-	return d.host.call(ctx, MethodArm, armParams{PowerMode: powerMode}, nil)
+	return d.host.call(ctx, MethodArm, sdk.ArmParams{PowerMode: powerMode}, nil)
 }
 
 // RenewArm forwards the countdown renewal; a helper without one (RenewsArm
@@ -473,11 +477,11 @@ func (d *proxyDriver) RenewArm(ctx context.Context, until time.Time) error {
 	if !d.found.RenewsArm {
 		return nil
 	}
-	return d.host.call(ctx, MethodRenewArm, renewArmParams{Until: until.UTC().Format(time.RFC3339Nano)}, nil)
+	return d.host.call(ctx, MethodRenewArm, sdk.RenewArmParams{Until: until.UTC().Format(time.RFC3339Nano)}, nil)
 }
 
 func (d *proxyDriver) Status(ctx context.Context) (estim.Status, error) {
-	var res statusResult
+	var res sdk.StatusResult
 	if err := d.host.call(ctx, MethodStatus, nil, &res); err != nil {
 		return estim.Status{}, err
 	}
@@ -485,7 +489,7 @@ func (d *proxyDriver) Status(ctx context.Context) (estim.Status, error) {
 }
 
 func (d *proxyDriver) Telemetry(ctx context.Context) (estim.Frame, error) {
-	var res telemetryResult
+	var res sdk.TelemetryResult
 	if err := d.host.call(ctx, MethodTelemetry, nil, &res); err != nil {
 		return estim.Frame{}, err
 	}
@@ -504,11 +508,11 @@ func (d *proxyDriver) Execute(ctx context.Context, cmd estim.Command, levelMax i
 	}
 	h.nextID++
 	id := h.nextID
-	ch := make(chan envelope, 1)
+	ch := make(chan sdk.Envelope, 1)
 	h.pending[id] = ch
 	exited := h.exited
 	h.mu.Unlock()
-	if err := h.send(envelope{ID: &id, Method: MethodExecute, Params: mustJSON(executeParams{Command: cmd, LevelMax: levelMax})}); err != nil {
+	if err := h.send(sdk.Envelope{ID: &id, Method: MethodExecute, Params: mustJSON(sdk.ExecuteParams{Command: cmd, LevelMax: levelMax})}); err != nil {
 		h.mu.Lock()
 		delete(h.pending, id)
 		h.mu.Unlock()
@@ -521,9 +525,9 @@ func (d *proxyDriver) Execute(ctx context.Context, cmd estim.Command, levelMax i
 		select {
 		case env := <-ch:
 			if env.Error != nil {
-				return estim.Result{}, fromWire(env.Error)
+				return estim.Result{}, sdk.FromWire(env.Error)
 			}
-			var res executeResult
+			var res sdk.ExecuteResult
 			if err := json.Unmarshal(env.Result, &res); err != nil {
 				return estim.Result{}, fmt.Errorf("helper: execute answered something unreadable: %w", err)
 			}
@@ -538,15 +542,39 @@ func (d *proxyDriver) Execute(ctx context.Context, cmd estim.Command, levelMax i
 		case <-ticker.C:
 			if !told && cancelled != nil && cancelled() {
 				told = true
-				_ = h.notify(MethodCancel, cancelParams{ID: id})
+				_ = h.notify(MethodCancel, sdk.CancelParams{ID: id})
 			}
 		}
 	}
+}
+
+// Actuators, Actuate, Sensors and Readings are the actuator model
+// (estim.Actuating, estim.Sensing), forwarded to a helper of protocol 2:
+// the model `find` reported, a command checked here against it before it
+// crosses, and the helper's readings. A helper without the model reported
+// none, so Actuators is nil and estim.ActuatorsOf leaves the descriptor
+// without any.
+func (d *proxyDriver) Actuators() []estim.Actuator { return d.found.Actuators }
+func (d *proxyDriver) Sensors() []estim.Sensor     { return d.found.Sensors }
+
+func (d *proxyDriver) Actuate(ctx context.Context, cmd estim.Actuate) error {
+	if err := estim.CheckActuate(cmd, d.found.Actuators, 100); err != nil {
+		return err
+	}
+	return d.host.call(ctx, MethodActuate, sdk.ActuateParams{Command: cmd}, nil)
+}
+
+func (d *proxyDriver) Readings(ctx context.Context) ([]estim.Reading, error) {
+	var res sdk.ReadingsResult
+	if err := d.host.call(ctx, MethodReadings, nil, &res); err != nil {
+		return nil, err
+	}
+	return res.Readings, nil
 }
 
 func (d *proxyDriver) Close(ctx context.Context, restore bool) error {
 	if d.closed.Swap(true) {
 		return nil
 	}
-	return d.host.call(ctx, MethodClose, closeParams{Restore: restore}, nil)
+	return d.host.call(ctx, MethodClose, sdk.CloseParams{Restore: restore}, nil)
 }

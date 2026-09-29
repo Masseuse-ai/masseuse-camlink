@@ -3,16 +3,14 @@ module github.com/Masseuse-ai/masseuse-camlink
 go 1.27.1
 
 require (
+	github.com/Masseuse-ai/camlink-unit-sdk v0.1.0
 	github.com/bluenviron/gortsplib/v5 v5.6.5
 	github.com/coder/websocket v1.8.14
 	github.com/ebitengine/purego v0.11.0
-	github.com/go-ole/go-ole v1.2.6
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/pion/rtp v1.10.5
-	github.com/saltosystems/winrt-go v0.0.0-20260513072510-45f10383b2b8
 	github.com/sigstore/protobuf-specs v0.5.1
 	github.com/sigstore/sigstore-go v1.3.0
-	go.bug.st/serial v1.8.0
 	golang.org/x/sys v0.48.0
 )
 
@@ -27,6 +25,7 @@ require (
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-openapi/analysis v0.25.5 // indirect
 	github.com/go-openapi/errors v0.22.8 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
@@ -67,6 +66,7 @@ require (
 	github.com/pion/srtp/v3 v3.0.13 // indirect
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/saltosystems/winrt-go v0.0.0-20260513072510-45f10383b2b8 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/sigstore/rekor v1.5.3 // indirect
@@ -77,6 +77,7 @@ require (
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	go.bug.st/serial v1.8.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
