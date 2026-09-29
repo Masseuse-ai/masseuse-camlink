@@ -8,12 +8,14 @@ package ble
 import sdk "github.com/Masseuse-ai/camlink-unit-sdk/ble"
 
 type (
-	UUID          = sdk.UUID
-	Advertisement = sdk.Advertisement
-	Central       = sdk.Central
-	Conn          = sdk.Conn
-	Broadcast     = sdk.Broadcast
-	Advertiser    = sdk.Advertiser
+	UUID           = sdk.UUID
+	Advertisement  = sdk.Advertisement
+	Central        = sdk.Central
+	Conn           = sdk.Conn
+	Characteristic = sdk.Characteristic
+	Properties     = sdk.Properties
+	Broadcast      = sdk.Broadcast
+	Advertiser     = sdk.Advertiser
 )
 
 // DefaultMTU is the payload one write carries when the link negotiated
@@ -25,6 +27,8 @@ var (
 	Open = sdk.Open
 	// OpenAdvertiser transmits advertisements (Linux and Windows).
 	OpenAdvertiser = sdk.OpenAdvertiser
+	// Find is the first characteristic under a service with the properties.
+	Find = sdk.Find
 
 	ErrUnsupported      = sdk.ErrUnsupported
 	ErrUnavailable      = sdk.ErrUnavailable

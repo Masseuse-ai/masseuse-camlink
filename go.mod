@@ -3,7 +3,7 @@ module github.com/Masseuse-ai/masseuse-camlink
 go 1.27.1
 
 require (
-	github.com/Masseuse-ai/camlink-unit-sdk v0.1.0
+	github.com/Masseuse-ai/camlink-unit-sdk v0.2.0
 	github.com/bluenviron/gortsplib/v5 v5.6.5
 	github.com/coder/websocket v1.8.14
 	github.com/ebitengine/purego v0.11.0

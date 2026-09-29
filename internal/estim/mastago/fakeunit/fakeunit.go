@@ -455,6 +455,22 @@ func (c *Conn) Disconnected() <-chan struct{} { return c.disconnected }
 // MTU is the default payload: the fake negotiates nothing.
 func (c *Conn) MTU() int { return ble.DefaultMTU }
 
+// Characteristics lists the fake unit's: its service's write and notify
+// characteristics, and the battery level.
+func (c *Conn) Characteristics(service ble.UUID) []ble.Characteristic {
+	all := []ble.Characteristic{
+		{UUID: "0000fff5-0000-1000-8000-00805f9b34fb", Service: "0000fff0-0000-1000-8000-00805f9b34fb", Properties: ble.Properties{Write: true, WriteWithoutResponse: true}},
+		{UUID: "0000fff4-0000-1000-8000-00805f9b34fb", Service: "0000fff0-0000-1000-8000-00805f9b34fb", Properties: ble.Properties{Notify: true}},
+	}
+	var out []ble.Characteristic
+	for _, ch := range all {
+		if service == "" || ch.Service.Equal(service) {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
 // Close drops the link.
 func (c *Conn) Close() error {
 	c.drop()
