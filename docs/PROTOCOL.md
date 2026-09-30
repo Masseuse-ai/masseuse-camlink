@@ -621,7 +621,9 @@ reports. The connector holds no pairing state for it.
 
 Whatever the service asks:
 
-- One channel (`a`); the wire's `levelB` is reported as 0.
+- One channel (`a`); the wire's `levelB` is reported as 0. (A two-channel
+  unit served by a helper lists `channels: ["a","b"]` and takes a level on
+  each; see 7.3.)
 - Intensity at most the session's maximum (`device_settings.levelMax`, 15
   until the session sets one) on the unit's 0..25 scale, moved one step
   per 0.4 s with a read-back at every step; `adjust_level` moves at most 5
@@ -745,6 +747,16 @@ window) and `loadDetect` (the device reports electrode contact). For the
 Mastago: `{levelMax: 25, channels: ["a"], modes: [0..31], tempo: false,
 levelMaxDefault: 15, timer: true, loadDetect: true}`.
 
+`channels` names the intensity channels the connector drives on the unit:
+`["a"]` for a single-channel unit, `["a","b"]` for a two-channel unit
+whose driver takes a level on each (a helper's box with two outputs). A
+level command names its channel (`channel`, `a` when absent); one for a
+channel the unit does not list is refused with `ok` false before the
+driver sees it, and the unit is released as after any failed command, so
+a service sends channel B only to a unit that lists it. The mode, the
+tempo and the power range are the unit's, not a channel's. `levelMax` and
+the session's maximum bound both channels alike.
+
 `actuators` and `sensors`, when present, describe a unit that is more
 than its intensity channels: each actuator `{id, kind, label, max,
 signed, timed, colored, patterns}` (`kind` one of `vibrate`, `rotate`,
@@ -789,11 +801,13 @@ Down (service to connector, as `estim` events):
 | `{"type":"control","payload":{"type":"device_select","id"}}` (connector-level, `sessionId` `""`) | serve the unit with that `id` from `units` (7.1): remember the choice, let go of the unit held if it is another, open the selected one; refused, and logged, while the unit is armed. The outcome is the `device` reports that follow; a connector older than this ignores the control |
 
 Command verbs: `status`; `release`; `set_mode {mode}` (a program number
-from `capabilities.modes`); `set_level {channel:"a", level}`;
-`adjust_level {channel:"a", delta}`; `set_ma {percent}`; `adjust_ma
-{delta}` (the last two only for a device with `capabilities.tempo`). A
-command whose `sessionId` is not the attached session is refused (`release`
-excepted).
+from `capabilities.modes`); `set_level {channel, level}`;
+`adjust_level {channel, delta}` (`channel` `"a"` or `"b"`, `"a"` when
+absent, one the unit lists in `capabilities.channels`); `set_ma {percent}`;
+`adjust_ma {delta}` (the last two only for a device with
+`capabilities.tempo`). A level command's `result` names the channel it
+moved (`{verb, channel, level, previousLevel}`). A command whose
+`sessionId` is not the attached session is refused (`release` excepted).
 
 Commands run one at a time. A second command arriving while one runs is
 refused, not queued; `release` is the exception, taken at any time and
@@ -815,7 +829,9 @@ device), `mode` (program number), `levelA`, `levelB`, `power`,
 is delivering its program; false while paused), `loadDetected` (the
 electrodes are on the skin) and `timerRemainingS` (its countdown). A
 single-channel device reports `levelB` 0 and the two override flags false;
-one without a tempo control leaves the `MA` fields null; one whose programs
+a two-channel device reports each channel's level, the one the service set
+and the one the person's own control moved; one without a tempo control
+leaves the `MA` fields null; one whose programs
 are fixed in firmware (the Mastago) reports no modulation state, while a
 pattern-based device adds the loaded pattern's (`gateValue`,
 `modeRampValue`, `routineTimer`, `sequence*`, and for each of the width,
@@ -827,7 +843,7 @@ answering) is a reading the service must not act on. A telemetry frame is
 `atMs`, `monotonicS`, `skipped`, `skipReason` and, when not skipped, the
 same per-device fields at 2 Hz: for the Mastago `mode`, `levelA`,
 `outputting`, `loadDetected` and `timerRemainingS` (the countdown counted
-down locally between full readings).
+down locally between full readings); a two-channel device adds `levelB`.
 
 **Trust.** The service signs nothing to the connector; the connector trusts
 the authenticated event stream it already holds for camera dials. What the

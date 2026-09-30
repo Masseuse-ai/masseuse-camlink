@@ -631,14 +631,25 @@ func TestParseCommandAndCaps(t *testing.T) {
 	if err != nil || cmd.Verb != "set_level" || *cmd.Level != 7 || cmd.Reason != "x" {
 		t.Fatalf("%+v %v", cmd, err)
 	}
-	for _, bad := range []string{`{"verb":"set_level","level":7.5}`, `{"verb":"set_level","level":true}`, `{"verb":"set_level","level":"7"}`, `{"verb":"nope"}`, `{"verb":"set_level","channel":"b","level":1}`, `[]`, `null`} {
+	for _, bad := range []string{`{"verb":"set_level","level":7.5}`, `{"verb":"set_level","level":true}`, `{"verb":"set_level","level":"7"}`, `{"verb":"nope"}`, `{"verb":"set_level","channel":"c","level":1}`, `[]`, `null`} {
 		if _, err := estim.ParseCommand(json.RawMessage(bad)); err == nil {
 			t.Errorf("%s accepted", bad)
 		}
 	}
+	// Channel B parses; whether the device drives it is the caps' question.
+	if cmd, err := estim.ParseCommand(json.RawMessage(`{"verb":"set_level","channel":"b","level":1}`)); err != nil || cmd.Channel != estim.ChannelB {
+		t.Fatalf("channel B: %+v %v", cmd, err)
+	}
 	// A device on the full scale with two programs and no tempo control.
 	caps := estim.Capabilities{LevelMax: 99, Channels: []string{"a"}, Modes: []int{1, 2}, Tempo: false}
 	defaults := estim.DefaultSettings()
+	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Channel: "b", Level: estim.Int(1)}, caps, defaults); err == nil {
+		t.Error("channel B accepted on a device that lists A alone")
+	}
+	two := estim.Capabilities{LevelMax: 99, Channels: []string{"a", "b"}, Modes: []int{1, 2}, Tempo: false}
+	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Channel: "b", Level: estim.Int(1)}, two, defaults); err != nil {
+		t.Errorf("channel B refused on a two-channel device: %v", err)
+	}
 	if err := estim.CheckCaps(estim.Command{Verb: "set_level", Level: estim.Int(86)}, caps, defaults); err == nil {
 		t.Error("default cap of 85 must hold even when the device allows more")
 	}

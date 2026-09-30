@@ -78,16 +78,23 @@ function ServingCard({ unit }: { unit: Descriptor }) {
                         </span>
                     </Well>
                 ) : null}
-                <Well className="flex items-center gap-2.5 px-3 py-2.5">
-                    <Cpu className="lucide h-4 w-4 text-bone/60" strokeWidth={2.2} />
-                    <span className="text-[13px]">
-                        <span className="block text-[11px] tracking-wide text-bone/50 uppercase">Level</span>
-                        <span className="font-semibold tabular-nums text-bone">
-                            {status?.levelA ?? 0}
-                            <span className="text-bone/45"> / {unit.capabilities.levelMax}</span>
-                        </span>
-                    </span>
-                </Well>
+                {/* One level on a single-channel unit; a well per channel, lettered, on a unit the connector drives on both. */}
+                {(unit.capabilities.channels.includes('b') ? ['a', 'b'] : ['a']).map((channel) => {
+                    const two = unit.capabilities.channels.includes('b');
+                    const level = channel === 'b' ? status?.levelB : status?.levelA;
+                    return (
+                        <Well key={channel} className="flex items-center gap-2.5 px-3 py-2.5">
+                            <Cpu className="lucide h-4 w-4 text-bone/60" strokeWidth={2.2} />
+                            <span className="text-[13px]">
+                                <span className="block text-[11px] tracking-wide text-bone/50 uppercase">{two ? `Level ${channel.toUpperCase()}` : 'Level'}</span>
+                                <span className="font-semibold tabular-nums text-bone">
+                                    {level ?? 0}
+                                    <span className="text-bone/45"> / {unit.capabilities.levelMax}</span>
+                                </span>
+                            </span>
+                        </Well>
+                    );
+                })}
                 <Well className="flex items-center gap-2.5 px-3 py-2.5">
                     <ShieldCheck className="lucide h-4 w-4 text-bone/60" strokeWidth={2.2} />
                     <span className="text-[13px]">
