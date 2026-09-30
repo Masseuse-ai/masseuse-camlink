@@ -39,6 +39,14 @@ const Protocol = sdk.Protocol
 // directory: `camlink-unit-<name>` (`.exe` on Windows).
 const Prefix = sdk.Prefix
 
+// Probe hints (`hello`'s `probe`): a family whose finder listens is probed
+// before one that writes a command, so a writer never reaches another
+// family's device on a shared port. Empty is ProbeWrites.
+const (
+	ProbeListens = sdk.ProbeListens
+	ProbeWrites  = sdk.ProbeWrites
+)
+
 // Methods.
 const (
 	MethodHello     = sdk.MethodHello

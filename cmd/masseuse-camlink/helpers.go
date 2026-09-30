@@ -101,8 +101,32 @@ func helperName(path string) string {
 // greeted now (hello, with a short timeout) so that a helper that does not
 // run on this system is logged and left out rather than tried at every
 // scan; the family's name on the console is the helper's own.
+// helperFamily is a helper's device family with its probe hint, before the
+// families are ordered (listenersFirst).
+type helperFamily struct {
+	family deviceFamily
+	// listens is the helper's probe hint: a finder that listens is tried
+	// before one that writes a command, so a family that writes to a shared
+	// port never reaches another family's device first (two serial families
+	// on one FTDI adapter: helper.ProbeListens).
+	listens bool
+}
+
+// listenersFirst orders the helper families so the ones that listen come
+// before the ones that write a command, keeping the order given within each
+// group (a stable sort): the connector probes a gentle family before one
+// whose probe could disturb it on a shared port.
+func listenersFirst(found []helperFamily) []deviceFamily {
+	sort.SliceStable(found, func(i, j int) bool { return found[i].listens && !found[j].listens })
+	fams := make([]deviceFamily, 0, len(found))
+	for _, f := range found {
+		fams = append(fams, f.family)
+	}
+	return fams
+}
+
 func helperFamilies(ctx context.Context, dir string, stateDir string, log *slog.Logger) []deviceFamily {
-	var fams []deviceFamily
+	var found []helperFamily
 	for _, path := range helperPrograms(dir, runtime.GOOS) {
 		h := helper.New(path, filepath.Join(stateDir, "units", helperName(path)), log)
 		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -113,14 +137,17 @@ func helperFamilies(ctx context.Context, dir string, stateDir string, log *slog.
 			_ = h.Close()
 			continue
 		}
-		log.Info("estim: unit driver helper", "name", hello.Name, "kinds", hello.Kinds, "path", path)
+		log.Info("estim: unit driver helper", "name", hello.Name, "kinds", hello.Kinds, "probe", hello.Probe, "path", path)
 		host := h
-		fams = append(fams, deviceFamily{
-			name:   fmt.Sprintf("%s (helper)", hello.Name),
-			finder: func(finderConfig) estim.Finder { return host },
+		found = append(found, helperFamily{
+			family: deviceFamily{
+				name:   fmt.Sprintf("%s (helper)", hello.Name),
+				finder: func(finderConfig) estim.Finder { return host },
+			},
+			listens: hello.Probe == helper.ProbeListens,
 		})
 	}
-	return fams
+	return listenersFirst(found)
 }
 
 // registerHelpers adds the helpers in the units directory to the family
