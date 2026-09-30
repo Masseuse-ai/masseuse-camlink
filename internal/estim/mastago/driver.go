@@ -145,6 +145,14 @@ func (d *Driver) RenewArm(ctx context.Context, until time.Time) error {
 func (d *Driver) Execute(ctx context.Context, cmd estim.Command, levelMax int, cancelled func() bool) (estim.Result, error) {
 	res := estim.Result{Verb: cmd.Verb}
 	levelMax = max(0, min(levelMax, LevelMax))
+	// One channel: a level command for another is refused here as well as
+	// by the Runtime's caps, and the result names the one it moved.
+	if cmd.Verb == "set_level" || cmd.Verb == "adjust_level" {
+		if estim.ChannelOf(cmd) != estim.ChannelA {
+			return res, fmt.Errorf("mastago: the unit has one channel")
+		}
+		res.Channel = estim.ChannelA
+	}
 	switch cmd.Verb {
 	case "set_mode":
 		if cmd.Mode == nil || !ModeAllowed(*cmd.Mode) {

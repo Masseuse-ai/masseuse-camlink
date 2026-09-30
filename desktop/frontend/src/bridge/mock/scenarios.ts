@@ -415,6 +415,18 @@ export const scenarios: Scenario[] = [
             { at: 1800, event: { type: 'camera', on: true, stats: { videoBps: 2_100_000, audioBps: 64_000, congested: false, backlogS: 0.2 } } },
         ],
     },
+    {
+        id: 'unit-armed-two-channels',
+        group: 'Unit',
+        title: 'A two-channel unit armed: a level on each channel',
+        note: 'The page shows a level per channel, lettered, on a unit the connector drives on both.',
+        step: 'unit',
+        setupDone: true,
+        script: [
+            ...opening({ phones: 1, units: [units.mk312!], unit: descriptorFor(units.mk312!, { armed: { levelBound: 40 }, status: { power: 'normal', mode: 1, levelA: 28, levelB: 15, outputting: true } }) }),
+            { at: 1600, event: { type: 'link', state: 'active', enclave } },
+        ],
+    },
 
     // Ready
     {

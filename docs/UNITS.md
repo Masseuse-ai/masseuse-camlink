@@ -179,6 +179,24 @@ the failure is a loss, reported as not connected with that reason.
 ← {"id":9,"result":{}}
 ```
 
+A helper whose unit has two output channels lists them in `capabilities`
+(`"channels":["a","b"]`), takes `execute` with `"channel":"b"` on the same
+`set_level` and `adjust_level` verbs (the connector refuses a channel the
+helper did not list before the call reaches it), names the channel moved
+in the result (`{"verb":"set_level","channel":"b","level":12}`), and
+reports both levels in `status` and `telemetry` (`levelA`, `levelB`). The
+mode, the tempo and the power range stay the unit's. A helper that lists
+`["a"]` alone is never asked for channel B.
+
+A helper whose unit has two output channels lists them in `capabilities`
+(`"channels":["a","b"]`), takes `execute` with `"channel":"b"` on the same
+`set_level` and `adjust_level` verbs (the connector refuses a channel the
+helper did not list before the call reaches it), names the channel moved
+in the result (`{"verb":"set_level","channel":"b","level":12}`), and
+reports both levels in `status` and `telemetry` (`levelA`, `levelB`). The
+mode, the tempo and the power range stay the unit's. A helper that lists
+`["a"]` alone is never asked for channel B.
+
 ## 4. Distribution, signing, verification
 
 Helpers are published as their own releases, apart from the connector's,

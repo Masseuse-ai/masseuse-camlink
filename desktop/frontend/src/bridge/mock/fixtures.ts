@@ -39,9 +39,10 @@ export function descriptorFor(unit: Unit, extra: Partial<Descriptor> = {}): Desc
         id: unit.id,
         connected: true,
         held: unit.held,
+        // Channel names are the wire's, lower-case (docs/PROTOCOL.md 7.3).
         capabilities: mastago
-            ? { levelMax: 25, levelMaxDefault: 15, channels: ['A'], modes: Array.from({ length: 32 }, (_, i) => i + 1), tempo: false, timer: true, loadDetect: true }
-            : { levelMax: 99, levelMaxDefault: 40, channels: ['A', 'B'], modes: Array.from({ length: 17 }, (_, i) => i + 1), tempo: true, powerModes: ['low', 'normal', 'high'] },
+            ? { levelMax: 25, levelMaxDefault: 15, channels: ['a'], modes: Array.from({ length: 32 }, (_, i) => i + 1), tempo: false, timer: true, loadDetect: true }
+            : { levelMax: 99, levelMaxDefault: 40, channels: ['a', 'b'], modes: Array.from({ length: 17 }, (_, i) => i + 1), tempo: true, powerModes: ['low', 'normal', 'high'] },
         status: mastago ? { batteryPercent: 82, mode: 3, levelA: 0, outputting: false } : { power: 'normal', mode: 1, levelA: 0, levelB: 0, outputting: false },
         ...extra,
     };

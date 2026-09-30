@@ -287,6 +287,28 @@ func TestSessionSettings(t *testing.T) {
 	}
 }
 
+// A level command for channel B on a unit that drives A alone (the
+// Mastago) is refused by the caps before the driver sees it, and the
+// refusal fails closed like any other: the unit released at zero. The
+// service never sends one to such a unit; this is the connector's own
+// guard.
+func TestSessionRefusesChannelBOnAOneChannelUnit(t *testing.T) {
+	ctx := context.Background()
+	s, rt, u, up := newSession(t)
+	s.Handle(ctx, "sess-1", control(`{"type":"companion_attached","sessionId":"sess-1"}`))
+	s.Wait()
+	up.drain(ctx, s)
+	s.Handle(ctx, "sess-1", control(`{"type":"device_command","commandId":"b1","sessionId":"sess-1","command":{"verb":"set_level","channel":"b","level":3}}`))
+	got := up.drain(ctx, s)
+	n := find(got, "device_ack")
+	if n == nil || n["ok"] != false || !strings.Contains(fmt.Sprint(n["error"]), "channel b is not driven") {
+		t.Fatalf("channel B nack = %v", n)
+	}
+	if u.Level() != 0 || u.Outputting() || rt.Armed() {
+		t.Fatal("a refused channel must leave the unit released at zero")
+	}
+}
+
 func TestSessionCommandsAckAndNack(t *testing.T) {
 	ctx := context.Background()
 	s, rt, u, up := newSession(t)

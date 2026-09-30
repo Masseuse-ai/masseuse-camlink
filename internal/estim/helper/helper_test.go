@@ -63,9 +63,12 @@ func (f *fakeFinder) List(context.Context) ([]estim.Unit, error) {
 }
 func (f *fakeFinder) Select(unit string) { f.selected = unit }
 
+// fakeDriver is a two-channel unit: channel A ramps a level at a time (so
+// a cancel can land midway), channel B takes its level in one write.
 type fakeDriver struct {
 	port     string
 	level    int
+	levelB   int
 	armed    string
 	renewed  time.Time
 	released int
@@ -80,14 +83,14 @@ func (d *fakeDriver) Kind() estim.Kind { return "fakekind" }
 func (d *fakeDriver) Label() string    { return "Fake unit" }
 func (d *fakeDriver) Port() string     { return d.port }
 func (d *fakeDriver) Capabilities() estim.Capabilities {
-	return estim.Capabilities{LevelMax: 50, Channels: []string{"a"}, Modes: []int{0, 1}, Timer: true}
+	return estim.Capabilities{LevelMax: 50, Channels: []string{"a", "b"}, Modes: []int{0, 1}, Timer: true}
 }
 func (d *fakeDriver) Held() bool { return true }
 func (d *fakeDriver) Release(context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.released++
-	d.level = 0
+	d.level, d.levelB = 0, 0
 	return nil
 }
 func (d *fakeDriver) Arm(_ context.Context, powerMode string) error {
@@ -108,20 +111,26 @@ func (d *fakeDriver) Status(context.Context) (estim.Status, error) {
 	if d.lost != nil {
 		return estim.Status{}, d.lost
 	}
-	level := d.level
-	return estim.Status{Connected: true, Port: estim.String(d.port), LevelA: &level, LevelB: estim.Int(0)}, nil
+	level, levelB := d.level, d.levelB
+	return estim.Status{Connected: true, Port: estim.String(d.port), LevelA: &level, LevelB: &levelB}, nil
 }
 func (d *fakeDriver) Telemetry(context.Context) (estim.Frame, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	level := d.level
-	return estim.Frame{AtMs: 1, LevelA: &level}, nil
+	level, levelB := d.level, d.levelB
+	return estim.Frame{AtMs: 1, LevelA: &level, LevelB: &levelB}, nil
 }
 func (d *fakeDriver) Execute(ctx context.Context, cmd estim.Command, levelMax int, cancelled func() bool) (estim.Result, error) {
 	if cmd.Verb != "set_level" || cmd.Level == nil {
 		return estim.Result{}, fmt.Errorf("fake: unsupported %s", cmd.Verb)
 	}
 	target := min(*cmd.Level, levelMax)
+	if estim.ChannelOf(cmd) == estim.ChannelB {
+		d.mu.Lock()
+		d.levelB = target
+		d.mu.Unlock()
+		return estim.Result{Verb: "set_level", Channel: estim.ChannelB, Level: estim.Int(target)}, nil
+	}
 	// A slow ramp, one level per 20 ms, so a cancel can land midway.
 	for {
 		d.mu.Lock()
@@ -147,7 +156,7 @@ func (d *fakeDriver) Execute(ctx context.Context, cmd estim.Command, levelMax in
 		d.mu.Unlock()
 	}
 	level := target
-	return estim.Result{Verb: "set_level", Level: &level}, nil
+	return estim.Result{Verb: "set_level", Channel: estim.ChannelA, Level: &level}, nil
 }
 func (d *fakeDriver) Close(context.Context, bool) error {
 	d.mu.Lock()
@@ -390,8 +399,21 @@ func TestHostCancelsARunningExecuteAndSurvivesAHelperThatDies(t *testing.T) {
 	// The level cap the Runtime passes is honoured on the far side.
 	level = 45
 	res, err := d.Execute(ctx, estim.Command{Verb: "set_level", Level: &level}, 10, func() bool { return false })
-	if err != nil || *res.Level != 10 {
+	if err != nil || *res.Level != 10 || res.Channel != estim.ChannelA {
 		t.Fatalf("capped execute = %+v, %v", res, err)
+	}
+	// Channel B crosses the pipe by name: its level lands on B alone, the
+	// result names B, and the status and telemetry carry both channels.
+	levelB := 7
+	res, err = d.Execute(ctx, estim.Command{Verb: "set_level", Channel: estim.ChannelB, Level: &levelB}, 10, func() bool { return false })
+	if err != nil || res.Channel != estim.ChannelB || *res.Level != 7 {
+		t.Fatalf("execute on B = %+v, %v", res, err)
+	}
+	if st, err := d.Status(ctx); err != nil || *st.LevelA != 10 || *st.LevelB != 7 {
+		t.Fatalf("status after B = %+v, %v", st, err)
+	}
+	if fr, err := d.Telemetry(ctx); err != nil || fr.LevelB == nil || *fr.LevelB != 7 {
+		t.Fatalf("telemetry after B = %+v, %v", fr, err)
 	}
 
 	// The helper dies mid-call: the caller hears a loss (the unit stopped

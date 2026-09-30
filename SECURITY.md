@@ -50,10 +50,12 @@ are acknowledged within three business days.
   Low Energy), the connector relays the service's commands to it and its
   status back, over the same authenticated channel it uses for camera
   dials; the camera tunnel carries none of it. The connector holds the
-  device to bounds the service cannot change: one channel, one intensity
-  step per 0.4 s with a read-back, programs from the device's own fixed
-  list, the intensity never past the device's own scale (25 on the
-  Mastago). The bounds within those are the attached session's to set from
+  device to bounds the service cannot change: only the channels the
+  device's driver lists (one on the Mastago; a two-channel unit's driver
+  may list both, each held to the same bounds), one intensity step per
+  0.4 s with a read-back, programs from the device's own fixed list, the
+  intensity never past the device's own scale (25 on the Mastago). The
+  bounds within those are the attached session's to set from
   the phone and are restored to the defaults when it detaches: the highest
   intensity a command may set (15 of 25 by default on the Mastago) and, on
   a device with several power ranges, the range it is armed in. The device

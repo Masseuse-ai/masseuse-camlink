@@ -8,14 +8,17 @@ import (
 )
 
 // FuzzParseCommand: a command of any bytes never panics, an accepted
-// command carries an allowed verb and channel, and CheckCaps refuses every
-// accepted actuation that steps outside the connector's caps.
+// command carries an allowed verb and a channel that is A or B, a level
+// command for channel B is refused by CheckCaps on a device that lists A
+// alone, and CheckCaps refuses every accepted actuation that steps outside
+// the connector's caps.
 func FuzzParseCommand(f *testing.F) {
 	f.Add([]byte(`{"verb":"set_level","channel":"a","level":6}`))
 	f.Add([]byte(`{"verb":"set_mode","mode":118}`))
 	f.Add([]byte(`{"verb":"adjust_ma","delta":-10,"reason":"x"}`))
 	f.Add([]byte(`{"verb":"status"}`))
 	f.Add([]byte(`{"verb":"set_level","channel":"b","level":1}`))
+	f.Add([]byte(`{"verb":"set_level","channel":"c","level":1}`))
 	f.Add([]byte(`[]`))
 	f.Add([]byte(``))
 	caps := estim.Capabilities{LevelMax: 99, Channels: []string{"a"}, Modes: []int{0x76, 0x77}, Tempo: true}
@@ -24,10 +27,16 @@ func FuzzParseCommand(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if cmd.Channel != "" && cmd.Channel != "a" {
+		if cmd.Channel != "" && cmd.Channel != estim.ChannelA && cmd.Channel != estim.ChannelB {
 			t.Fatalf("channel %q accepted", cmd.Channel)
 		}
 		capsErr := estim.CheckCaps(cmd, caps, estim.DefaultSettings())
+		if cmd.Channel == estim.ChannelB && (cmd.Verb == "set_level" || cmd.Verb == "adjust_level") {
+			if capsErr == nil {
+				t.Fatalf("channel B accepted on a device that lists A alone")
+			}
+			return
+		}
 		switch cmd.Verb {
 		case "status", "release":
 			if capsErr != nil {

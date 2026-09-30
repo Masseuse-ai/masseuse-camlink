@@ -111,6 +111,13 @@ const (
 	PowerModeHigh   = unit.PowerModeHigh
 )
 
+// The intensity channels a level command may name (a two-channel device
+// lists both in its Capabilities; one listing none drives A alone).
+const (
+	ChannelA = unit.ChannelA
+	ChannelB = unit.ChannelB
+)
+
 var (
 	// ErrCancelled is returned by a ramp the cancellation latch preempted.
 	ErrCancelled = unit.ErrCancelled
@@ -130,6 +137,7 @@ var (
 	LevelMaxFor        = unit.LevelMaxFor
 	ParseCommand       = unit.ParseCommand
 	CheckCaps          = unit.CheckCaps
+	ChannelOf          = unit.ChannelOf
 	ActuatorsOf        = unit.ActuatorsOf
 	SensorsOf          = unit.SensorsOf
 	CheckActuate       = unit.CheckActuate

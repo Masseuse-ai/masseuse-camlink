@@ -238,12 +238,12 @@ func (r *Runtime) settingsLocked() Settings {
 
 // SetSettings takes the attached session's settings. They bound every
 // command from here on. While armed, a changed power range or a level
-// maximum below the level the device is at cannot be applied in place:
-// the device is released (outputs to zero, latch set) and the caller
-// arms again, in the new range; released says whether that happened. A
-// level maximum at or above the current level, or a change while not
-// armed, applies silently. Invalid settings are refused and nothing
-// changes.
+// maximum below the level the device is at (on either channel) cannot be
+// applied in place: the device is released (outputs to zero, latch set)
+// and the caller arms again, in the new range; released says whether that
+// happened. A level maximum at or above the current levels, or a change
+// while not armed, applies silently. Invalid settings are refused and
+// nothing changes.
 func (r *Runtime) SetSettings(ctx context.Context, s Settings) (released bool, err error) {
 	if err := s.Validate(); err != nil {
 		return false, fmt.Errorf("estim: %w", err)
@@ -254,8 +254,14 @@ func (r *Runtime) SetSettings(ctx context.Context, s Settings) (released bool, e
 	r.hasSettings = true
 	armed := r.armedLocked()
 	level := 0
-	if r.hasStatus && r.lastStatus.LevelA != nil {
-		level = *r.lastStatus.LevelA
+	if r.hasStatus {
+		// The higher of the two channels: the cap is the box's, and channel
+		// B is the person's own to have raised.
+		for _, at := range []*int{r.lastStatus.LevelA, r.lastStatus.LevelB} {
+			if at != nil && *at > level {
+				level = *at
+			}
+		}
 	}
 	r.st.Unlock()
 	if prev == s || !armed {
