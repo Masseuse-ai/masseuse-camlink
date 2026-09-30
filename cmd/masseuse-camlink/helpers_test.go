@@ -36,6 +36,31 @@ func TestHelpersDirIsTheFlagOrTheBundlesPlace(t *testing.T) {
 	}
 }
 
+func TestListenersAreProbedBeforeWriters(t *testing.T) {
+	fam := func(name string, listens bool) helperFamily {
+		return helperFamily{family: deviceFamily{name: name}, listens: listens}
+	}
+	// Name order in, from helperPrograms: coyote, estim2b (writers), mk312
+	// (listener). The listener comes first; the writers keep their order.
+	got := listenersFirst([]helperFamily{fam("coyote", false), fam("estim2b", false), fam("mk312", true)})
+	order := []string{}
+	for _, f := range got {
+		order = append(order, f.name)
+	}
+	if strings.Join(order, ",") != "mk312,coyote,estim2b" {
+		t.Fatalf("order = %v; the listener (mk312) must precede the writers, kept in name order", order)
+	}
+	// Two listeners keep their order too, before a writer.
+	got = listenersFirst([]helperFamily{fam("a", true), fam("z-writer", false), fam("b", true)})
+	order = order[:0]
+	for _, f := range got {
+		order = append(order, f.name)
+	}
+	if strings.Join(order, ",") != "a,b,z-writer" {
+		t.Fatalf("order = %v", order)
+	}
+}
+
 func TestHelperProgramsAreTheExecutablesWithThePrefix(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name string, mode os.FileMode) {
