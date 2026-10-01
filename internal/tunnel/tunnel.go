@@ -33,9 +33,9 @@ const Subprotocol = "camlink.v1"
 
 const (
 	// DefaultSendBuffer is the TCP send buffer asked for on the tunnel
-	// connection: about three seconds of a 2.5 Mb/s stream, so a short
+	// connection: over a second of a 4K camera's 25 Mb/s, so a short
 	// uplink stall queues in the kernel without blocking the writer.
-	DefaultSendBuffer = 1 << 20
+	DefaultSendBuffer = 4 << 20
 	// ProbeInterval is how often the tunnel pings the gateway to measure how
 	// far behind the connection is (Tunnel.Backlog).
 	ProbeInterval = time.Second

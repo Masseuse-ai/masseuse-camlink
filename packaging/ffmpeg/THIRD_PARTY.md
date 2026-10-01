@@ -38,7 +38,11 @@ output the smoke test uses; and, per system:
   runner with the Xcode command line tools.
 - **Windows** (`build.sh -t windows`): the DirectShow (`dshow`) input and
   the `h264_mf` encoder (Media Foundation: the graphics chip's encoder, or
-  the software H.264 encoder Windows carries). Cross-compiled on a Linux
+  the software H.264 encoder Windows carries); the decoders for what
+  cameras send through DirectShow compressed (`mjpeg`, `h264`, `hevc`, and
+  `v210` from capture cards), and, for the tests' stand-in cameras, the NUT
+  demuxer and the `file` protocol.
+  Cross-compiled on a Linux
   runner with mingw-w64 (`x86_64-w64-mingw32`), linked static, so the
   program depends on Windows' own libraries only. ffmpeg loads Media
   Foundation (`mfplat.dll`) at run time, so the program starts on an N

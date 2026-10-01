@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build the ffmpeg that ships with the connector, one static program holding
-# exactly the components the connector uses (internal/capture/args.go and
-# devices.go) plus a test source for the smoke test, and nothing licensed
+# exactly the components the connector uses (internal/capture/args.go,
+# devices.go and formats.go) plus what its tests feed it, and nothing licensed
 # beyond LGPL 2.1: no GPL parts (so no libx264: the system's H.264 encoder
 # does the encoding, VideoToolbox on a Mac, Media Foundation on Windows), no
 # nonfree parts. The one external library is libopus (BSD-3-Clause).
@@ -117,8 +117,9 @@ opussrc="$src/opus-$OPUS_VERSION"
 # The components every build holds, and only these (the system-specific
 # input and encoder are added per target below):
 #   input   lavfi with testsrc2 and sine (the smoke test's picture and tone)
-#   decode  rawvideo and PCM, which is what a capture input delivers;
-#           wrapped_avframe, which is what lavfi delivers
+#   decode  rawvideo and PCM, which is what avfoundation delivers, and what
+#           dshow delivers from an uncompressed mode; wrapped_avframe, which
+#           is what lavfi delivers
 #   encode  libopus
 #   filter  the ones ffmpeg inserts for -pix_fmt, -r, -ac/-ar and -t, and
 #           the graph's own source and sink filters
@@ -149,9 +150,22 @@ DARWIN_CONFIGURE="
 # the d3d11va hardware context is enabled with it: Windows' own headers and
 # libraries, nothing external. Win32 threads are ffmpeg's own on Windows;
 # --disable-autodetect leaves them off unless asked for.
+# dshow hands over what the camera sends at the size and rate asked for,
+# raw or compressed, and 1280x720 at 30 fps raw (about 55 MB/s) is more
+# than USB 2.0 carries: webcams send it as MJPEG, UVC 1.5 cameras also as
+# H.264 (the Insta360 Link offers nothing else), some 4K cameras and capture
+# devices as HEVC, pro capture cards as v210. Any other compression tag
+# needs a decoder this build does not have, and the connector does not ask
+# for it (internal/capture/formats.go, which prefers raw, then MJPEG).
+# The nut demuxer and the file protocol are for the real-ffmpeg test's
+# stand-in cameras (internal/capture/testdata: a camera's compressed frames
+# recorded with their timing, read over and over), as lavfi is for its
+# picture.
 WINDOWS_CONFIGURE="
   --enable-mediafoundation --enable-d3d11va --enable-w32threads
   --enable-indev=dshow,lavfi
+  --enable-decoder=mjpeg,h264,hevc,v210
+  --enable-demuxer=nut --enable-protocol=file
   --enable-encoder=h264_mf,libopus
 "
 

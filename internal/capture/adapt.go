@@ -11,10 +11,45 @@ import (
 	"github.com/Masseuse-ai/masseuse-camlink/internal/serve"
 )
 
-// Rungs are the bit rates the Adapter moves between, as fractions of the
-// configured bit rate (Options.Bitrate, the ceiling): 2500k gives 2500k,
-// 1600k, 1000k and 600k.
-var Rungs = []float64{1, 0.64, 0.40, 0.24}
+// BitrateFloor is the lowest bit rate the Adapter steps down to, in bits
+// per second: where a 2500k ceiling's ladder has always ended. A ceiling
+// below it is its own floor.
+const BitrateFloor = 600_000
+
+// steps are the first rungs, as fractions of the ceiling (Options.Bitrate);
+// past them each rung is stepRatio of the one above, down to BitrateFloor
+// (ladder).
+var steps = []float64{1, 0.64, 0.40, 0.24}
+
+const stepRatio = 0.6
+
+// maxJump is the most rungs one step down goes (Adapter.below).
+const maxJump = 3
+
+// ladder is the bit rates the Adapter moves between under ceiling (bits
+// per second), from the ceiling down, in whole kb/s: 2500k gives 2500k,
+// 1600k, 1000k and 600k; a camera's larger picture has a higher ceiling
+// and a longer ladder to the same floor, 24900k giving 24900k, 15936k,
+// 9960k, 5976k, 3586k, 2151k, 1291k, 774k and 600k.
+func ladder(ceiling int64) []int64 {
+	rates := []int64{ceiling}
+	if ceiling <= BitrateFloor {
+		return rates
+	}
+	f := 1.0
+	for i := 1; ; i++ {
+		if i < len(steps) {
+			f = steps[i]
+		} else {
+			f *= stepRatio
+		}
+		r := int64(float64(ceiling)*f/1000+0.5) * 1000
+		if r <= BitrateFloor {
+			return append(rates, BitrateFloor)
+		}
+		rates = append(rates, r)
+	}
+}
 
 // Reshaper is what the Adapter drives: a Source.
 type Reshaper interface {
@@ -24,11 +59,14 @@ type Reshaper interface {
 
 // Adapter lowers the video bit rate while the connection cannot keep up
 // and raises it again once it can. It reads the stream's gate (serve.Stats:
-// whether video is being dropped, how many frames were) once a second:
+// whether video is being dropped, how many frames were, how much video got
+// through) once a second:
 //
-//   - down one rung when the gate was dropping for at least StepDownGating
-//     of the last Window, or dropped at least StepDownDropFraction of the
-//     window's frames; then no further step down for Hold;
+//   - down when the gate was dropping for at least StepDownGating of the
+//     last Window, or dropped at least StepDownDropFraction of the window's
+//     frames: one rung, or as many as it takes to reach the rate that got
+//     through while the gate was dropping, up to maxJump; then no further
+//     step down for Hold;
 //   - up one rung after StepUpAfter without any dropping.
 //
 // Every change goes through the Reshaper, which restarts the encoder at the
@@ -63,6 +101,7 @@ type Adapter struct {
 type sample struct {
 	congested bool
 	dropped   uint64
+	sent      uint64 // video bytes that got through
 }
 
 func (a *Adapter) defaults() {
@@ -88,27 +127,47 @@ func (a *Adapter) defaults() {
 		a.FPS = Defaults.FPS
 	}
 	if a.Ceiling == "" {
-		a.Ceiling = Defaults.Bitrate
+		a.Ceiling = BitrateFor(Defaults.VideoSize, Defaults.FPS)
 	}
 	if a.Logger == nil {
 		a.Logger = slog.Default()
 	}
 }
 
-// Rate is the bit rate of rung i under the ceiling, in ffmpeg syntax
-// ("1600k"); "" when the ceiling cannot be parsed.
-func (a *Adapter) Rate(i int) string {
+// rates is the ladder under the ceiling; nil when the ceiling cannot be
+// parsed.
+func (a *Adapter) rates() []int64 {
 	bits, ok := parseRate(a.Ceiling)
-	if !ok || i < 0 || i >= len(Rungs) {
+	if !ok || bits <= 0 {
+		return nil
+	}
+	return ladder(bits)
+}
+
+// Rate is the bit rate of rung i under the ceiling, in ffmpeg syntax
+// ("1600k"); "" when there is no such rung or the ceiling cannot be
+// parsed.
+func (a *Adapter) Rate(i int) string {
+	rates := a.rates()
+	if i < 0 || i >= len(rates) {
 		return ""
 	}
-	return formatRate(int64(float64(bits)*Rungs[i] + 0.5))
+	return formatRate(rates[i])
 }
+
+// Rungs is how many rungs the ladder under the ceiling has.
+func (a *Adapter) Rungs() int { return len(a.rates()) }
 
 // Run evaluates every Interval until ctx ends, starting at the top rung:
 // the source is at its ceiling whenever the camera comes on (Source.Stop
-// puts it back).
+// puts it back). A Target that says its options (a Source) gives the
+// ceiling and frame rate afresh at every start: a camera chosen again
+// brings its own.
 func (a *Adapter) Run(ctx context.Context) {
+	if src, ok := a.Target.(interface{ Options() Options }); ok {
+		o := src.Options()
+		a.Ceiling, a.FPS = o.Bitrate, o.FPS
+	}
 	a.defaults()
 	a.reset(time.Now())
 	tick := time.NewTicker(a.Interval)
@@ -144,7 +203,7 @@ func (a *Adapter) Evaluate(now time.Time, st serve.Stats) {
 		a.haveLast = false
 		return
 	}
-	var dropped uint64
+	var dropped, sent uint64
 	if a.haveLast && st.VideoFramesDropped >= a.last.VideoFramesDropped {
 		dropped = st.VideoFramesDropped - a.last.VideoFramesDropped
 	} else if !a.haveLast {
@@ -152,8 +211,11 @@ func (a *Adapter) Evaluate(now time.Time, st serve.Stats) {
 	} else {
 		dropped = st.VideoFramesDropped // counters restarted with a new publication
 	}
+	if a.haveLast && st.VideoBytes >= a.last.VideoBytes {
+		sent = st.VideoBytes - a.last.VideoBytes
+	}
 	a.last, a.haveLast = st, true
-	a.samples = append(a.samples, sample{congested: st.Congested, dropped: dropped})
+	a.samples = append(a.samples, sample{congested: st.Congested, dropped: dropped, sent: sent})
 	if n := int(a.Window / a.Interval); n > 0 && len(a.samples) > n {
 		a.samples = a.samples[len(a.samples)-n:]
 	}
@@ -173,14 +235,48 @@ func (a *Adapter) Evaluate(now time.Time, st serve.Stats) {
 	tooMany := float64(droppedInWindow) >= a.StepDownDropFraction*windowFrames
 	held := !a.lastChange.IsZero() && now.Sub(a.lastChange) < a.Hold
 
+	rates := a.rates()
 	switch {
-	case (gating >= a.StepDownGating || tooMany) && !held && a.rung < len(Rungs)-1:
-		a.rung++
+	case (gating >= a.StepDownGating || tooMany) && !held && a.rung < len(rates)-1:
+		a.rung = a.below(rates)
 		a.change(now, "Connection cannot keep up: video now %s", "down", gating, droppedInWindow)
 	case a.rung > 0 && now.Sub(a.cleanSince) >= a.StepUpAfter:
 		a.rung--
 		a.change(now, "Video back to %s", "up", gating, droppedInWindow)
 	}
+}
+
+// below is the rung a step down goes to: the next one, or further, to the
+// first at or below the rate that got through while the gate was dropping
+// (got), up to maxJump rungs at once. A camera's larger picture starts high
+// above a slow uplink, and one rung per Hold would leave it dropping video
+// for minutes.
+func (a *Adapter) below(rates []int64) int {
+	next := a.rung + 1
+	got := a.got()
+	for got > 0 && next < len(rates)-1 && next < a.rung+maxJump && rates[next] > got {
+		next++
+	}
+	return next
+}
+
+// got is the video bit rate that got through over the window's samples
+// while the gate was dropping, the connection's own measure of what it
+// carries; 0 when there were fewer than two such samples, or nothing got
+// through to measure.
+func (a *Adapter) got() int64 {
+	var n int
+	var bytes uint64
+	for _, s := range a.samples {
+		if s.congested {
+			n++
+			bytes += s.sent
+		}
+	}
+	if n < 2 || bytes == 0 {
+		return 0
+	}
+	return int64(float64(bytes) * 8 / (float64(n) * a.Interval.Seconds()))
 }
 
 func (a *Adapter) change(now time.Time, format, direction string, gating time.Duration, dropped uint64) {
