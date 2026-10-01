@@ -35,22 +35,30 @@ type Sink interface {
 
 // Source is the configured capture, idle until Start.
 type Source struct {
-	sink   Sink
+	sink Sink
+	// conf is the options as configured, a zero field the camera's own;
+	// opts the options in force, the camera's mode (shape) and the
+	// defaults filled in.
+	conf   Options
 	opts   Options
 	log    *slog.Logger
 	goos   string
 	ffmpeg string
-	// list enumerates the devices and encoders reads `ffmpeg -encoders`;
-	// Devices and the ffmpeg itself, or what a test puts in their place.
+	// list enumerates the devices, modes reads a camera's modes and
+	// encoders reads `ffmpeg -encoders`; Devices, cameraModes and the
+	// ffmpeg itself, or what a test puts in their place.
 	list     func(ctx context.Context, ffmpeg string) ([]Device, error)
+	modes    func(ctx context.Context, goos, ffmpeg string, cam Device) ([]Mode, error)
 	encoders func(ctx context.Context, ffmpeg string) (string, error)
 
 	mu sync.Mutex
 	// cam, mic and subs are the devices in use; chosen at New and again
-	// (rechoose) when an ffmpeg cannot open them.
+	// (rechoose) when an ffmpeg cannot open them. input is how the camera
+	// is opened, as its mode says (shape).
 	cam        Device
 	mic        *Device
 	subs       []Substitution
+	input      Input
 	cancel     context.CancelFunc
 	done       chan struct{}
 	encoder    string
@@ -83,14 +91,13 @@ type Source struct {
 	announceGrace time.Duration
 }
 
-// New resolves ffmpeg and the devices now, so a wrong selector or a
-// missing ffmpeg is reported at startup rather than at the first session,
-// and returns the source idle.
+// New resolves ffmpeg, the devices and the camera's mode now, so a wrong
+// selector or a missing ffmpeg is reported at startup rather than at the
+// first session, and returns the source idle.
 func New(ctx context.Context, sink Sink, opts Options, logger *slog.Logger) (*Source, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	opts = opts.WithDefaults()
 	if err := opts.Validate(); err != nil {
 		return nil, err
 	}
@@ -108,21 +115,69 @@ func New(ctx context.Context, sink Sink, opts Options, logger *slog.Logger) (*So
 	}
 	s := newSource(sink, opts, logger, runtime.GOOS, ffmpeg, cam, mic)
 	s.subs = subs
+	s.shape(ctx)
 	return s, nil
 }
 
-func newSource(sink Sink, opts Options, logger *slog.Logger, goos, ffmpeg string, cam Device, mic *Device) *Source {
-	opts = opts.WithDefaults()
+func newSource(sink Sink, conf Options, logger *slog.Logger, goos, ffmpeg string, cam Device, mic *Device) *Source {
+	opts := conf.WithDefaults()
 	enc := opts.Encoder
 	if enc == EncoderAuto {
 		enc = HardwareEncoder(goos)
 	}
 	return &Source{
-		sink: sink, opts: opts, log: logger, goos: goos, ffmpeg: ffmpeg, cam: cam, mic: mic,
-		list: Devices, encoders: listEncoders,
+		sink: sink, conf: conf, opts: opts, log: logger, goos: goos, ffmpeg: ffmpeg, cam: cam, mic: mic,
+		list: Devices, modes: cameraModes, encoders: listEncoders,
 		encoder: enc, bitrate: opts.Bitrate, stopGrace: 3 * time.Second, earlyExit: 5 * time.Second,
 		announceGrace: 10 * time.Second,
 	}
+}
+
+// shape reads the camera's modes and settles the picture: the mode chosen
+// (choose) gives the size and rate not configured and how the camera is
+// opened, and the bit rate ceiling, unless configured, is the picture's.
+// A camera whose modes cannot be read, or none of whose modes will do, is
+// opened as configured, at Defaults for what is not. The rate in force
+// goes back to the ceiling when the ceiling changes.
+func (s *Source) shape(ctx context.Context) {
+	s.mu.Lock()
+	cam, conf := s.cam, s.conf
+	s.mu.Unlock()
+	var choice *Choice
+	if s.modes != nil {
+		modes, err := s.modes(ctx, s.goos, s.ffmpeg, cam)
+		switch {
+		case err != nil:
+			s.log.Warn("capture: cannot read the camera's modes; opening it as configured", "camera", cam.Name, "err", err)
+		case len(modes) == 0:
+			s.log.Debug("capture: the camera lists no modes; opening it as configured", "camera", cam.Name)
+		default:
+			if c, ok := choose(s.goos, modes, conf); ok {
+				choice = &c
+				s.log.Info("capture: camera mode", "camera", cam.Name, "mode", c.String(), "offers", describeModes(modes))
+			} else {
+				s.log.Warn("capture: no mode of the camera's will do; opening it as configured", "camera", cam.Name, "offers", describeModes(modes))
+			}
+		}
+	}
+	opts := conf
+	var in Input
+	if choice != nil {
+		if opts.VideoSize == "" {
+			opts.VideoSize = choice.Size()
+		}
+		if opts.FPS == 0 {
+			opts.FPS = choice.FPS
+		}
+		in = choice.Input
+	}
+	opts = opts.WithDefaults()
+	s.mu.Lock()
+	if opts.Bitrate != s.opts.Bitrate {
+		s.bitrate = opts.Bitrate
+	}
+	s.opts, s.input = opts, in
+	s.mu.Unlock()
 }
 
 // Label names the devices, the way the phone shows them.
@@ -175,9 +230,21 @@ func (s *Source) setTrouble(t string) {
 	s.mu.Unlock()
 }
 
-// Options are the configured shaping options; Options.Bitrate is the
-// ceiling, Bitrate the rate in force.
-func (s *Source) Options() Options { return s.opts }
+// Options are the shaping options in force: the configured ones, with the
+// camera's mode and the defaults for what was not configured.
+// Options.Bitrate is the ceiling, Bitrate the rate in force.
+func (s *Source) Options() Options {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opts
+}
+
+// Input is how the camera is opened beyond its size, as its mode says.
+func (s *Source) Input() Input {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.input
+}
 
 // Bitrate is the video bit rate in force: the configured one unless
 // Reshape lowered it.
@@ -339,7 +406,8 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 		// chosen again (the list may have been renumbered, or the device
 		// gone), an encoder that would not start gives way to libx264
 		// when this ffmpeg has it, and an option it does not know means
-		// the encoder in use is not in this build at all.
+		// the encoder in use is not in this build at all. A picture this
+		// ffmpeg cannot decode is said so: no encoder would help.
 		switch kind := classifyExit(err); kind {
 		case exitInput:
 			s.setTrouble("the camera or microphone could not be opened; choosing the devices again")
@@ -350,6 +418,10 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 				continue
 			}
 			s.setTrouble("ffmpeg does not know an option it was given")
+		case exitDecoder:
+			format := undecodable(err)
+			s.setTrouble("the camera sends its picture as " + format + ", which this ffmpeg cannot decode")
+			s.log.Warn("capture: the camera sends a format this ffmpeg cannot decode", "format", format, "err", err)
 		default:
 			if s.fallBack(ctx, err) {
 				continue
@@ -434,20 +506,22 @@ func describeDuration(d time.Duration) string {
 // that out, one addressed by index does not, and a device may simply be
 // gone, in which case the default or the fallback stands in as at New.
 // When no choice can be made the devices stay as they are, for the retry.
+// Another camera brings its own modes, read again (shape).
 func (s *Source) rechoose(ctx context.Context) {
 	devs, err := s.list(ctx, s.ffmpeg)
 	if err != nil {
 		s.log.Warn("capture: cannot list the devices", "err", err)
 		return
 	}
-	cam, mic, subs, err := Resolve(devs, s.opts)
+	cam, mic, subs, err := Resolve(devs, s.conf)
 	if err != nil {
 		s.log.Warn("capture: the devices are not all connected", "err", err)
 		s.setTrouble("the camera or microphone is not connected: " + err.Error())
 		return
 	}
 	s.mu.Lock()
-	changed := !sameDevice(cam, s.cam) || (mic == nil) != (s.mic == nil) || (mic != nil && !sameDevice(*mic, *s.mic))
+	camChanged := !sameDevice(cam, s.cam)
+	changed := camChanged || (mic == nil) != (s.mic == nil) || (mic != nil && !sameDevice(*mic, *s.mic))
 	s.cam, s.mic, s.subs = cam, mic, subs
 	s.mu.Unlock()
 	if changed {
@@ -456,6 +530,9 @@ func (s *Source) rechoose(ctx context.Context) {
 			micName = mic.Name
 		}
 		s.log.Info("capture: devices chosen again", "camera", cam.Name, "cameraInput", cam.input(), "mic", micName)
+	}
+	if camChanged {
+		s.shape(ctx)
 	}
 }
 
@@ -557,6 +634,9 @@ const (
 	// the connector passes means the encoder they belong to is not in
 	// this build.
 	exitOption
+	// exitDecoder: the camera's picture is in a format this ffmpeg has no
+	// decoder for.
+	exitDecoder
 )
 
 // classifyExit reads the lines an ffmpeg that exited at once wrote (the
@@ -577,6 +657,8 @@ func classifyExit(err error) exitKind {
 	switch {
 	case has("unrecognized option", "unknown encoder", "option not found", "codec not found"):
 		return exitOption
+	case has("decoding requested, but no decoder found"):
+		return exitDecoder
 	case has("error while opening encoder", "error opening encoder", "cannot create compression session"):
 		return exitEncoder
 	case has("error opening input", "device index", "no such device", "could not find video device",
@@ -588,15 +670,35 @@ func classifyExit(err error) exitKind {
 	return exitUnknown
 }
 
+// undecodable is the format an exitDecoder's ffmpeg named ("Decoding
+// requested, but no decoder found for: mjpeg"), or "a format it does not
+// name".
+func undecodable(err error) string {
+	const marker = "no decoder found for: "
+	msg := err.Error()
+	i := strings.Index(strings.ToLower(msg), marker)
+	if i < 0 {
+		return "a format it does not name"
+	}
+	name := msg[i+len(marker):]
+	if j := strings.IndexAny(name, " |\n"); j >= 0 {
+		name = name[:j]
+	}
+	if name == "" {
+		return "a format it does not name"
+	}
+	return name
+}
+
 // runFFmpeg runs one ffmpeg until it exits or ctx ends; the error carries
 // the last lines it wrote.
 func (s *Source) runFFmpeg(ctx context.Context, url string) error {
 	s.mu.Lock()
-	opts, enc := s.opts, s.encoder
-	opts.Bitrate = s.bitrate
+	opts, enc, in := s.opts, s.encoder, s.input
+	opts.ceiling, opts.Bitrate = opts.Bitrate, s.bitrate
 	cam, mic := s.cam, s.mic
 	s.mu.Unlock()
-	args := Args(s.goos, opts, cam, mic, enc, url)
+	args := Args(s.goos, opts, in, cam, mic, enc, url)
 	cmd := exec.Command(s.ffmpeg, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

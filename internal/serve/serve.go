@@ -207,6 +207,11 @@ func New(cfg Config) (*Server, error) {
 		RTSPAddress: Target,
 		TLSConfig:   &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		Listen:      func(string, string) (net.Listener, error) { return s.ln, nil },
+		// A reader's queue holds about a second and a half of a 4K
+		// camera's 25 Mb/s in the capture's 1200-byte packets, so one of
+		// its keyframes (hundreds of packets at once) does not overflow it:
+		// an overflow counts as congestion (OnStreamWriteError).
+		WriteQueueSize: writeQueueSize,
 	}
 	if err := s.srv.Start(); err != nil {
 		return nil, err

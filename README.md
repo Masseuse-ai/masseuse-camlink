@@ -185,7 +185,7 @@ is the program as described above.
 $ masseuse-camlink
 Masseuse.ai for your computer  (masseuse-camlink v0.8.0)
 Identity 3fK9pQ2m… (state in /Users/you/Library/Application Support/masseuse-camlink)
-Camera: Insta360 Link + Yeti Stereo Microphone (1280x720 30 fps, h264_videotoolbox). It is on only while a session reads it.
+Camera: Insta360 Link + Yeti Stereo Microphone (3840x2160 30 fps, h264_videotoolbox). It is on only while a session reads it.
 
 Pairing code: 7QK4-N2PX
 Type it into the masseuse.ai app on your phone when it asks for the code from your computer; the dash is added for you.
@@ -202,7 +202,7 @@ on and sends the picture for as long as the session lasts:
 ```
 Camera link active: connected to the verified enclave.
 Camera on: Insta360 Link + Yeti Stereo Microphone.
-Sending 1280x720 30 fps, h264_videotoolbox: video 2.1 Mb/s, audio 64 kb/s
+Sending 3840x2160 30 fps, h264_videotoolbox: video 24.3 Mb/s, audio 64 kb/s
 ...
 Camera off.
 ```
@@ -233,15 +233,21 @@ for the day it is back. On macOS the devices are opened by name too, so a
 phone coming into or out of reach through Continuity Camera between start
 and session, which renumbers the list, does not point the capture at the
 wrong device or at none; when a device still cannot be opened the list is
-read again and the choice made afresh before the retry. `-video-size`,
-`-fps`, `-bitrate` and `-encoder` change the picture (defaults 1280x720,
-30, 2500k and the hardware encoder, with libx264 as fallback where the
-ffmpeg has it; the one shipped in the app does not). `-bitrate` is the
-ceiling: while the connection
-cannot keep up the program steps the video down to 64, 40 or 24 % of it
-and back up once it has been clear for a while (see below). Leave the
-program running in the background, or set it up as a service; nothing else
-is needed.
+read again and the choice made afresh before the retry.
+
+The picture is the camera's best: its largest size that runs at 24 frames
+a second or more, at the most frames it has up to 30 (a camera none of
+whose sizes reaches 24 sends its fastest), in the format cheapest to
+decode where it offers several (uncompressed, then MJPEG, H.264, HEVC).
+The bit rate follows the picture, a tenth of a bit per pixel per frame:
+about 2.8 Mb/s for 1280x720, 6.2 for 1920x1080, 24.9 for 3840x2160.
+`-video-size`, `-fps`, `-bitrate` and `-encoder` set the picture instead
+(the encoder is the hardware one by default, with libx264 as fallback
+where the ffmpeg has it; the one shipped in the app does not). `-bitrate`
+is the ceiling: while the connection cannot keep up the program steps the
+video down, as far as 600 kb/s, and back up once it has been clear for a
+while (see below). Leave the program running in the background, or set it
+up as a service; nothing else is needed.
 
 On a Mac the window asks whether Masseuse.ai may use the camera and the
 microphone as soon as the Cameras and microphone step opens (or, on a
@@ -349,15 +355,18 @@ uplink (Wi‑Fi hiccups, someone else's upload) shows up as these lines:
 
 ```
 Connection congested: dropping video to keep up (backlog 1.4 s).
-Connection cannot keep up: video now 1.6 Mb/s
-Video back to 2.5 Mb/s
+Connection cannot keep up: video now 6 Mb/s
+Video back to 10 Mb/s
 ```
 
 The first means whole video frames are being left out rather than queued,
 so what does arrive is current and the audio keeps flowing; the picture
 resumes at the next keyframe. The second is the bit rate ladder stepping
-down (64, 40, 24 % of `-bitrate`), the third the step back up after a few
-clean minutes. The session sees a rougher picture, not a frozen one. A hard
+down (64, 40, 24 % of `-bitrate`, then 0.6 of the rung above each time, as
+far as 600 kb/s); a step goes as far as the rate that got through while
+video was being dropped, up to three rungs at once, so a camera's large
+picture on a slow uplink is not left dropping frames for minutes. The third
+is the step back up, one rung after a few clean minutes. The session sees a rougher picture, not a frozen one. A hard
 stall of several seconds that happens to coincide with the enclave's
 periodic ping can still end the link; the program then reconnects as it
 always did, and the session picks the camera up again.

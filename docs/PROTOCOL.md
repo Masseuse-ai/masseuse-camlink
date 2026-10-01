@@ -397,8 +397,10 @@ found, and nothing but `phone` takes a publisher.
 What `camera` carries is one source:
 
 - **The computer's camera and microphone** (`capture`). The connector runs
-  ffmpeg as a child process: avfoundation on macOS, dshow on Windows;
-  1280x720 at 30 frames per second by default, H.264
+  ffmpeg as a child process: avfoundation on macOS, dshow on Windows; by
+  default the camera's largest picture that runs at 24 frames per second or
+  more, at up to 30, with a bit rate ceiling of a tenth of a bit per pixel
+  per frame (3840x2160 at 30: 24.9 Mb/s), H.264
   from the hardware encoder (VideoToolbox, Media Foundation) or libx264, a
   keyframe every two seconds, Opus mono audio. ffmpeg publishes over plain
   RTSP to a loopback port the connector chose, on a path that is a fresh

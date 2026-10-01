@@ -22,19 +22,22 @@ func TestAdapterRates(t *testing.T) {
 	}{
 		{"2500k", []string{"2500k", "1600k", "1000k", "600k"}},
 		{"2.5M", []string{"2500k", "1600k", "1000k", "600k"}},
-		{"4M", []string{"4000k", "2560k", "1600k", "960k"}},
-		{"800k", []string{"800k", "512k", "320k", "192k"}},
+		{"4M", []string{"4000k", "2560k", "1600k", "960k", "600k"}},
+		// A 4K camera's ceiling goes on down to the same floor.
+		{"24900k", []string{"24900k", "15936k", "9960k", "5976k", "3586k", "2151k", "1291k", "774k", "600k"}},
+		{"800k", []string{"800k", "600k"}},
+		{"500k", []string{"500k"}}, // below the floor: its own
 	} {
 		a := &Adapter{Ceiling: tc.ceiling}
 		var got []string
-		for i := range Rungs {
+		for i := range a.Rungs() {
 			got = append(got, a.Rate(i))
 		}
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: %v", tc.ceiling, got)
 		}
 	}
-	if (&Adapter{Ceiling: "fast"}).Rate(0) != "" || (&Adapter{Ceiling: "2500k"}).Rate(9) != "" {
+	if a := (&Adapter{Ceiling: "fast"}); a.Rate(0) != "" || a.Rungs() != 0 || (&Adapter{Ceiling: "2500k"}).Rate(4) != "" {
 		t.Error("bad ceiling or rung")
 	}
 	for rate, want := range map[string]string{"2500k": "2.5 Mb/s", "1600k": "1.6 Mb/s", "1000k": "1 Mb/s", "600k": "600 kb/s", "999": "999 b/s", "x": "x"} {
@@ -44,13 +47,15 @@ func TestAdapterRates(t *testing.T) {
 	}
 }
 
-// drive feeds the adapter one sample per second for n seconds.
+// drive feeds the adapter one sample per second for n seconds; sending is
+// the video bytes per second that get through.
 type drive struct {
-	a     *Adapter
-	now   time.Time
-	st    serve.Stats
-	lines []string
-	fake  *fakeReshaper
+	a       *Adapter
+	now     time.Time
+	st      serve.Stats
+	lines   []string
+	fake    *fakeReshaper
+	sending uint64
 }
 
 func newDrive() *drive {
@@ -67,6 +72,7 @@ func (d *drive) step(n int, congested bool, dropped uint64) {
 	for i := 0; i < n; i++ {
 		d.now = d.now.Add(time.Second)
 		d.st.Congested = congested
+		d.st.VideoBytes += d.sending
 		if i == 0 {
 			d.st.VideoFramesDropped += dropped
 		}
@@ -106,11 +112,42 @@ func TestAdapterStepsDownOnGatingAndHolds(t *testing.T) {
 	d.step(31, true, 30)
 	d.step(31, true, 30)
 	d.step(31, true, 30)
-	if d.a.Rung() != len(Rungs)-1 || d.fake.rates[len(d.fake.rates)-1] != "600k" {
+	if d.a.Rung() != d.a.Rungs()-1 || d.fake.rates[len(d.fake.rates)-1] != "600k" {
 		t.Fatalf("rung %d rates %v", d.a.Rung(), d.fake.rates)
 	}
 	if len(d.fake.rates) != 3 {
 		t.Fatalf("rates %v", d.fake.rates)
+	}
+}
+
+// A 4K camera's 24.9 Mb/s on an uplink that carries 4 Mb/s: the first step
+// goes three rungs at once toward what got through while the gate was
+// dropping, the next lands on the first rung below it, and no further.
+func TestAdapterStepsDownToWhatGotThrough(t *testing.T) {
+	d := newDrive()
+	d.a.Ceiling = "24900k"
+	d.sending = 3_100_000 // the ceiling's worth, while it gets through
+	d.step(10, false, 0)
+	d.sending = 500_000 // 4 Mb/s
+	d.step(2, true, 10)
+	if d.a.Rung() != 3 || !reflect.DeepEqual(d.fake.rates, []string{"5976k"}) {
+		t.Fatalf("rung %d rates %v", d.a.Rung(), d.fake.rates)
+	}
+	d.step(31, true, 10)
+	if d.a.Rung() != 4 || d.fake.rates[len(d.fake.rates)-1] != "3586k" {
+		t.Fatalf("rung %d rates %v", d.a.Rung(), d.fake.rates)
+	}
+	// What gets through now fits: no further step.
+	d.sending = 448_000
+	d.step(120, false, 0)
+	if d.a.Rung() != 4 || len(d.fake.rates) != 2 {
+		t.Fatalf("rung %d rates %v", d.a.Rung(), d.fake.rates)
+	}
+	// Gating with nothing measured getting through steps one rung.
+	d.sending = 0
+	d.step(2, true, 10)
+	if d.a.Rung() != 5 || d.fake.rates[len(d.fake.rates)-1] != "2151k" {
+		t.Fatalf("rung %d rates %v", d.a.Rung(), d.fake.rates)
 	}
 }
 

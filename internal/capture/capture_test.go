@@ -37,7 +37,7 @@ func TestMain(m *testing.M) {
 		os.Exit(fakeFFmpeg(os.Args[1:]))
 	}
 	if real := os.Getenv(realFFmpegEnv + "_WRAP"); real != "" {
-		os.Exit(execFFmpeg(real, lavfiInputs(os.Args[1:])))
+		os.Exit(execFFmpeg(real, standInInputs(os.Args[1:], os.Getenv(realFFmpegCameraEnv))))
 	}
 	os.Exit(m.Run())
 }
@@ -79,6 +79,11 @@ func fakeFFmpeg(args []string) int {
 		// without libx264, so nothing knows the option.
 		fmt.Fprintln(os.Stderr, "Unrecognized option 'preset'.\nError splitting the argument list: Option not found")
 		return 8
+	}
+	if os.Getenv("CAPTURE_FAKE_NO_DECODER") == "1" {
+		// v0.33.0's ffmpeg on Windows, given a camera that sends MJPEG.
+		fmt.Fprintf(os.Stderr, "[vist#0:0/mjpeg @ 0x1] Decoding requested, but no decoder found for: mjpeg\nError opening output file %s.\nError opening output files: Invalid argument\n", url)
+		return 234
 	}
 	if bad := os.Getenv("CAPTURE_FAKE_BAD_INPUT"); bad != "" && input == bad {
 		// avfoundation given an index the renumbered list no longer has.
@@ -221,6 +226,12 @@ func TestParseAVFoundation(t *testing.T) {
 	}
 }
 
+// noMJPEGDecoder is the error v0.33.0's connector logged on Windows: its
+// ffmpeg had no MJPEG decoder for the Insta360 Link's picture.
+const noMJPEGDecoder = "ffmpeg: exit status 0xffffffea: [aist#0:1/pcm_s16le @ 00000282a34c2e80] Guessed Channel Layout: stereo | " +
+	"[vist#0:0/mjpeg @ 00000282a34c2cc0] Decoding requested, but no decoder found for: mjpeg | " +
+	"Error opening output file rtsp://127.0.0.1:57308/p3-X5I7JlQpvzhOPJUvvC-L7. | Error opening output files: Invalid argument"
+
 func TestClassifyExit(t *testing.T) {
 	for _, tc := range []struct {
 		msg  string
@@ -239,6 +250,9 @@ func TestClassifyExit(t *testing.T) {
 		// failure an input one.
 		{"ffmpeg: exit status 1: [AVFoundation indev @ 0x1] Selected framerate (29.970030) is not supported by the device. | [vost#0:0 @ 0x2] Error while opening encoder - maybe incorrect parameters", exitEncoder},
 		{"ffmpeg: signal: killed: ", exitUnknown},
+		// What v0.33.0's ffmpeg wrote on Windows for an Insta360 Link
+		// sending MJPEG: not the encoder's doing.
+		{noMJPEGDecoder, exitDecoder},
 	} {
 		if got := classifyExit(errors.New(tc.msg)); got != tc.want {
 			t.Errorf("%q: %v, want %v", tc.msg, got, tc.want)
@@ -246,6 +260,16 @@ func TestClassifyExit(t *testing.T) {
 	}
 	if classifyExit(nil) != exitUnknown {
 		t.Error("nil")
+	}
+	for msg, want := range map[string]string{
+		noMJPEGDecoder: "mjpeg",
+		"ffmpeg: exit status 1: [vist#0:0/hevc @ 0x1] Decoding requested, but no decoder found for: hevc": "hevc",
+		"ffmpeg: exit status 1: Decoding requested, but no decoder found for: ":                           "a format it does not name",
+		"ffmpeg: exit status 1: something else":                                                           "a format it does not name",
+	} {
+		if got := undecodable(errors.New(msg)); got != want {
+			t.Errorf("undecodable(%q) = %q, want %q", msg, got, want)
+		}
 	}
 	list := "Encoders:\n V..... = Video\n ------\n V....D h264_videotoolbox    VideoToolbox H.264 Encoder (codec h264)\n V....D libx264              libx264 H.264 / AVC (codec h264)\n"
 	if !listsEncoder(list, "libx264") || !listsEncoder(list, "h264_videotoolbox") || listsEncoder(list, "libx265") || listsEncoder(list, "Video") {
@@ -435,12 +459,12 @@ func TestArgs(t *testing.T) {
 	url := "rtsp://127.0.0.1:5000/secret"
 	join := func(a []string) string { return strings.Join(a, " ") }
 
-	mac := join(Args("darwin", Options{}, cam, &mic, EncoderVideoToolbox, url))
+	mac := join(Args("darwin", Options{}, Input{}, cam, &mic, EncoderVideoToolbox, url))
 	for _, want := range []string{
 		"-f avfoundation -framerate 30 -video_size 1280x720 -thread_queue_size 512 -i 0:1",
 		"-c:v h264_videotoolbox -realtime 1", "-profile:v main -level 3.1",
-		"-pix_fmt yuv420p -r 30 -g 60 -force_key_frames expr:gte(t,n_forced*2)",
-		"-b:v 2500k -maxrate 2500k -bufsize 2500k", "-c:a libopus -ac 1 -ar 48000 -b:a 64k",
+		"-pix_fmt yuv420p -color_range tv -r 30 -g 60 -force_key_frames expr:gte(t,n_forced*2)",
+		"-b:v 2800k -maxrate 2800k -bufsize 2800k", "-c:a libopus -ac 1 -ar 48000 -b:a 64k",
 		"-f rtsp -rtsp_transport tcp -pkt_size 1200 " + url,
 	} {
 		if !strings.Contains(mac, want) {
@@ -452,18 +476,29 @@ func TestArgs(t *testing.T) {
 	}
 	// A device the listing gave a name to (Device.Input) is opened by that
 	// name; one it did not, by index.
-	named := Args("darwin", Options{}, Device{Kind: Video, ID: "0", Name: "Insta360 Link", Input: "Insta360 Link"},
+	named := Args("darwin", Options{}, Input{}, Device{Kind: Video, ID: "0", Name: "Insta360 Link", Input: "Insta360 Link"},
 		&Device{Kind: Audio, ID: "2", Name: "MacBook Pro Microphone", Input: "MacBook Pro Microphone"}, EncoderVideoToolbox, url)
 	if i := slices.Index(named, "-i"); i < 0 || named[i+1] != "Insta360 Link:MacBook Pro Microphone" {
 		t.Errorf("darwin input by name: %q", named)
 	}
-	mixed := Args("darwin", Options{}, Device{Kind: Video, ID: "0", Name: "Insta360 Link", Input: "Insta360 Link"},
+	mixed := Args("darwin", Options{}, Input{}, Device{Kind: Video, ID: "0", Name: "Insta360 Link", Input: "Insta360 Link"},
 		&Device{Kind: Audio, ID: "2", Name: "Cam Link: 4K"}, EncoderVideoToolbox, url)
 	if i := slices.Index(mixed, "-i"); i < 0 || mixed[i+1] != "Insta360 Link:2" {
 		t.Errorf("darwin input by name and index: %q", mixed)
 	}
+	// A Mac camera's mode is opened at its top rate as avfoundation lists
+	// it; the stream runs at the options' rate.
+	mode := join(Args("darwin", Options{VideoSize: "3840x2160"}, Input{Rate: "60.000240"}, cam, nil, EncoderVideoToolbox, url))
+	for _, want := range []string{
+		"-f avfoundation -framerate 60.000240 -video_size 3840x2160 -thread_queue_size 512 -i 0 ",
+		"-profile:v main -level 5.1", "-r 30 -g 60", "-b:v 24900k -maxrate 24900k -bufsize 24900k",
+	} {
+		if !strings.Contains(mode, want) {
+			t.Errorf("darwin mode args missing %q:\n%s", want, mode)
+		}
+	}
 
-	win := join(Args("windows", Options{FPS: 25, VideoSize: "1920x1080", Bitrate: "4M"},
+	win := join(Args("windows", Options{FPS: 25, VideoSize: "1920x1080", Bitrate: "4M"}, Input{},
 		Device{ID: "Insta360 Link"}, &Device{ID: "Microphone (Yeti)"}, EncoderMediaFound, url))
 	for _, want := range []string{
 		"-f dshow -rtbufsize 100M -framerate 25 -video_size 1920x1080 -thread_queue_size 512 -i video=Insta360 Link:audio=Microphone (Yeti)",
@@ -476,8 +511,20 @@ func TestArgs(t *testing.T) {
 	if strings.Contains(win, "-level") {
 		t.Errorf("h264_mf takes no level:\n%s", win)
 	}
+	// The camera's mode pins its format ahead of the device, where dshow
+	// reads it; the rate asked of the camera can differ from the stream's.
+	pinned := join(Args("windows", Options{FPS: 30, VideoSize: "3840x2160"}, Input{Rate: "29", Format: []string{"-vcodec", "mjpeg"}},
+		Device{ID: "Insta360 Link"}, &Device{ID: "Microphone (Yeti)"}, EncoderMediaFound, url))
+	for _, want := range []string{
+		"-f dshow -rtbufsize 100M -framerate 29 -video_size 3840x2160 -vcodec mjpeg -thread_queue_size 512 -i video=Insta360 Link:audio=Microphone (Yeti)",
+		"-r 30 -g 60", "-b:v 24900k -maxrate 24900k -bufsize 24900k",
+	} {
+		if !strings.Contains(pinned, want) {
+			t.Errorf("windows pinned args missing %q:\n%s", want, pinned)
+		}
+	}
 
-	lin := join(Args("linux", Options{}, Device{ID: "/dev/video0"}, &Device{ID: "alsa_input.usb-yeti"}, EncoderX264, url))
+	lin := join(Args("linux", Options{}, Input{}, Device{ID: "/dev/video0"}, &Device{ID: "alsa_input.usb-yeti"}, EncoderX264, url))
 	for _, want := range []string{
 		"-f v4l2 -framerate 30 -video_size 1280x720 -thread_queue_size 512 -i /dev/video0",
 		"-f pulse -thread_queue_size 512 -i alsa_input.usb-yeti -map 0:v:0 -map 1:a:0",
@@ -488,24 +535,33 @@ func TestArgs(t *testing.T) {
 		}
 	}
 	// The level follows the picture, not the bit rate.
-	hd := join(Args("linux", Options{VideoSize: "1920x1080", Bitrate: "600k"}, Device{ID: "/dev/video0"}, nil, EncoderX264, url))
+	hd := join(Args("linux", Options{VideoSize: "1920x1080", Bitrate: "600k"}, Input{}, Device{ID: "/dev/video0"}, nil, EncoderX264, url))
 	if !strings.Contains(hd, "-level 4.0") {
 		t.Errorf("1080p30 level:\n%s", hd)
 	}
 	for _, tc := range []struct {
-		size string
-		fps  int
-		want string
+		size    string
+		fps     int
+		ceiling string
+		want    string
 	}{
-		{"1280x720", 30, "3.1"}, {"640x480", 30, "3.1"}, {"1280x720", 60, "3.2"}, {"1920x1080", 30, "4.0"},
-		{"1920x1080", 60, "4.2"}, {"3840x2160", 30, "5.1"}, {"3840x2160", 60, "5.2"}, {"bad", 30, "3.1"},
+		{"1280x720", 30, "2800k", "3.1"}, {"640x480", 30, "900k", "3.1"}, {"1280x720", 60, "5500k", "3.2"}, {"1920x1080", 30, "6200k", "4.0"},
+		{"1920x1080", 60, "12400k", "4.2"}, {"3840x2160", 30, "24900k", "5.1"}, {"3840x2160", 60, "49800k", "5.2"}, {"bad", 30, "2800k", "3.1"},
+		// A ceiling above what the picture's level carries raises the level.
+		{"1280x720", 30, "15M", "3.2"}, {"1920x1080", 30, "25M", "4.1"}, {"1920x1080", 30, "60M", "5.0"},
 	} {
-		if got := h264Level(tc.size, tc.fps); got != tc.want {
-			t.Errorf("level for %s@%d: %s, want %s", tc.size, tc.fps, got, tc.want)
+		if got := h264Level(tc.size, tc.fps, tc.ceiling); got != tc.want {
+			t.Errorf("level for %s@%d at %s: %s, want %s", tc.size, tc.fps, tc.ceiling, got, tc.want)
 		}
 	}
+	// A step down under a 25M ceiling keeps the ceiling's level, so the
+	// parameter sets the enclave learnt stay valid.
+	stepped := join(Args("darwin", Options{VideoSize: "1920x1080", Bitrate: "1600k", ceiling: "25M"}, Input{}, cam, &mic, EncoderVideoToolbox, url))
+	if !strings.Contains(stepped, "-level 4.1") || !strings.Contains(stepped, "-b:v 1600k") {
+		t.Errorf("stepped down:\n%s", stepped)
+	}
 
-	solo := join(Args("darwin", Options{}, cam, nil, EncoderX264, url))
+	solo := join(Args("darwin", Options{}, Input{}, cam, nil, EncoderX264, url))
 	if !strings.Contains(solo, "-i 0 ") || !strings.Contains(solo, " -an ") || strings.Contains(solo, "libopus") {
 		t.Errorf("video only: %s", solo)
 	}
@@ -721,6 +777,8 @@ func testSourceOn(t *testing.T, goos string, opts Options, ffmpeg string) (*serv
 	}
 	src := newSource(srv, opts, quiet(), goos, ffmpeg, cam, &mic)
 	src.earlyExit = 2 * time.Second
+	// The camera's modes are read only where a test says what they are.
+	src.modes = nil
 	t.Cleanup(src.Stop)
 	return srv, src
 }
@@ -828,14 +886,15 @@ func TestDescribeDuration(t *testing.T) {
 
 func TestReshapeRestartsTheEncoderWithoutLosingTheReader(t *testing.T) {
 	srv, src := testSource(t, Options{})
-	if src.Bitrate() != Defaults.Bitrate {
+	ceiling := BitrateFor(Defaults.VideoSize, Defaults.FPS)
+	if src.Bitrate() != ceiling {
 		t.Fatalf("bitrate %q before anything", src.Bitrate())
 	}
 	// Idle: only the rate for the next start changes.
 	if src.Reshape("1600k") {
 		t.Fatal("reshaped an idle source")
 	}
-	if src.Bitrate() != "1600k" || src.Options().Bitrate != Defaults.Bitrate {
+	if src.Bitrate() != "1600k" || src.Options().Bitrate != ceiling {
 		t.Fatalf("bitrate %q, configured %q", src.Bitrate(), src.Options().Bitrate)
 	}
 	src.Start()
@@ -865,7 +924,7 @@ func TestReshapeRestartsTheEncoderWithoutLosingTheReader(t *testing.T) {
 	// Stop still turns everything off, and the next start is at the ceiling.
 	src.Stop()
 	waitFor(t, "publication end", func() bool { return !srv.Stats().Publishing })
-	if src.Bitrate() != Defaults.Bitrate {
+	if src.Bitrate() != ceiling {
 		t.Fatalf("bitrate %q after Stop", src.Bitrate())
 	}
 }
@@ -897,6 +956,27 @@ func TestSourceDoesNotFallBackToAnEncoderTheBuildLacks(t *testing.T) {
 	}
 	if src.Trouble() != "the video encoder failed to start" {
 		t.Fatalf("trouble %q", src.Trouble())
+	}
+	if src.Publishing() {
+		t.Fatal("publishing")
+	}
+}
+
+// A camera whose picture this ffmpeg cannot decode (v0.33.0's on Windows,
+// an Insta360 Link sending MJPEG): the person is told which format, and the
+// encoder is neither blamed nor swapped (libx264 is not even looked for).
+func TestSourceSaysWhichFormatItCannotDecode(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_NO_DECODER", "1")
+	_, src := testSource(t, Options{})
+	src.earlyExit = 100 * time.Millisecond
+	src.Start()
+	want := "the camera sends its picture as mjpeg, which this ffmpeg cannot decode"
+	waitFor(t, "trouble", func() bool { return src.Trouble() == want })
+	src.mu.Lock()
+	enc, looked := src.encoder, src.encoderList != nil
+	src.mu.Unlock()
+	if enc != EncoderVideoToolbox || looked {
+		t.Fatalf("encoder %s, libx264 looked for %v: the encoder was blamed", enc, looked)
 	}
 	if src.Publishing() {
 		t.Fatal("publishing")

@@ -15,6 +15,9 @@ const DefaultGateBacklog = time.Second
 // congestion on its own.
 const overflowWindow = 500 * time.Millisecond
 
+// writeQueueSize is a reader's write queue, in packets (a power of two).
+const writeQueueSize = 4096
+
 // track is one media of the stream across every generation of publisher:
 // the RTP continuity the readers see, and for video the gate that drops
 // whole frames while the tunnel is behind.
