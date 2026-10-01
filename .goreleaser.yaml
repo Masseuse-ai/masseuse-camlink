@@ -140,49 +140,21 @@ release:
   prerelease: auto
   extra_files:
     - glob: ./gateway-bin/*
+  # The release notes are brief: Install and Verify here, and a Changes
+  # section the release identity puts above them. The Mac and Windows
+  # downloads are added by the macos-app and windows-app jobs a few minutes
+  # after this release is created.
   footer: |
+    ## Install
+
+    - **Mac:** open `Masseuse.ai-{{ .Version }}.dmg` and drag Masseuse to Applications. Signed with FemLed, Inc.'s Apple Developer ID and notarized by Apple.
+    - **Windows:** save `Masseuse.exe` and open it. Signed by Principled Labs, Inc.
+
+    Installed copies update themselves.
+
     ## Verify
 
-    ```sh
-    scripts/verify-release.sh {{ .Tag }}
-    ```
-
-    Every archive and the raw gateway binaries are listed in `checksums.txt`,
-    which is signed keyless by this repository's release workflow
-    (`checksums.txt.sigstore.json`). `multiple.intoto.jsonl` is SLSA
-    provenance for all of them.
-
-    **Mac users:** the download is `Masseuse.ai-{{ .Version }}.dmg` (Apple
-    silicon and Intel; open it, drag Masseuse to Applications, open it
-    from there; if a Masseuse.ai from 0.8.0 or 0.8.1 is in Applications,
-    it is the same program and can go). It is added to this release by the workflow's `macos-app`
-    job a few minutes after the archives, signed with FemLed's Apple
-    Developer ID, notarized and stapled, with ffmpeg inside; it is listed
-    with the ffmpeg source tarballs in `checksums-darwin.txt`, signed the
-    same way (`checksums-darwin.txt.sigstore.json`), with provenance in
-    `darwin.intoto.jsonl`.
-
-    **Windows users:** the download is the one file `Masseuse.exe`: save
-    it anywhere and open it (ffmpeg and the unit drivers are inside it and
-    unpack under %LOCALAPPDATA%\masseuse-camlink on the first start). It is
-    added by the `windows-app` job after the archives; it is the
-    `windows_amd64` archive's binary byte for byte with the payload
-    appended, listed in `checksums-windows.txt` (signed,
-    `checksums-windows.txt.sigstore.json`; provenance `windows.intoto.jsonl`);
-    it and the programs inside it are signed by Principled Labs, Inc. with
-    Azure Artifact Signing (VERIFY.md, "The Windows package", says how to
-    check the signer). If Windows asks before the first start, the prompt
-    names that publisher. Installs of releases before
-    0.13 update themselves from `Masseuse.ai-{{ .Version }}-windows.zip`,
-    which holds the same file.
-
-    See VERIFY.md for the commands and for rebuilding the binaries byte for
-    byte.
+    `scripts/verify-release.sh {{ .Tag }}` checks every download's signature and provenance; VERIFY.md explains how.
 
 changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^ci:"
+  disable: true
