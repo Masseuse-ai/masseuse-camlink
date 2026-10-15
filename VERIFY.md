@@ -80,12 +80,14 @@ none is published since.)
 ## 3. Reproduce the binaries
 
 Releases are built from the Go module proxy, never from a checkout, with
-`GOTOOLCHAIN=go1.27.1`, `CGO_ENABLED=0`, `-trimpath -buildvcs=false` and
-`-ldflags='-s -w -buildid='`. There is no `-X` version flag: the version the
-binary prints is the module version Go embeds. Rebuilding needs Go (any
-recent version; `GOTOOLCHAIN` makes it fetch and use go1.27.1) and takes one
-command per binary. The release workflow's `reproduce` job runs both recipes
-below on a fresh runner for every tag and fails if a hash differs.
+`GOTOOLCHAIN=go1.27.2` (`go1.27.1` for v0.34.0 and earlier; `go version
+<binary>` names the toolchain of any release's binary), `CGO_ENABLED=0`,
+`-trimpath -buildvcs=false` and `-ldflags='-s -w -buildid='`. There is no
+`-X` version flag: the version the binary prints is the module version Go
+embeds. Rebuilding needs Go (any recent version; `GOTOOLCHAIN` makes it
+fetch and use the release's toolchain) and takes one command per binary.
+The release workflow's `reproduce` job runs both recipes below on a fresh
+runner for every tag and fails if a hash differs.
 
 ### The gateway
 
@@ -93,7 +95,7 @@ The raw `masseuse-camlink-gateway_X.Y.Z_linux_{amd64,arm64}` files are
 exactly what `go install` yields:
 
 ```sh
-export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOFLAGS=
+export GOTOOLCHAIN=go1.27.2 CGO_ENABLED=0 GOFLAGS=  # go1.27.1 for v0.34.0 and earlier
 GOOS=linux GOARCH=amd64 go install -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
   github.com/Masseuse-ai/masseuse-camlink/cmd/masseuse-camlink-gateway@vX.Y.Z
 sha256sum "$(go env GOPATH)/bin/linux_amd64/masseuse-camlink-gateway"
@@ -116,7 +118,7 @@ build is not byte-identical to `go install` (it embeds a different main
 module), so repeat it the same way:
 
 ```sh
-export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOFLAGS=
+export GOTOOLCHAIN=go1.27.2 CGO_ENABLED=0 GOFLAGS=  # go1.27.1 for v0.34.0 and earlier
 mkdir connector && cd connector && printf 'module connector\n' > go.mod
 go get github.com/Masseuse-ai/masseuse-camlink@vX.Y.Z
 GOOS=windows GOARCH=amd64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
@@ -146,7 +148,7 @@ darwin/arm64 binary ad hoc; an unsigned darwin/amd64 rebuild passes through
 untouched.
 
 ```sh
-export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOFLAGS=
+export GOTOOLCHAIN=go1.27.2 CGO_ENABLED=0 GOFLAGS=  # go1.27.1 for v0.34.0 and earlier
 mkdir connector && cd connector && printf 'module connector\n' > go.mod
 go get github.com/Masseuse-ai/masseuse-camlink@vX.Y.Z
 GOOS=darwin GOARCH=arm64 go build -mod=mod -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \

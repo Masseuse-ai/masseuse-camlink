@@ -1,6 +1,6 @@
 module github.com/Masseuse-ai/masseuse-camlink/desktop
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/Masseuse-ai/masseuse-camlink v0.0.0
