@@ -238,8 +238,10 @@ The connector dials `wss://<origin>/ingest/tunnel` with
 `Authorization: Bearer <ticket>` and the WebSocket subprotocol `camlink.v1`.
 The origin's TLS certificate is verified against the public roots **and**
 pinned to the SubjectPublicKeyInfo hash that the origin's attestation bound
-(`tlsSpkiNonce` in `eat_nonce`), after the attestation token itself has been
-verified against the policy published at `<service>/api/tee-policy`
+(`tlsSpkiNonce` in `eat_nonce`, which must hold that hash, the evidence
+key's and the connector's fresh nonce and nothing else), after the
+attestation token itself has been verified against the policy published
+at `<service>/api/tee-policy`
 (`internal/attest`). The served policy is applied on top of floors compiled
 into the connector (`internal/attest`, `Floors`, `Production`): the token
 issuer and key set, the software and hardware model, the image signing key,
