@@ -11,7 +11,8 @@
 // image may be, debug state, STABLE, GPU confidential computing,
 // TRAINER_URL, and image digests when the policy pins any), and check the
 // nonce bindings: the fresh nonce, the SHA-256 of the enclave's evidence
-// key, and the SHA-256 of the TLS leaf's SubjectPublicKeyInfo. The last
+// key, and the SHA-256 of the TLS leaf's SubjectPublicKeyInfo, and nothing
+// else beside them. The last
 // binding is what a browser cannot check and what proves the TLS endpoint
 // terminates inside the attested enclave; the connector then pins the
 // tunnel's TLS to that same key.
@@ -48,6 +49,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -630,6 +632,7 @@ func checkClaims(p *Policy, c *Claims, doc *attestationDoc, nonce, tlsSpki strin
 	if !nonceMatches(c.EatNonce, nonce) {
 		fail("eat_nonce does not echo this run's nonce")
 	}
+	keyNonce := ""
 	if doc.EvidenceKey.Alg != "Ed25519" {
 		fail("no Ed25519 evidence key in the attestation document")
 	} else {
@@ -638,7 +641,8 @@ func checkClaims(p *Policy, c *Claims, doc *attestationDoc, nonce, tlsSpki strin
 			fail("evidence key is not 32 bytes")
 		} else {
 			h := sha256.Sum256(raw)
-			if !nonceMatches(c.EatNonce, base64.RawURLEncoding.EncodeToString(h[:])) {
+			keyNonce = base64.RawURLEncoding.EncodeToString(h[:])
+			if !nonceMatches(c.EatNonce, keyNonce) {
 				fail("evidence key is not bound into eat_nonce")
 			}
 		}
@@ -650,6 +654,12 @@ func checkClaims(p *Policy, c *Claims, doc *attestationDoc, nonce, tlsSpki strin
 		fail("tlsSpkiNonce is not the key this connection negotiated")
 	case !nonceMatches(c.EatNonce, tlsSpki):
 		fail("TLS key is not bound into eat_nonce")
+	}
+	// The enclave binds its two key hashes and appends one caller's nonce,
+	// here this run's: anything more in eat_nonce is a nonce some other
+	// party had bound.
+	if keyNonce != "" && !sameNonces(eatNonces(c.EatNonce), []string{keyNonce, tlsSpki, nonce}) {
+		fail("eat_nonce is not exactly the evidence key, the TLS key and this run's nonce")
 	}
 	if nestedString(c.Submods, "gce", "instance_id") == "" {
 		fail("no GCE instance id")
@@ -906,18 +916,37 @@ func hasSuffixAny(host string, suffixes []string) bool {
 	return false
 }
 
-func nonceMatches(eatNonce any, want string) bool {
+// eatNonces is eat_nonce as a list: the token carries a single nonce as a
+// string and several as an array.
+func eatNonces(eatNonce any) []string {
 	switch v := eatNonce.(type) {
 	case string:
-		return v == want
+		return []string{v}
 	case []any:
+		out := make([]string, 0, len(v))
 		for _, e := range v {
-			if s, ok := e.(string); ok && s == want {
-				return true
-			}
+			s, _ := e.(string)
+			out = append(out, s)
 		}
+		return out
 	}
-	return false
+	return nil
+}
+
+func nonceMatches(eatNonce any, want string) bool {
+	return slices.Contains(eatNonces(eatNonce), want)
+}
+
+// sameNonces reports whether got and want hold the same nonces, each as
+// often, in any order.
+func sameNonces(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	g, w := slices.Clone(got), slices.Clone(want)
+	slices.Sort(g)
+	slices.Sort(w)
+	return slices.Equal(g, w)
 }
 
 func contains(list []string, s string) bool {

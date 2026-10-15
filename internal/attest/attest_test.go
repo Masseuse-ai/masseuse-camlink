@@ -460,6 +460,10 @@ func TestVerifyPolicyFailures(t *testing.T) {
 			eat := c["eat_nonce"].([]any)
 			c["eat_nonce"] = []any{eat[1], eat[2]} // drop the evidence key
 		}, want: "evidence key is not bound"},
+		{name: "another party's nonce beside the bindings", mutate: func(c, d map[string]any) {
+			h := sha256.Sum256([]byte("somebody else's key"))
+			c["eat_nonce"] = append(c["eat_nonce"].([]any), base64.RawURLEncoding.EncodeToString(h[:]))
+		}, want: "eat_nonce is not exactly the evidence key, the TLS key and this run's nonce"},
 		{name: "evidence key missing", mutate: func(c, d map[string]any) {
 			d["evidenceKey"] = map[string]any{"alg": "RSA", "publicKey": "x"}
 		}, want: "no Ed25519 evidence key"},
