@@ -112,7 +112,14 @@ done
 
 if command -v go >/dev/null 2>&1; then
   echo "==> 5. rebuild the gateway from the module proxy and compare (VERIFY.md 3)"
-  export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GOFLAGS=
+  # The release's own toolchain, as its gateway names it (go1.27.1 up to
+  # v0.34.0, go1.27.2 after): a binary that names the wrong one only fails
+  # to reproduce, and anything but a Go release is refused here.
+  toolchain=$(GOTOOLCHAIN=local go version "masseuse-camlink-gateway_${version}_linux_amd64" | awk '{print $NF}')
+  printf '%s\n' "$toolchain" | grep -Eq '^go1\.[0-9]+\.[0-9]+$' \
+    || { echo "    the gateway names no Go release: $toolchain" >&2; exit 1; }
+  echo "    toolchain $toolchain"
+  export GOTOOLCHAIN="$toolchain" CGO_ENABLED=0 GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GOFLAGS=
   # A scratch GOPATH so the cross-compiled binary has a known home (GOBIN is
   # not allowed for cross builds); the module cache stays shared, so it is
   # resolved before GOPATH is overridden (a shell applies the assignments

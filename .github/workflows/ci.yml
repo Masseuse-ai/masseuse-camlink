@@ -11,7 +11,7 @@ permissions:
 env:
   # The exact toolchain, not a minimum: go.mod's `go` line is a floor, and a
   # newer local Go would otherwise be used silently. Releases pin the same.
-  GOTOOLCHAIN: go1.27.1
+  GOTOOLCHAIN: go1.27.2
   GOFLAGS: -mod=mod
 
 jobs:
