@@ -418,9 +418,11 @@ What `camera` carries is one source:
   than the relay's own 10 s patience for the answer, so that the connector is
   never what gives up first; the enclave gives the path 15 s to be ready).
   By default the capture uses the first camera and the first microphone
-  listed, passing over an iPhone or iPad joined through Continuity Camera
-  when the computer has a device of its own: those open over the air, in
-  several seconds and not always. On macOS avfoundation is given the
+  listed, passing over a virtual camera (OBS's and the like, black until
+  its program sends a picture) and an iPhone or iPad joined through
+  Continuity Camera when the computer has a device of its own (the phones
+  open over the air, in several seconds and not always); without one, a
+  virtual camera comes before a phone. On macOS avfoundation is given the
   device's name rather than its index whenever the name addresses it alone
   (no colon in it, no other device of the kind whose name it begins), since
   the index is not stable: a Continuity Camera phone is listed first and

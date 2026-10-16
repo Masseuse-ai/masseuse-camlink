@@ -415,6 +415,77 @@ func TestDefaultPassesOverContinuityDevices(t *testing.T) {
 	}
 }
 
+// avfVirtualListing is a Mac with a camera maker's virtual camera listed
+// before the computer's own (the maker's program installed, its camera not
+// plugged in), OBS's virtual camera, and an iPhone in reach through
+// Continuity Camera.
+const avfVirtualListing = `[AVFoundation indev @ 0x7f8] AVFoundation video devices:
+[AVFoundation indev @ 0x7f8] [0] Insta360 Virtual Camera
+[AVFoundation indev @ 0x7f8] [1] FaceTime HD Camera
+[AVFoundation indev @ 0x7f8] [2] OBS Virtual Camera
+[AVFoundation indev @ 0x7f8] [3] Someone’s iPhone Camera
+[AVFoundation indev @ 0x7f8] [4] Someone’s iPhone Desk View Camera
+[AVFoundation indev @ 0x7f8] [5] Capture screen 0
+[AVFoundation indev @ 0x7f8] AVFoundation audio devices:
+[AVFoundation indev @ 0x7f8] [0] Someone’s iPhone Microphone
+[AVFoundation indev @ 0x7f8] [1] MacBook Pro Microphone
+[in#0 @ 0x7f9] Error opening input: Input/output error
+Error opening input file .
+`
+
+func TestDefaultPassesOverVirtualCameras(t *testing.T) {
+	devs := parseAVFoundation(avfVirtualListing)
+	cases := []struct {
+		kind   Kind
+		sel    string
+		wantID string
+	}{
+		{Video, "", "1"}, // the computer's own camera, not the virtual one listed first
+		{Audio, "", "1"}, // the microphones as before
+		{Video, "0", "0"},
+		{Video, "insta360", "0"}, // a virtual camera asked for is the one used
+		{Video, "obs", "2"},
+	}
+	for _, tc := range cases {
+		d, err := Select(devs, tc.kind, tc.sel)
+		if err != nil || d.ID != tc.wantID {
+			t.Errorf("%s %q: got %s, %v; want %s", tc.kind, tc.sel, d.ID, err, tc.wantID)
+		}
+	}
+	// A remembered camera that is not plugged in gives way to the same
+	// default, not to the virtual camera listed first.
+	cam, mic, subs, err := Resolve(devs, Options{Camera: "Insta360 Link", Mic: "none", Fallback: true})
+	if err != nil || cam.Name != "FaceTime HD Camera" || mic != nil {
+		t.Fatalf("cam %+v mic %+v err %v", cam, mic, err)
+	}
+	if len(subs) != 1 || subs[0].Wanted != "Insta360 Link" || subs[0].Using.Name != "FaceTime HD Camera" {
+		t.Fatalf("substitutions %+v", subs)
+	}
+	// Without a camera of the computer's own, a virtual camera comes
+	// before a phone; with virtual cameras only, the first of them.
+	for _, tc := range []struct {
+		devs []Device
+		want string
+	}{
+		{[]Device{{Kind: Video, ID: "0", Name: "Someone’s iPhone Camera"}, {Kind: Video, ID: "1", Name: "OBS Virtual Camera"}}, "OBS Virtual Camera"},
+		{[]Device{{Kind: Video, ID: "0", Name: "Insta360 Virtual Camera"}, {Kind: Video, ID: "1", Name: "OBS Virtual Camera"}}, "Insta360 Virtual Camera"},
+	} {
+		if d, err := Select(tc.devs, Video, ""); err != nil || d.Name != tc.want {
+			t.Errorf("%+v: got %+v, %v; want %s", tc.devs, d, err, tc.want)
+		}
+	}
+	// On Windows likewise: OBS's camera listed first gives way to the
+	// computer's own.
+	win := parseDShow(`[dshow @ 000001] "OBS Virtual Camera" (video)
+[dshow @ 000001] "Integrated Camera" (video)
+[dshow @ 000001] "Microphone Array (Realtek(R) Audio)" (audio)
+dummy: Immediate exit requested
+`)
+	if d, err := Select(win, Video, ""); err != nil || d.Name != "Integrated Camera" {
+		t.Errorf("windows: got %+v, %v", d, err)
+	}
+}
+
 func TestResolveFallsBackForARememberedDeviceOnly(t *testing.T) {
 	devs := parseAVFoundation(avfListing)
 	// Named on the command line and absent: an error, whatever else is there.
