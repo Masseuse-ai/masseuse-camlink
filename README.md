@@ -208,9 +208,10 @@ Camera off.
 ```
 
 By default it uses the first camera and the first microphone it finds,
-passing over an iPhone or iPad joined through Continuity Camera when the
-computer has one of its own (those open over the air, slowly and not
-always). To pick others:
+passing over a virtual camera (OBS's and the like, which shows what its
+program outputs and is black until that program runs) and an iPhone or
+iPad joined through Continuity Camera when the computer has one of its own
+(the phones open over the air, slowly and not always). To pick others:
 
 ```
 $ masseuse-camlink devices
@@ -227,8 +228,8 @@ $ masseuse-camlink -camera 1 -mic 1
 A number or (part of) a name works; `-mic none` sends video only. The
 choice is remembered by name, so later starts need no flags and survive
 the devices being renumbered. If a remembered device is not plugged in at
-start, the first of its kind stands in and a line says so (`Insta360 Link
-is not connected; using FaceTime HD Camera.`); the remembered choice stays
+start, the default stands in and a line says so (`Insta360 Link is not
+connected; using FaceTime HD Camera.`); the remembered choice stays
 for the day it is back. On macOS the devices are opened by name too, so a
 phone coming into or out of reach through Continuity Camera between start
 and session, which renumbers the list, does not point the capture at the

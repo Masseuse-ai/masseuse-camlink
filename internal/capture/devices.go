@@ -379,10 +379,12 @@ func Resolve(devs []Device, opts Options) (cam Device, mic *Device, subs []Subst
 // Select picks the device of a kind named by selector: its number in the
 // listing, its exact name, or a case-insensitive substring of its name
 // matching exactly one device. An empty selector picks the default: the
-// first device that is the computer's own or wired to it. An iPhone or
-// iPad joining through Continuity Camera is passed over (macOS lists them
-// first, and they open over the air, in several seconds and not always)
-// unless nothing else of the kind is connected.
+// first device that is the computer's own or wired to it. A virtual camera
+// (OBS's and the like, which shows what its program outputs and is black
+// until that program sends a picture) and an iPhone or iPad joining through
+// Continuity Camera (macOS lists them first, and they open over the air, in
+// several seconds and not always) are passed over unless nothing else of
+// the kind is connected; then a virtual camera comes before a phone.
 func Select(devs []Device, kind Kind, selector string) (Device, error) {
 	var ofKind []Device
 	for _, d := range devs {
@@ -428,12 +430,18 @@ func Select(devs []Device, kind Kind, selector string) (Device, error) {
 	}
 }
 
-// defaultDevice is the first of devs that is not a Continuity Camera
-// device, or the first of all when every one is.
+// defaultDevice is the first of devs that is neither a virtual camera nor a
+// Continuity Camera device; else the first that is not a Continuity Camera
+// device; else the first of all.
 func defaultDevice(devs []Device) Device {
-	for _, d := range devs {
-		if !continuity(d) {
-			return d
+	for _, skip := range []func(Device) bool{
+		func(d Device) bool { return continuity(d) || virtualCamera(d) },
+		continuity,
+	} {
+		for _, d := range devs {
+			if !skip(d) {
+				return d
+			}
 		}
 	}
 	return devs[0]
@@ -445,4 +453,16 @@ func defaultDevice(devs []Device) Device {
 func continuity(d Device) bool {
 	name := strings.ToLower(d.Name)
 	return strings.Contains(name, "iphone") || strings.Contains(name, "ipad")
+}
+
+// virtualName is how the window tells a virtual camera by its name
+// (natureOf, desktop/frontend/src/ui/DeviceCard.tsx); the two must agree,
+// or the window badges as virtual a camera the connector picks by default.
+var virtualName = regexp.MustCompile(`(?i)(obs|virtual|camo|snap camera|manycam|ndi)`)
+
+// virtualCamera reports whether d is a camera that shows what a program
+// outputs (OBS Studio, a camera maker's companion program, a phone app):
+// black, or the program's placeholder, until that program sends a picture.
+func virtualCamera(d Device) bool {
+	return d.Kind == Video && virtualName.MatchString(d.Name)
 }

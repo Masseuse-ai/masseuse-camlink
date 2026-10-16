@@ -18,6 +18,9 @@ export type DeviceNature = 'built-in' | 'usb' | 'virtual' | 'continuity';
  * The built-in names are the Mac's (FaceTime, MacBook) and the ones Windows
  * gives the sound chip and the camera on the board (Realtek, Microphone
  * Array, High Definition Audio, Conexant, Intel Smart Sound, Integrated).
+ * The virtual pattern is the connector's too (virtualName in
+ * internal/capture/devices.go, which passes such a camera over when it
+ * picks one by default): the two change together.
  */
 export function natureOf(device: Device): DeviceNature {
     const n = device.name.toLowerCase();
