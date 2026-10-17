@@ -542,9 +542,12 @@ differently from one with a device connected.
   re-established, then go off. Between sessions the window's Ready screen
   shows you the camera's picture so you can place it: the camera alone,
   never the microphone, as small pictures handed to the window on this
-  computer and to nothing else. It stops when a session takes the camera,
-  when you leave Ready, hide the picture, switch the camera off or close
-  or hide the window, and after five minutes without using the window.
+  computer and to nothing else. It starts once you use the window (move
+  the pointer, press a key), never because the window opened, which it
+  also does by itself after an update. It stops when a session takes the
+  camera, when you leave Ready, hide the picture, switch the camera off or
+  close or hide the window, and after five minutes without using the
+  window.
 - **Open and reproducible.** Apache-2.0, built from a pinned Go toolchain
   with SLSA provenance and keyless signatures. `VERIFY.md` shows how to check
   a download and rebuild it byte for byte.
