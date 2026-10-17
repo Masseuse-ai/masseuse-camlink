@@ -56,7 +56,11 @@ func fakeFFmpeg(args []string) int {
 		// first frame that never comes, so this ffmpeg announces nothing,
 		// writes nothing and reads nothing (not even the q on standard
 		// input, which only the transcoding loop reads) until it is killed.
-		select {}
+		// It sleeps rather than blocking on nothing, which the runtime can
+		// end at once as a deadlock (it does on Windows).
+		for {
+			time.Sleep(time.Hour)
+		}
 	}
 	url, encoder, bitrate, input := args[len(args)-1], "", "", ""
 	for i, a := range args {
