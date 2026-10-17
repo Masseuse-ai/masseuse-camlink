@@ -9,7 +9,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -215,16 +217,49 @@ type offer struct {
 	// runs while the camera is on.
 	adapt *capture.Adapter
 	// save is the configuration to remember: devices by name, so a later
-	// start finds them even if their numbering changed.
+	// start finds them even if their numbering changed, and a device not
+	// connected by the name it was chosen by (rememberedDevices).
 	save sourceConfig
-	// subs are the remembered devices that were not connected and what
-	// stands in for them (capture.Substitution); the window lists them.
-	subs []capture.Substitution
+	// standing, for the computer's own camera, is what its capture uses
+	// now and how that differs from the choice (capture.Source.Standing):
+	// a device standing in for one not connected, a microphone left out;
+	// nil for a camera on the network or one not ready. refuseMic, with
+	// it, tells the capture whether the system refuses the microphone
+	// (camControl.setMicRefused).
+	standing  func() capture.Standing
+	refuseMic func(refused bool)
+	// shown is the standing the window was last told of (report), guarded
+	// by shownMu: the capture's devices are watched against it (stale).
+	shownMu sync.Mutex
+	shown   capture.Standing
 	// preview, for the computer's own camera, shows the window the camera's
 	// picture until ctx ends (capture.Source.Preview; camControl.preview);
 	// nil for a camera on the network. size is that picture's mode, WxH.
 	preview func(ctx context.Context, frame func(jpeg []byte)) error
 	size    string
+}
+
+// stale says whether the capture's devices have changed since the window
+// was last told of them, and returns what it was told and how they stand
+// now, which it takes the window to be told next: one caller has the
+// change to say.
+func (o *offer) stale() (shown, now capture.Standing, changed bool) {
+	if o.standing == nil {
+		return shown, now, false
+	}
+	now = o.standing()
+	o.shownMu.Lock()
+	defer o.shownMu.Unlock()
+	shown, changed = o.shown, !reflect.DeepEqual(o.shown, now)
+	o.shown = now
+	return shown, now, changed
+}
+
+// markShown records the standing the window is being told of.
+func (o *offer) markShown(st capture.Standing) {
+	o.shownMu.Lock()
+	o.shown = st
+	o.shownMu.Unlock()
 }
 
 func (o *offer) source() rendezvous.Source {
@@ -234,10 +269,12 @@ func (o *offer) source() rendezvous.Source {
 // buildOffer prepares the configured source; it does not turn anything on.
 // Errors are the person's to fix (a wrong flag); a missing ffmpeg or camera
 // is reported as an offer that is not ready, so pairing still works. With
-// saved, cfg is the remembered choice rather than today's flags: a device
-// it names that is not connected gives way to the first of its kind, and a
-// line says so; the remembered name stands for the day it is back.
-func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *serve.Server, logger *slog.Logger, ui reporter, saved bool) (*offer, error) {
+// fallback, cfg is the person's choice, as remembered or as just made in
+// the window, rather than today's flags: a device it names that is not
+// connected gives way to the first of its kind (a microphone to none, when
+// there is none), and a line says so; the name stands for the day it is
+// back (rememberedDevices).
+func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *serve.Server, logger *slog.Logger, ui reporter, fallback bool) (*offer, error) {
 	switch cfg.Kind {
 	case "camera":
 		src, err := camera.New(ctx, sink, camera.Options{
@@ -268,19 +305,21 @@ func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *se
 		return o, nil
 	default:
 		opts := capture.Options{Camera: cfg.Camera, Mic: cfg.Mic, VideoSize: cfg.VideoSize, FPS: cfg.FPS,
-			Bitrate: cfg.Bitrate, Encoder: cfg.Encoder, FFmpeg: cfg.FFmpeg, Fallback: saved}
+			Bitrate: cfg.Bitrate, Encoder: cfg.Encoder, FFmpeg: cfg.FFmpeg, Fallback: fallback}
 		src, err := capture.New(ctx, sink, opts, logger)
 		if err != nil {
-			if capture.IsNoFFmpeg(err) || (errors.Is(err, capture.ErrNoDevice) && (saved || (cfg.Camera == "" && cfg.Mic == ""))) {
+			if capture.IsNoFFmpeg(err) || (errors.Is(err, capture.ErrNoDevice) && (fallback || (cfg.Camera == "" && cfg.Mic == ""))) {
 				// Nothing to fix on the command line: report it and carry on.
 				return &offer{kind: "capture", label: "This computer's camera", note: err.Error(), save: cfg}, nil
 			}
 			return nil, err
 		}
-		for _, sub := range src.Substitutions() {
-			ui.Notice(noticeInfo, fmt.Sprintf("%s is not connected; using %s.", sub.Wanted, sub.Using.Name))
+		subs := src.Substitutions()
+		for _, sub := range subs {
+			ui.Notice(noticeInfo, substitutionLine(sub))
 		}
-		o := &offer{kind: "capture", label: src.Label(), ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing, trouble: src.Trouble, subs: src.Substitutions(), preview: src.Preview}
+		o := &offer{kind: "capture", label: src.Label(), ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing, trouble: src.Trouble,
+			standing: src.Standing, refuseMic: src.SetMicRefused, preview: src.Preview}
 		so := src.Options()
 		o.shape = fmt.Sprintf("%s %d fps, %s", so.VideoSize, so.FPS, src.Encoder())
 		o.size = so.VideoSize
@@ -288,28 +327,69 @@ func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *se
 			Ceiling: so.Bitrate, FPS: so.FPS, Stats: sink.Stats, Target: src, Logger: logger,
 			Notify: func(line string) { ui.Notice(noticeInfo, line) },
 		}
-		o.save = cfg
-		o.save.Camera = src.Camera().Name
-		if m := src.Mic(); m != nil {
-			o.save.Mic = m.Name
-		} else {
-			o.save.Mic = "none"
-		}
+		o.save = rememberedDevices(cfg, src.Camera(), src.Mic(), subs)
 		return o, nil
 	}
 }
 
+// rememberedDevices is cfg with its devices by the names the capture
+// resolved them to, so a later start finds them even if their numbering
+// changed. A device that is not connected keeps the name it was chosen by,
+// for the day it is back: what stands in for it is never remembered in its
+// place, nor is a microphone that was not there taken for a choice of
+// none.
+func rememberedDevices(cfg sourceConfig, cam capture.Device, mic *capture.Device, subs []capture.Substitution) sourceConfig {
+	save := cfg
+	standing := map[capture.Kind]bool{}
+	for _, s := range subs {
+		standing[s.Kind] = true
+	}
+	if !standing[capture.Video] {
+		save.Camera = cam.Name
+	}
+	switch {
+	case standing[capture.Audio]:
+	case mic != nil:
+		save.Mic = mic.Name
+	case strings.EqualFold(strings.TrimSpace(cfg.Mic), "none"):
+		save.Mic = "none"
+	}
+	return save
+}
+
+// substitutionLine says that a device chosen is not connected, and what
+// stands in for it.
+func substitutionLine(sub capture.Substitution) string {
+	if sub.Using.Name == "" {
+		return fmt.Sprintf("%s is not connected; the picture goes without this computer's sound until it is back.", sub.Wanted)
+	}
+	return fmt.Sprintf("%s is not connected; using %s.", sub.Wanted, sub.Using.Name)
+}
+
 // report is the offer as the reporter takes it (the camera's part of the
-// sourceReport).
+// sourceReport): for the computer's own camera, what its capture uses now,
+// a device standing in by its own name and the one chosen among the
+// substitutions, which the window is then taken to have been told (stale).
+// The microphone is "none" for a choice of video only, and not named when
+// none is in use for want of one connected.
 func (o *offer) report() sourceReport {
 	s := sourceReport{Kind: o.kind, Label: o.label, Ready: o.ready, Note: o.note, Shape: o.shape}
-	if o.kind == "camera" {
+	switch {
+	case o.kind == "camera":
 		s.URL = o.save.URL
-	} else {
-		s.Camera = o.save.Camera
-		if o.save.Mic != "none" {
-			s.Mic = o.save.Mic
+	case o.standing != nil:
+		st := o.standing()
+		o.markShown(st)
+		s.Label, s.Camera = st.Label, st.Camera.Name
+		switch {
+		case st.Mic != nil:
+			s.Mic = st.Mic.Name
+		case strings.EqualFold(strings.TrimSpace(o.save.Mic), "none"):
+			s.Mic = "none"
 		}
+		s.MicOut, s.Substitutions = st.MicOut, st.Substitutions
+	default:
+		s.Camera, s.Mic = o.save.Camera, o.save.Mic
 	}
 	return s
 }
@@ -450,6 +530,12 @@ type camControl struct {
 	// ask and how long it waits to try again; 0 means previewLease and
 	// previewRetry.
 	lease, retry time.Duration
+	// micRefused is the system's standing on the microphone as the
+	// window's shell reads it (setMicRefused), handed to every offer.
+	micRefused bool
+	// onSource tells the window the source again (manager.reportSource):
+	// the capture's devices changed under it (stale). nil tells no one.
+	onSource func()
 }
 
 func (c *camControl) reporter() reporter {
@@ -476,7 +562,7 @@ func (c *camControl) busy() (camera, face bool) {
 
 // setOffer replaces the camera served; errCameraBusy while it is on. A
 // preview of the camera replaced ends; the window's next ask shows the new
-// one.
+// one. The new capture learns the system's standing on the microphone.
 func (c *camControl) setOffer(o *offer) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -485,7 +571,64 @@ func (c *camControl) setOffer(o *offer) error {
 	}
 	c.stopPreviewLocked()
 	c.offer = o
+	if o != nil && o.refuseMic != nil {
+		o.refuseMic(c.micRefused)
+	}
 	return nil
+}
+
+// setMicRefused is the system's standing on the microphone, as the
+// window's shell reads it (the media command; macOS asks it of the
+// person): while it is refused, the camera's capture leaves the microphone
+// out and sends the picture alone, which it would otherwise hold back.
+// The window is told the source again when what it shows changes.
+func (c *camControl) setMicRefused(refused bool) {
+	c.mu.Lock()
+	c.micRefused = refused
+	o := c.offer
+	if o != nil && o.refuseMic != nil {
+		o.refuseMic(refused)
+	}
+	c.mu.Unlock()
+	if o != nil {
+		if _, _, changed := o.stale(); changed {
+			c.sourceChanged()
+		}
+	}
+}
+
+// sourceChanged has the window told the source again, outside every lock.
+func (c *camControl) sourceChanged() {
+	if c.onSource != nil {
+		go c.onSource()
+	}
+}
+
+// watchStanding says what changed in the capture's devices since the
+// window was last told (offer.stale): a device chosen that is not
+// connected and what stands in for it, one back in its place, a
+// microphone left out because the capture would not go with it; then the
+// window is told the source again.
+func (c *camControl) watchStanding(o *offer) {
+	shown, now, changed := o.stale()
+	if !changed {
+		return
+	}
+	ui := c.reporter()
+	for _, sub := range now.Substitutions {
+		if !slices.Contains(shown.Substitutions, sub) {
+			ui.Notice(noticeWarn, substitutionLine(sub))
+		}
+	}
+	for _, sub := range shown.Substitutions {
+		if !slices.ContainsFunc(now.Substitutions, func(s capture.Substitution) bool { return s.Kind == sub.Kind && s.Wanted == sub.Wanted }) {
+			ui.Notice(noticeInfo, fmt.Sprintf("%s is connected again and in use.", sub.Wanted))
+		}
+	}
+	if now.MicOut == capture.MicFailed && shown.MicOut != capture.MicFailed && now.Mic != nil {
+		ui.Notice(noticeWarn, fmt.Sprintf("%s did not work, so the picture goes without this computer's sound; it is tried again at the next session.", now.Mic.Name))
+	}
+	c.sourceChanged()
 }
 
 // setFace replaces the front-facing camera (nil for none); errCameraBusy
@@ -500,14 +643,16 @@ func (c *camControl) setFace(o *offer) error {
 	return nil
 }
 
-// substitutions are the camera offer's (remembered devices not connected).
+// substitutions are the camera offer's as they stand: devices chosen that
+// are not connected, and what stands in for them.
 func (c *camControl) substitutions() []capture.Substitution {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.offer == nil {
+	o := c.offer
+	c.mu.Unlock()
+	if o == nil || o.standing == nil {
 		return nil
 	}
-	return c.offer.subs
+	return o.standing().Substitutions
 }
 
 // attach gives the stream the active tunnel's backlog (internal/tunnel,
@@ -732,6 +877,10 @@ func (c *camControl) stopSomeLocked(stopBody, stopFace bool) {
 		cancel()
 		bodyOffer.stop()
 		c.reporter().CameraOff()
+		// Off, the capture says what the next start will do (the system's
+		// standing on the microphone as it is now, not as the session
+		// started with it).
+		c.watchStanding(bodyOffer)
 	}
 	if faceOn {
 		faceCancel()
@@ -743,18 +892,28 @@ func (c *camControl) stopSomeLocked(stopBody, stopFace bool) {
 	}
 }
 
+// standingWatch is how often the capture's devices are looked at while the
+// camera is on (watchStanding).
+const standingWatch = 2 * time.Second
+
 // report says the send rate every 10 s while the camera is on, and, in
 // the same breath and so at most once per 10 s, that the connection is
-// congested when video had to be dropped since the last report.
+// congested when video had to be dropped since the last report. What the
+// capture uses is watched more closely (watchStanding).
 func (c *camControl) report(ctx context.Context, o *offer) {
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
+	watch := time.NewTicker(standingWatch)
+	defer watch.Stop()
 	last := c.sink.Stats()
 	lastAt := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-watch.C:
+			c.watchStanding(o)
+			continue
 		case <-tick.C:
 		}
 		st := c.sink.Stats()

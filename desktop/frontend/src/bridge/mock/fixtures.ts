@@ -17,6 +17,8 @@ export const mics: Record<string, Device> = {
     macbook: { kind: 'audio', id: '1', name: 'MacBook Pro Microphone' },
     iphone: { kind: 'audio', id: '2', name: 'iPhone Microphone' },
     brio: { kind: 'audio', id: '3', name: 'Logitech BRIO Microphone' },
+    zoom: { kind: 'audio', id: '4', name: 'ZoomAudioDevice' },
+    blackhole: { kind: 'audio', id: '5', name: 'BlackHole 2ch' },
 };
 
 // Each unit named in three parts as the drivers name them (maker, model,

@@ -6,7 +6,7 @@
 // question about the camera and the microphone). The page cannot tell it
 // from the connector, which is the point.
 
-import type { Bridge, ConnectorCommand, ConnectorEvent, Descriptor, FaceCamera, Share, Unit } from '../types';
+import type { Bridge, ConnectorCommand, ConnectorEvent, Descriptor, Device, FaceCamera, Share, Substitution, Unit } from '../types';
 import { SHARE_ADDRESS, descriptorFor, disconnected, shareOffered } from './fixtures';
 import { mockPicture } from './picture';
 import type { Scenario } from './scenarios';
@@ -244,17 +244,29 @@ export class MockBridge implements Bridge {
                     this.later(600, { type: 'source', kind: 'camera', label: `rtsps://${host}`, ready: true, shape: 'h264 video, aac audio', url: choice.url, ...views });
                     this.later(700, { type: 'notice', level: 'info', text: `Trusting camera ${host} with its certificate (saved).` });
                 } else {
-                    const camera = this.devices.cameras.find((d) => d.name === choice.camera || d.id === choice.camera) ?? this.devices.cameras[0];
+                    // As the connector takes a window's choice: a device it
+                    // names that is not connected gives way to the first of
+                    // its kind, a microphone to none when there is none, and
+                    // the name chosen is reported among the substitutions.
+                    const named = (list: Device[], name?: string) => (name ? list.find((d) => d.name === name || d.id === name) : undefined);
+                    const substitutions: Substitution[] = [];
+                    const camera = named(this.devices.cameras, choice.camera) ?? this.devices.cameras[0];
                     if (!camera) throw new Error('No camera is connected.');
-                    const mic = choice.mic === 'none' ? null : (this.devices.mics.find((d) => d.name === choice.mic || d.id === choice.mic) ?? this.devices.mics[0] ?? null);
+                    if (choice.camera && camera.name !== choice.camera && camera.id !== choice.camera) substitutions.push({ kind: 'video', wanted: choice.camera, using: camera.name });
+                    let mic: Device | null = null;
+                    if (choice.mic !== 'none') {
+                        mic = named(this.devices.mics, choice.mic) ?? this.devices.mics[0] ?? null;
+                        if (choice.mic && mic?.name !== choice.mic && mic?.id !== choice.mic) substitutions.push({ kind: 'audio', wanted: choice.mic, using: mic?.name ?? '' });
+                    }
                     this.later(500, {
                         type: 'source',
                         kind: 'capture',
-                        label: mic ? `${camera.name} + ${mic.name}` : camera.name,
+                        label: mic ? `${camera.name} + ${mic.name}` : `${camera.name} (video only)`,
                         ready: true,
                         shape: '1280x720 30 fps, h264_videotoolbox',
                         camera: camera.name,
-                        mic: mic?.name ?? 'none',
+                        mic: mic?.name ?? (choice.mic === 'none' ? 'none' : undefined),
+                        substitutions: substitutions.length ? substitutions : undefined,
                         ...views,
                     });
                 }

@@ -285,8 +285,11 @@ func main() {
 		go upd.run(ctx)
 	}
 	// A camera change asked for while a session had the camera is applied
-	// once the camera goes off (applySource).
+	// once the camera goes off (applySource); the capture's devices
+	// changing under it (a device standing in, a microphone left out) are
+	// said to the window as a source report.
 	cam.onOff = func() { go mgr.applyPending() }
+	cam.onSource = mgr.reportSource
 	// Startup is over: the window gets its hello, and from here on its
 	// commands are read (ipc.go); the console reads nothing but the unit
 	// picker's numbers (estim.go).

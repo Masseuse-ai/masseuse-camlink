@@ -419,11 +419,12 @@ What `camera` carries is one source:
   than the relay's own 10 s patience for the answer, so that the connector is
   never what gives up first; the enclave gives the path 15 s to be ready).
   By default the capture uses the first camera and the first microphone
-  listed, passing over a virtual camera (OBS's and the like, black until
-  its program sends a picture) and an iPhone or iPad joined through
-  Continuity Camera when the computer has a device of its own (the phones
-  open over the air, in several seconds and not always); without one, a
-  virtual camera comes before a phone. On macOS avfoundation is given the
+  listed, passing over a virtual camera or microphone (OBS's camera and the
+  like, black until its program sends a picture; a sound program's
+  microphone, silent until it sends sound) and an iPhone or iPad joined
+  through Continuity Camera when the computer has a device of its own (the
+  phones open over the air, in several seconds and not always); without
+  one, a virtual device comes before a phone. On macOS avfoundation is given the
   device's name rather than its index whenever the name addresses it alone
   (no colon in it, no other device of the kind whose name it begins), since
   the index is not stable: a Continuity Camera phone is listed first and
@@ -434,6 +435,20 @@ What `camera` carries is one source:
   start gives way to libx264 only when `ffmpeg -encoders` lists it (the
   ffmpeg in the app is built without GPL parts and has none), and a
   fallback that then fails on its own options is undone and not repeated.
+  The camera and the microphone are one ffmpeg input, and the microphone
+  never holds back the picture: a remembered one (or the window's choice)
+  that is not connected gives way to the first listed or, with none, to
+  video alone, as does any microphone that cannot be chosen again while a
+  session runs; one the system refuses is left out (the desktop window's
+  shell says so, `media`, docs/DESKTOP.md section 3); and a capture with
+  the microphone that does not get going, exiting at once for a reason
+  that names nothing or running for 10 s without publishing (a Mac's
+  avfoundation input carries on past a microphone it could not open and
+  then waits for its first sample), is started once without it. If that
+  one publishes, the microphone stays out until the next session; if not,
+  the trouble is the camera's and the microphone goes back in. A device
+  standing in gives way to the one chosen at the next session once it is
+  back.
   Between sessions the desktop window may ask for a preview of this camera
   (`-ipc` only, the `preview` command, docs/DESKTOP.md section 3): a child
   of its own, the same camera opened in the same mode, video alone,

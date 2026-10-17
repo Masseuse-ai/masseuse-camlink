@@ -210,10 +210,12 @@ Camera off.
 ```
 
 By default it uses the first camera and the first microphone it finds,
-passing over a virtual camera (OBS's and the like, which shows what its
-program outputs and is black until that program runs) and an iPhone or
-iPad joined through Continuity Camera when the computer has one of its own
-(the phones open over the air, slowly and not always). To pick others:
+passing over a virtual camera or microphone (OBS's camera and the like,
+which shows what its program outputs and is black until that program runs;
+a sound program's microphone, such as Zoom's or BlackHole, silent until it
+sends sound) and an iPhone or iPad joined through Continuity Camera when
+the computer has one of its own (the phones open over the air, slowly and
+not always). To pick others:
 
 ```
 $ masseuse-camlink devices
@@ -229,14 +231,23 @@ $ masseuse-camlink -camera 1 -mic 1
 
 A number or (part of) a name works; `-mic none` sends video only. The
 choice is remembered by name, so later starts need no flags and survive
-the devices being renumbered. If a remembered device is not plugged in at
-start, the default stands in and a line says so (`Insta360 Link is not
-connected; using FaceTime HD Camera.`); the remembered choice stays
-for the day it is back. On macOS the devices are opened by name too, so a
-phone coming into or out of reach through Continuity Camera between start
-and session, which renumbers the list, does not point the capture at the
-wrong device or at none; when a device still cannot be opened the list is
-read again and the choice made afresh before the retry.
+the devices being renumbered. If a remembered device, or one chosen in the
+window, is not plugged in at start or when a session starts, the default
+stands in and a line says so (`Insta360 Link is not connected; using
+FaceTime HD Camera.`); the choice stays for the day it is back, and the
+next session uses it again once it is. On macOS the devices are opened by
+name too, so a phone coming into or out of reach through Continuity Camera
+between start and session, which renumbers the list, does not point the
+capture at the wrong device or at none; when a device still cannot be
+opened the list is read again and the choice made afresh before the retry.
+
+The microphone never holds back the picture, although ffmpeg opens the two
+together. With no microphone to stand in for one that is unplugged (a Mac
+mini has none of its own), the picture goes without this computer's sound;
+one the system refuses is left out; and a capture that does not get going
+with the microphone in it is started again without it, the microphone
+tried again at the next session. The session itself listens to your
+phone's microphone either way.
 
 The picture is the camera's best: its largest size that runs at 24 frames
 a second or more, at the most frames it has up to 30 (a camera none of
@@ -257,17 +268,19 @@ microphone as soon as the Cameras and microphone step opens (or, on a
 computer already paired, when the window opens on Ready), so the two
 questions come while you are at the computer and not during a session,
 when the screen may be dark; allow both. A card under the title says the
-questions are up and asks again on request; refused, it says macOS is
-blocking the camera and opens System Settings › Privacy & Security, where
-Camera, and Microphone, must list Masseuse and allow it (the card goes by
-itself a few seconds after the switch). On Windows, and when the connector
-runs alone in a terminal, the system asks the first time a session turns
-the camera on. Whichever system: if the camera's light never comes on and
-the window says the camera is on but no picture is being sent (after ten
-seconds the connector says so too, and why it thinks so), the system has
-refused it: on a Mac the settings above; on Windows, Settings › Privacy &
-security › Camera, *Let desktop apps access your camera*, must be on, and
-the same under Microphone. v0.16.0 and v0.17.0 of the Mac app could not ask
+questions are up and asks again on request; refused, it says what macOS is
+blocking and opens System Settings › Privacy & Security, where Camera, and
+Microphone, must list Masseuse and allow it (the card goes by itself a few
+seconds after the switch). The camera refused, a session gets no picture;
+the microphone refused, the picture goes without this computer's sound. On
+Windows, and when the connector runs alone in a terminal, the system asks
+the first time a session turns the camera on. Whichever system: if the
+camera's light never comes on and the window says the camera is on but no
+picture is being sent (after ten seconds the connector says so too, and why
+it thinks so), the system has refused it: on a Mac the settings above; on
+Windows, Settings › Privacy & security › Camera, *Let desktop apps access
+your camera*, must be on (the same under Microphone sends this computer's
+sound with it). v0.16.0 and v0.17.0 of the Mac app could not ask
 at all (the window was signed without the camera and microphone
 entitlements macOS requires of the application that runs ffmpeg, so the
 refusal was silent and Masseuse never appeared in that list); v0.18.0

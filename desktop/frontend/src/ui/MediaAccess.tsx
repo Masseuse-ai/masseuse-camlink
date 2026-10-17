@@ -8,10 +8,12 @@
 // the computer choosing devices rather than at the first session, when the
 // screen may be dark and no one is looking at the Mac. The card says what
 // is being asked, offers to ask again while the answer is not determined,
-// and, once refused, points at Privacy & Security and opens it. Windows and
-// Linux have no such question; nothing is shown there.
+// and, once refused, points at Privacy & Security and opens it, and says
+// what a session gets meanwhile: a microphone refused is left out of the
+// capture and the picture goes alone. Windows and Linux have no such
+// question; nothing is shown there.
 
-import { Camera, CameraOff } from 'lucide-react';
+import { Camera, CameraOff, MicOff } from 'lucide-react';
 import { useEffect } from 'react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -81,15 +83,15 @@ export function MediaAccessAlert({ className }: { className?: string }) {
     const blockedMic = mic !== 'authorized';
     const what = blockedCamera && blockedMic ? 'the camera and microphone' : blockedCamera ? 'the camera' : 'the microphone';
     const restricted = camera === 'restricted' || mic === 'restricted';
+    // What a session gets meanwhile: a microphone refused is left out and
+    // the picture goes alone (the connector hears the standing from the
+    // shell); without the camera nothing goes.
+    const allow = blockedCamera && blockedMic ? 'Allow both under System Settings › Privacy & Security › Camera, and Microphone; until then nothing leaves this computer.' : blockedCamera ? 'Allow it under System Settings › Privacy & Security › Camera; until then a session gets no picture from this computer.' : "Allow it under System Settings › Privacy & Security › Microphone; until then the picture goes without this computer's sound.";
     return (
         <Alert variant="warn" className={className}>
-            <CameraOff />
+            {blockedCamera ? <CameraOff /> : <MicOff />}
             <AlertTitle>macOS is blocking {what}</AlertTitle>
-            <AlertDescription>
-                {restricted
-                    ? 'A profile or parental controls on this computer forbid it; Privacy & Security in System Settings shows what applies.'
-                    : `Allow it under System Settings › Privacy & Security › Camera, and Microphone; a session runs without ${what} until then.`}
-            </AlertDescription>
+            <AlertDescription>{restricted ? 'A profile or parental controls on this computer forbid it; Privacy & Security in System Settings shows what applies.' : allow}</AlertDescription>
             <div className="mt-1.5 group-has-[>svg]/alert:col-start-2">
                 <Button variant="ghost" size="sm" onClick={() => void openPrivacySettings()}>
                     Open Privacy &amp; Security

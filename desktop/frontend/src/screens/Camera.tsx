@@ -4,8 +4,11 @@
 // for people who process their picture in OBS, the loop through this
 // computer (FaceView.tsx). The lists are what ffmpeg can open, as the
 // connector's `devices` command prints them; a virtual camera (OBS and the
-// like) is a choice like any other, with a word about where its picture
-// comes from. The picture itself (size, rate, bit rate, encoder) is the
+// like) or microphone is a choice like any other, with a word about where
+// its picture or sound comes from. A device chosen that is not connected
+// stays the choice, shown where it would be listed, while another stands
+// in; nothing changes unless the person picks something else. The picture
+// itself (size, rate, bit rate, encoder) is the
 // connector's and the enclave's to manage between them; the window offers
 // no say in it. On a Mac, opening this screen is when the system is asked
 // whether Masseuse.ai may use the camera and the microphone (ui/MediaAccess),
@@ -14,7 +17,7 @@
 // screen's control beside the title, the two lists on six columns each, the
 // way on in the footer with, in the first run, a word on what it waits for.
 
-import { Camera as CameraIcon, ChevronRight, HouseWifi, Layers, Lock, Mic, Smartphone, TriangleAlert, Video } from 'lucide-react';
+import { AudioLines, Camera as CameraIcon, ChevronRight, HouseWifi, Layers, Lock, Mic, Smartphone, TriangleAlert, Video } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -27,10 +30,10 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { faceViewOf, useAppState, useBridge, useDeviceListing, useDispatch, type FaceView as FaceViewChoice } from '../bridge/store';
+import { chosenDevices, faceViewOf, useAppState, useBridge, useDeviceListing, useDispatch, type FaceView as FaceViewChoice } from '../bridge/store';
 import type { SourceChoice } from '../bridge/types';
 import { CHOICE_ROW, CHOICE_ROW_DISABLED, Card, CardLabel, ROW, Well } from '../ui/Card';
-import { DeviceCard, MissingDeviceCard, NoMicCard, isVirtualCamera, natureOf } from '../ui/DeviceCard';
+import { DeviceCard, MissingDeviceCard, NoMicCard, defaultOf, isVirtualCamera, isVirtualMicrophone, natureOf } from '../ui/DeviceCard';
 import { MediaAccessAlert, useMediaAsk } from '../ui/MediaAccess';
 import { Page } from '../ui/Page';
 import { FaceView } from './FaceView';
@@ -73,9 +76,10 @@ export function Camera() {
     // asked as this screen opens if it has not been answered yet.
     useMediaAsk();
 
-    // Behind you.
-    const [cam, setCam] = useState<string | null>(source?.kind === 'camera' ? NETWORK : (source?.camera ?? null));
-    const [mic, setMic] = useState<string | null>(source?.mic ?? null);
+    // Behind you: what the person picks here, null until they do, so the
+    // choice the connector keeps leads (and follows its reports) until then.
+    const [cam, setCam] = useState<string | null>(null);
+    const [mic, setMic] = useState<string | null>(null);
     const [url, setUrl] = useState(source?.url ?? '');
     const [fingerprint, setFingerprint] = useState('');
     // Your face: null until the person chooses, so the connector's report leads.
@@ -89,17 +93,12 @@ export function Camera() {
     const [continueOnAnswer, setContinueOnAnswer] = useState(false);
     const appliedFrom = useRef(source);
 
-    // The connector's current choices are the page's starting point, and
-    // follow it when the connector reports a change.
+    // The connector's current choices are the page's starting point: the
+    // network camera's address and the face camera are taken in once; the
+    // camera and microphone are read from the report as it stands.
     useEffect(() => {
         if (!source) return;
-        if (source.kind === 'capture') {
-            setCam((c) => c ?? source.camera ?? null);
-            setMic((m) => m ?? source.mic ?? null);
-        } else {
-            setCam((c) => c ?? NETWORK);
-            if (source.url) setUrl((u) => u || source.url!);
-        }
+        if (source.kind === 'camera' && source.url) setUrl((u) => u || source.url!);
         if (source.face) setFaceCam((f) => f ?? source.face!.camera);
         setApplying(false);
     }, [source]);
@@ -114,10 +113,19 @@ export function Camera() {
 
     const cameras = devices?.cameras ?? [];
     const mics = devices?.mics ?? [];
-    const cameraChosen = cam ?? (source?.kind === 'camera' ? NETWORK : (source?.camera ?? cameras[0]?.name ?? null));
-    const micChosen = mic ?? source?.mic ?? mics[0]?.name ?? 'none';
+    // The choice the connector keeps (a device not connected by its own
+    // name), else what it would take by default; the microphone is "none"
+    // for video only. A microphone kept is sent with every apply, so a
+    // new camera does not cost it; with none known, the connector's
+    // default is left to it.
+    const kept = chosenDevices(source, devices?.substitutions);
+    const cameraKept = kept.camera ?? defaultOf(cameras)?.name ?? null;
+    const micShown = kept.mic ?? defaultOf(mics)?.name ?? 'none';
+    const cameraChosen = cam ?? (source?.kind === 'camera' ? NETWORK : cameraKept);
+    const micChosen = mic ?? micShown;
     const chosenDevice = useMemo(() => cameras.find((d) => d.name === cameraChosen), [cameras, cameraChosen]);
-    const missing = devices?.substitutions ?? [];
+    const chosenMic = useMemo(() => mics.find((d) => d.name === micChosen), [mics, micChosen]);
+    const missing = kept.substitutions;
     const networkChosen = cameraChosen === NETWORK;
     // The virtual camera is the likely carrier for OBS's picture back; the first one is the starting point.
     const faceCamChosen = faceCam ?? source?.face?.camera ?? cameras.find((d) => natureOf(d) === 'virtual')?.name ?? null;
@@ -126,7 +134,7 @@ export function Camera() {
     const behindChanged = source
         ? networkChosen
             ? url.trim() !== '' && (source.kind !== 'camera' || url !== source.url)
-            : source.kind !== 'capture' || cameraChosen !== source.camera || micChosen !== (source.mic ?? 'none')
+            : source.kind !== 'capture' || cameraChosen !== cameraKept || micChosen !== micShown
         : false;
     const faceChanged = source ? face !== faceViewOf(source) || (face === 'processed' && faceCamChosen !== (source.face?.camera ?? null)) : false;
     const faceIncomplete = face === 'processed' && !faceCamChosen;
@@ -142,7 +150,7 @@ export function Camera() {
                 choice.fingerprint = fingerprint.trim() || undefined;
             } else {
                 choice.camera = cameraChosen ?? undefined;
-                choice.mic = micChosen;
+                if (mic !== null || kept.mic !== null) choice.mic = micChosen;
             }
         }
         if (faceChanged && !faceLocked && !faceIncomplete) {
@@ -245,7 +253,7 @@ export function Camera() {
                                     ))}
                                     {missing
                                         .filter((s) => s.kind === 'video')
-                                        .map((s) => <MissingDeviceCard key={s.wanted} kind="video" name={s.wanted} using={s.using} />)}
+                                        .map((s) => <MissingDeviceCard key={s.wanted} kind="video" name={s.wanted} using={s.using} chosen={cameraChosen === s.wanted} />)}
                                     {/* A camera on the network, as the last choice; chosen, it opens for its address. */}
                                     <label className={cn(CHOICE_ROW, 'flex-col items-stretch gap-3', locked && CHOICE_ROW_DISABLED)}>
                                         <span className="flex min-h-9 items-center gap-3">
@@ -295,18 +303,27 @@ export function Camera() {
                             {networkChosen ? (
                                 <Well className="type-secondary text-bone/60">A camera on the network carries its own sound, if it has any; this computer's microphones are not used with it.</Well>
                             ) : (
-                                <ScrollArea className="min-h-0 flex-1" viewportClassName="pb-0.5">
-                                    <RadioGroup value={micChosen} onValueChange={(v) => setMic(String(v))} disabled={locked} className="gap-2">
-                                        {looking ? <DeviceSkeleton>Looking for microphones…</DeviceSkeleton> : null}
-                                        {mics.map((d) => (
-                                            <DeviceCard key={d.id} device={d} inUse={camera.on && source?.mic === d.name} disabled={locked} />
-                                        ))}
-                                        {missing
-                                            .filter((s) => s.kind === 'audio')
-                                            .map((s) => <MissingDeviceCard key={s.wanted} kind="audio" name={s.wanted} using={s.using} />)}
-                                        <NoMicCard disabled={locked} />
-                                    </RadioGroup>
-                                </ScrollArea>
+                                <>
+                                    <ScrollArea className="min-h-0 flex-1" viewportClassName="pb-0.5">
+                                        <RadioGroup value={micChosen} onValueChange={(v) => setMic(String(v))} disabled={locked} className="gap-2">
+                                            {looking ? <DeviceSkeleton>Looking for microphones…</DeviceSkeleton> : null}
+                                            {mics.map((d) => (
+                                                <DeviceCard key={d.id} device={d} inUse={camera.on && source?.mic === d.name && !source.micOut} disabled={locked} />
+                                            ))}
+                                            {missing
+                                                .filter((s) => s.kind === 'audio')
+                                                .map((s) => <MissingDeviceCard key={s.wanted} kind="audio" name={s.wanted} using={s.using} chosen={micChosen === s.wanted} />)}
+                                            <NoMicCard disabled={locked} />
+                                        </RadioGroup>
+                                    </ScrollArea>
+                                    {isVirtualMicrophone(chosenMic) ? (
+                                        <Alert variant="neutral" className="mt-3 shrink-0 py-2">
+                                            <AudioLines />
+                                            <AlertTitle>This is a program's microphone</AlertTitle>
+                                            <AlertDescription>It carries what that program sends, and silence when it sends nothing. The session hears your phone's microphone either way.</AlertDescription>
+                                        </Alert>
+                                    ) : null}
+                                </>
                             )}
                         </Card>
                     </div>

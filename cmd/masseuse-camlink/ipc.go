@@ -72,6 +72,12 @@ type ipcSource struct {
 	// Face is null for the phone's own camera; the key is always there,
 	// so the page tells "the phone" from "an older connector".
 	Face *ipcFace `json:"face"`
+	// MicOut is why the microphone (Mic) is left out of the capture:
+	// "refused" by the system, or "failed", the capture going without it.
+	MicOut string `json:"micOut,omitempty"`
+	// Substitutions are the devices chosen that are not connected and what
+	// stands in for them, as the devices event lists them.
+	Substitutions []ipcSubstitution `json:"substitutions,omitempty"`
 }
 
 type ipcDevice struct {
@@ -80,10 +86,21 @@ type ipcDevice struct {
 	Name string `json:"name"`
 }
 
+// ipcSubstitution is a device chosen that is not connected and the one
+// standing in for it; using is empty for a microphone with nothing in its
+// place, the picture going alone.
 type ipcSubstitution struct {
 	Kind   string `json:"kind"`
 	Wanted string `json:"wanted"`
 	Using  string `json:"using"`
+}
+
+func ipcSubstitutions(subs []capture.Substitution) []ipcSubstitution {
+	out := make([]ipcSubstitution, 0, len(subs))
+	for _, s := range subs {
+		out = append(out, ipcSubstitution{Kind: string(s.Kind), Wanted: s.Wanted, Using: s.Using.Name})
+	}
+	return out
 }
 
 type ipcEnclave struct {
@@ -287,7 +304,10 @@ func (r *ipcReporter) Source(s sourceReport) {
 
 func (r *ipcReporter) sourceEvent(s sourceReport) ipcSource {
 	ev := ipcSource{Type: "source", Kind: s.Kind, Label: s.Label, Ready: s.Ready, Note: s.Note, Shape: s.Shape,
-		Camera: s.Camera, Mic: s.Mic, URL: s.URL}
+		Camera: s.Camera, Mic: s.Mic, URL: s.URL, MicOut: string(s.MicOut)}
+	if len(s.Substitutions) > 0 {
+		ev.Substitutions = ipcSubstitutions(s.Substitutions)
+	}
 	if s.Share != nil {
 		ev.Share = &ipcShare{Ready: s.Share.Ready, Address: s.Share.Address, Receiving: s.Share.Receiving}
 	}
@@ -305,7 +325,7 @@ func (r *ipcReporter) Devices(devs []capture.Device, subs []capture.Substitution
 		Mics          []ipcDevice       `json:"mics"`
 		Substitutions []ipcSubstitution `json:"substitutions"`
 		Error         string            `json:"error,omitempty"`
-	}{Type: "devices", Cameras: []ipcDevice{}, Mics: []ipcDevice{}, Substitutions: []ipcSubstitution{}}
+	}{Type: "devices", Cameras: []ipcDevice{}, Mics: []ipcDevice{}, Substitutions: ipcSubstitutions(subs)}
 	for _, d := range devs {
 		item := ipcDevice{Kind: string(d.Kind), ID: d.ID, Name: d.Name}
 		if d.Kind == capture.Video {
@@ -313,9 +333,6 @@ func (r *ipcReporter) Devices(devs []capture.Device, subs []capture.Substitution
 		} else {
 			ev.Mics = append(ev.Mics, item)
 		}
-	}
-	for _, s := range subs {
-		ev.Substitutions = append(ev.Substitutions, ipcSubstitution{Kind: string(s.Kind), Wanted: s.Wanted, Using: s.Using.Name})
 	}
 	if err != nil {
 		ev.Error = err.Error()
@@ -604,6 +621,11 @@ type ipcCommand struct {
 	// On is a preview: the window asking for the camera's preview again
 	// (every few seconds while it shows it), or for it to stop.
 	On *bool `json:"on,omitempty"`
+	// Camera and Mic are a media: the system's standing on each for this
+	// program, as the window's shell reads it (macOS's words: authorized,
+	// denied, restricted, notDetermined).
+	Camera string `json:"camera,omitempty"`
+	Mic    string `json:"mic,omitempty"`
 }
 
 // sourceChoice is a set_source: the source flags as fields, each part
@@ -735,6 +757,14 @@ func (c *ipcCommands) handle(ctx context.Context, cmd ipcCommand) bool {
 			return false
 		}
 		c.mgr.cam.preview(*cmd.On)
+	case "media":
+		// The shell's word on the camera and the microphone, at the hello
+		// and whenever it changes: a microphone the system refuses is left
+		// out of the capture, which then sends the picture alone.
+		if c.mgr == nil || c.mgr.cam == nil {
+			return false
+		}
+		c.mgr.cam.setMicRefused(cmd.Mic == "denied" || cmd.Mic == "restricted")
 	case "select_unit":
 		if c.mgr.estim == nil {
 			c.ui.Notice(noticeWarn, "No stimulation device is served: every device family is switched off by the flags.")

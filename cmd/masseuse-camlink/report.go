@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Masseuse-ai/masseuse-camlink/internal/capture"
 	"github.com/Masseuse-ai/masseuse-camlink/internal/estim"
 )
 
@@ -87,9 +88,15 @@ type sourceReport struct {
 	Note string
 	// Shape describes the picture ("1280x720 30 fps, h264_videotoolbox").
 	Shape string
-	// Camera and Mic name the computer's devices (kind capture); URL is
-	// the network camera (kind camera).
+	// Camera and Mic name the computer's devices (kind capture) its
+	// capture uses, a device standing in by its own name; URL is the
+	// network camera (kind camera).
 	Camera, Mic, URL string
+	// MicOut is why the microphone is left out of the capture
+	// (capture.MicOut), and Substitutions the devices chosen that are not
+	// connected and what stands in for them; kind capture only.
+	MicOut        capture.MicOut
+	Substitutions []capture.Substitution
 	// Share is the phone's picture offered to this computer; nil when not
 	// asked for.
 	Share *shareReport

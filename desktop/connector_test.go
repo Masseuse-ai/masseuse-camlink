@@ -63,6 +63,8 @@ func TestMain(m *testing.M) {
 			_ = out.Encode(map[string]any{"type": "preview", "state": "live", "camera": "Cam", "width": 1920, "height": 1080})
 			_ = out.Encode(map[string]any{"type": "preview_frame", "jpeg": "/9j/2Q=="})
 			_ = out.Encode(map[string]any{"type": "notice", "level": "info", "text": fmt.Sprintf("got preview on=%v", cmd["on"])})
+		case "media":
+			_ = out.Encode(map[string]any{"type": "notice", "level": "info", "text": fmt.Sprintf("got media camera=%v mic=%v", cmd["camera"], cmd["mic"])})
 		default:
 			_ = out.Encode(map[string]any{"type": "notice", "level": "info", "text": "got " + fmt.Sprint(cmd["type"])})
 		}
@@ -336,6 +338,50 @@ func TestMediaStanding(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the watcher outlived its context")
 	}
+}
+
+// TestTheConnectorHearsTheMediaStanding: the connector is told the standing
+// at its hello, whatever was said before it started, and again at every
+// change, so a microphone macOS refuses is left out of its capture.
+func TestTheConnectorHearsTheMediaStanding(t *testing.T) {
+	s := newConnectorService()
+	s.log = slog.New(slog.DiscardHandler)
+	s.reportMedia(mediaAuthorized, mediaDenied)
+	p, err := startConnector(fakeConnector(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.stop(5 * time.Second)
+	s.mu.Lock()
+	s.proc = p
+	s.mu.Unlock()
+	// The connector's lines, each taken as the relay takes it, until the
+	// fake echoes the command looked for.
+	until := func(text string) {
+		t.Helper()
+		timeout := time.After(10 * time.Second)
+		for {
+			select {
+			case line, ok := <-p.lines:
+				if !ok {
+					t.Fatalf("the connector ended before %q", text)
+				}
+				var ev map[string]any
+				if err := json.Unmarshal(line, &ev); err != nil {
+					t.Fatalf("not JSON: %s", line)
+				}
+				s.take(ev)
+				if ev["text"] == text {
+					return
+				}
+			case <-timeout:
+				t.Fatalf("no %q", text)
+			}
+		}
+	}
+	until("got media camera=authorized mic=denied")
+	s.reportMedia(mediaAuthorized, mediaAuthorized)
+	until("got media camera=authorized mic=authorized")
 }
 
 func TestLocateConnectorHonoursTheEnvironment(t *testing.T) {

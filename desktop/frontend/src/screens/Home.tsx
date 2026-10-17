@@ -125,10 +125,11 @@ export function Home() {
     // asked here if it has not been answered yet (a paired computer opens
     // on this screen).
     useMediaAsk();
-    // The shell's definite word when macOS is blocking the camera or the
-    // microphone; it says more than the connector's guess below, so it
-    // stands in for it.
-    const mediaBlocked = mediaStanding(state) === 'blocked';
+    // The shell's definite word when macOS is blocking the camera; it says
+    // more than the connector's guess below, so it stands in for it. A
+    // microphone blocked holds back nothing: it is left out, and the
+    // picture goes alone.
+    const cameraBlocked = mediaStanding(state) === 'blocked' && state.media?.camera !== 'authorized';
 
     const inSession = link.state === 'active';
     const stats: CameraStats | undefined = camera.stats;
@@ -165,7 +166,27 @@ export function Home() {
         }
     })();
 
+    // The microphone as it stands. One chosen that is not connected has
+    // another standing in, or nothing, and the picture goes alone; one
+    // macOS blocks, or that did not work in the session, is left out, and
+    // the picture goes alone. A microphone never holds back the picture.
     const micName = source?.kind === 'capture' ? source.mic : undefined;
+    const hasMic = Boolean(micName && micName !== 'none');
+    const micSub = source?.kind === 'capture' ? source.substitutions?.find((s) => s.kind === 'audio') : undefined;
+    const micRefused = hasMic && (source?.micOut === 'refused' || (state.platform === 'darwin' && (state.media?.mic === 'denied' || state.media?.mic === 'restricted')));
+    const micFailed = hasMic && source?.micOut === 'failed';
+    const micCard: { value: string; note: string; badge?: { text: string; variant: 'amber' | 'secondary' } } = (() => {
+        if (source?.kind === 'camera') return { value: "The camera's own", note: bodyOff ? 'Off with the camera; the session hears your phone.' : 'Whatever the camera carries' };
+        if (micSub && !micSub.using) {
+            return bodyOff ? { value: micSub.wanted, note: 'Off with the camera; the session hears your phone.' } : { value: micSub.wanted, note: 'The picture goes alone until it is back', badge: { text: 'Not connected', variant: 'amber' } };
+        }
+        if (!hasMic) return { value: 'None · video only', note: "The session hears your phone's microphone" };
+        if (bodyOff) return { value: micName!, note: 'Off with the camera; the session hears your phone.' };
+        if (micRefused) return { value: micName!, note: 'macOS is blocking it; the picture goes alone', badge: { text: 'Blocked', variant: 'amber' } };
+        if (micFailed) return { value: micName!, note: 'It did not work; tried again next session', badge: { text: 'Not sent', variant: 'amber' } };
+        if (micSub) return { value: micName!, note: `For ${micSub.wanted}, not connected`, badge: { text: 'Stand-in', variant: 'secondary' } };
+        return { value: micName!, note: 'Sent with the picture' };
+    })();
     // The camera's light is on for the preview: the card says so, and that its picture stays here.
     const previewing = !camera.on && !bodyOff && state.preview.state === 'live';
 
@@ -214,19 +235,12 @@ export function Home() {
                 control={bodySwitch}
             />
             <SummaryCard
-                icon={micName && micName !== 'none' ? Mic : MicOff}
+                icon={hasMic && !micRefused && !micFailed ? Mic : MicOff}
                 label="Microphone"
-                value={source?.kind === 'camera' ? "The camera's own" : micName && micName !== 'none' ? micName : 'None · video only'}
-                note={
-                    // The microphone rides in the camera's capture: the switch on the camera takes it too.
-                    bodyOff && ((micName && micName !== 'none') || source?.kind === 'camera')
-                        ? 'Off with the camera; the session hears your phone.'
-                        : micName && micName !== 'none'
-                          ? 'Sent with the picture'
-                          : source?.kind === 'camera'
-                            ? 'Whatever the camera carries'
-                            : "The session hears your phone's microphone"
-                }
+                value={micCard.value}
+                // The microphone rides in the camera's capture: the switch on the camera takes it too.
+                note={micCard.note}
+                badge={micCard.badge}
                 step="camera"
                 tab="behind"
                 disabled={camera.on}
@@ -280,7 +294,7 @@ export function Home() {
                             ) : stats ? (
                                 <>
                                     <Meter label="Video" value={stats.videoBps} ceiling={2_500_000} tone={stats.congested ? 'amber' : 'rose'} />
-                                    <Meter label="Audio" value={stats.audioBps} ceiling={96_000} tone="mint" />
+                                    <Meter label={micRefused || micFailed || (micSub && !micSub.using) ? 'Audio · left out' : 'Audio'} value={stats.audioBps} ceiling={96_000} tone="mint" />
                                     {processed && faceCamera.on && faceCamera.stats ? <Meter label="Face · OBS's picture going back" value={faceCamera.stats.videoBps} ceiling={2_500_000} tone="rose" /> : null}
                                 </>
                             ) : (
@@ -300,7 +314,7 @@ export function Home() {
                                     ))}
                                 </div>
                             ) : null}
-                            {notSending && !mediaBlocked ? (
+                            {notSending && !cameraBlocked ? (
                                 <Alert variant="warn">
                                     <TriangleAlert />
                                     <AlertTitle>Camera on, but no picture is being sent</AlertTitle>
@@ -348,9 +362,12 @@ export function Home() {
                                     ) : phones > 0 ? (
                                         <p className="type-secondary text-bone/70">{PLACE}</p>
                                     ) : null}
-                                    <p className="type-secondary text-bone/55">
-                                        To protect your privacy, we're setting up a confidential computing environment to process your video and protect your identity. Until then, your unit stays at zero. The computer stays awake while this window is open; the screen may go dark.
-                                    </p>
+                                    {/* The column holds the system's card or this, not both: together they overrun the card. */}
+                                    {mediaStanding(state) ? null : (
+                                        <p className="type-secondary text-bone/55">
+                                            To protect your privacy, we're setting up a confidential computing environment to process your video and protect your identity. Until then, your unit stays at zero. The computer stays awake while this window is open; the screen may go dark.
+                                        </p>
+                                    )}
                                 </>
                             )}
                         </div>
