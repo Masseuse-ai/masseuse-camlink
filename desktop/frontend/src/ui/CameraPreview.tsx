@@ -3,9 +3,9 @@
 // before the session starts. The picture is the connector's (the camera in
 // the session's mode, small JPEGs; cmd/masseuse-camlink/preview.go) and
 // stays on this computer. It is asked for (usePreviewLease) while Ready is
-// on screen, the window visible and in use (AppState.previewIdleMs), the
-// switch on and the camera one of the computer's own, allowed; it lets go
-// the moment any of that ends, and Hide keeps it off for this run. It stands
+// on screen, the window visible and in use (usePresence, previewIdleMs),
+// the switch on and the camera one of the computer's own, allowed; it lets
+// go the moment any of that ends, and Hide keeps it off for this run. It stands
 // where the illustration of the setup stood, in the 16:9 the room composes
 // the camera into, the picture fitted as the room fits it (bars beside a
 // square camera's) and unmirrored, as the room sees it. Larger shows it
@@ -34,6 +34,8 @@ function spoken(view: View): string {
             return 'The camera behind you is live in the window, on this computer only.';
         case 'starting':
             return 'Turning the camera on.';
+        case 'unused':
+            return "Move the pointer to see the camera's picture.";
         case 'paused':
             return 'The picture is paused while the window is not in use.';
         case 'hidden':
@@ -44,7 +46,7 @@ function spoken(view: View): string {
     }
 }
 
-type View = { kind: 'live' | 'starting' | 'paused' | 'hidden' } | { kind: 'quiet' | 'trouble'; text: string };
+type View = { kind: 'live' | 'starting' | 'unused' | 'paused' | 'hidden' } | { kind: 'quiet' | 'trouble'; text: string };
 
 /** A connector's reason as a sentence: capitalised, with its stop. */
 function sentence(s: string): string {
@@ -54,7 +56,7 @@ function sentence(s: string): string {
 }
 
 /** What the tile shows, and whether the preview is asked for. */
-function viewOf(state: AppState, present: boolean): { view: View; asks: boolean } {
+function viewOf(state: AppState, presence: Presence): { view: View; asks: boolean } {
     const { source, camera, preview, platform, media, previewHidden } = state;
     const quiet = (text: string) => ({ view: { kind: 'quiet', text } as View, asks: false });
     if (camera.on) return quiet('Your session has the camera.');
@@ -65,30 +67,53 @@ function viewOf(state: AppState, present: boolean): { view: View; asks: boolean 
     // The card beside it says what macOS is doing and where it is changed.
     if (platform === 'darwin' && media && media.camera !== 'authorized') return quiet('The picture shows here once macOS allows the camera.');
     if (previewHidden) return { view: { kind: 'hidden' }, asks: false };
-    if (!present) return { view: { kind: 'paused' }, asks: false };
+    if (presence === 'unused') return { view: { kind: 'unused' }, asks: false };
+    if (presence === 'away') return { view: { kind: 'paused' }, asks: false };
     if (preview.state === 'live') return { view: { kind: 'live' }, asks: true };
     if (preview.state === 'unavailable' && preview.note) return { view: { kind: 'trouble', text: sentence(preview.note) }, asks: true };
     return { view: { kind: 'starting' }, asks: true };
 }
 
-/** Whether the window has been used (the pointer, a key, focus) in the last `idleMs`; any use counts at once. */
-function usePresence(idleMs: number): boolean {
-    const [present, setPresent] = useState(true);
+/** Whether someone is at the window: not yet since it opened, using it, or away. */
+type Presence = 'unused' | 'present' | 'away';
+
+/**
+ * Whether the window has been used in the last `idleMs`: a press, a key,
+ * the wheel, or the pointer moving (to another place: a window that opens
+ * under a pointer standing still may be told it moved). Opening, or coming
+ * to the front, is not use: the program opens on its own after an update,
+ * the window to the front, with no one in the room.
+ */
+function usePresence(idleMs: number): Presence {
+    const [presence, setPresence] = useState<Presence>('unused');
     useEffect(() => {
-        let last = Date.now();
+        let last = 0;
+        let at: { x: number; y: number } | null = null;
         const used = () => {
             last = Date.now();
-            setPresent(true);
+            setPresence('present');
         };
-        const kinds = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'focus'] as const;
+        const moved = (e: PointerEvent) => {
+            const was = at;
+            at = { x: e.screenX, y: e.screenY };
+            if (was && (was.x !== at.x || was.y !== at.y)) used();
+        };
+        const kinds = ['pointerdown', 'keydown', 'wheel'] as const;
         for (const kind of kinds) window.addEventListener(kind, used, { passive: true });
-        const timer = setInterval(() => setPresent(Date.now() - last < idleMs), Math.min(15_000, Math.max(1_000, idleMs / 6)));
+        window.addEventListener('pointermove', moved, { passive: true });
+        const timer = setInterval(
+            () => {
+                if (last) setPresence(Date.now() - last < idleMs ? 'present' : 'away');
+            },
+            Math.min(15_000, Math.max(1_000, idleMs / 6)),
+        );
         return () => {
             for (const kind of kinds) window.removeEventListener(kind, used);
+            window.removeEventListener('pointermove', moved);
             clearInterval(timer);
         };
     }, [idleMs]);
-    return present;
+    return presence;
 }
 
 /**
@@ -233,6 +258,7 @@ function Frame({ view, camera, large, onLarger, onHide, onShow }: { view: View; 
                     </Pill>
                 </div>
             ) : null}
+            {view.kind === 'unused' ? <Note line="Move the pointer to see the camera's picture here." /> : null}
             {view.kind === 'paused' ? <Note title="Paused" line="The window has not been used for a while. Move the pointer to see the picture again." /> : null}
             {view.kind === 'hidden' ? (
                 <Note
@@ -263,8 +289,8 @@ const LARGER: CSSProperties = { width: 'min(880px, (100vh - 240px) * 16 / 9, 100
 export function CameraPreview() {
     const state = useAppState();
     const dispatch = useDispatch();
-    const present = usePresence(state.previewIdleMs);
-    const { view, asks } = viewOf(state, present);
+    const presence = usePresence(state.previewIdleMs);
+    const { view, asks } = viewOf(state, presence);
     usePreviewLease(asks);
     const [larger, setLarger] = useState(false);
     const enlargeable = view.kind === 'live' || view.kind === 'starting' || view.kind === 'paused' || view.kind === 'trouble';
