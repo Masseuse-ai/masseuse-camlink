@@ -220,6 +220,11 @@ type offer struct {
 	// subs are the remembered devices that were not connected and what
 	// stands in for them (capture.Substitution); the window lists them.
 	subs []capture.Substitution
+	// preview, for the computer's own camera, shows the window the camera's
+	// picture until ctx ends (capture.Source.Preview; camControl.preview);
+	// nil for a camera on the network. size is that picture's mode, WxH.
+	preview func(ctx context.Context, frame func(jpeg []byte)) error
+	size    string
 }
 
 func (o *offer) source() rendezvous.Source {
@@ -275,9 +280,10 @@ func buildOffer(ctx context.Context, cfg sourceConfig, stateDir string, sink *se
 		for _, sub := range src.Substitutions() {
 			ui.Notice(noticeInfo, fmt.Sprintf("%s is not connected; using %s.", sub.Wanted, sub.Using.Name))
 		}
-		o := &offer{kind: "capture", label: src.Label(), ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing, trouble: src.Trouble, subs: src.Substitutions()}
+		o := &offer{kind: "capture", label: src.Label(), ready: true, start: src.Start, stop: src.Stop, publishing: src.Publishing, trouble: src.Trouble, subs: src.Substitutions(), preview: src.Preview}
 		so := src.Options()
 		o.shape = fmt.Sprintf("%s %d fps, %s", so.VideoSize, so.FPS, src.Encoder())
+		o.size = so.VideoSize
 		o.adapt = &capture.Adapter{
 			Ceiling: so.Bitrate, FPS: so.FPS, Stats: sink.Stats, Target: src, Logger: logger,
 			Notify: func(line string) { ui.Notice(noticeInfo, line) },
@@ -437,6 +443,13 @@ type camControl struct {
 	// the one that counts.
 	pending    *time.Timer
 	pendingGen uint64
+	// prev is the window's preview while it runs (preview.go): the camera
+	// shown to the window between sessions, never while one has it.
+	prev *previewRun
+	// lease and retry are how long a preview runs after the window's last
+	// ask and how long it waits to try again; 0 means previewLease and
+	// previewRetry.
+	lease, retry time.Duration
 }
 
 func (c *camControl) reporter() reporter {
@@ -461,13 +474,16 @@ func (c *camControl) busy() (camera, face bool) {
 	return c.on, c.faceOn
 }
 
-// setOffer replaces the camera served; errCameraBusy while it is on.
+// setOffer replaces the camera served; errCameraBusy while it is on. A
+// preview of the camera replaced ends; the window's next ask shows the new
+// one.
 func (c *camControl) setOffer(o *offer) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.on {
 		return errCameraBusy
 	}
+	c.stopPreviewLocked()
 	c.offer = o
 	return nil
 }
@@ -541,6 +557,10 @@ func (c *camControl) dialLocal() (net.Conn, error) {
 		c.log.Debug("camera: a stream came within the grace; staying on")
 	}
 	if !c.on {
+		// The window's preview lets go of the camera first, so the
+		// session's capture opens a camera nothing else holds (on Windows
+		// a camera serves one program at a time).
+		c.stopPreviewLocked()
 		c.on = true
 		ctx, cancel := context.WithCancel(context.Background())
 		c.cancel = cancel
@@ -577,9 +597,13 @@ func (c *camControl) startFace() {
 
 // off turns the camera off if it is on: at once, or, with later, once the
 // grace has passed with no stream opened (dialLocal) in the meantime. A
-// grace already running is left to run.
+// grace already running is left to run. At once, the window's preview goes
+// off too (an update's handoff, the program ending).
 func (c *camControl) off(later bool) {
 	c.mu.Lock()
+	if !later {
+		c.stopPreviewLocked()
+	}
 	if !c.on && !c.faceOn {
 		c.mu.Unlock()
 		return
@@ -632,6 +656,10 @@ func (c *camControl) setEnabled(view string, enabled bool) error {
 	case viewBody:
 		c.cameraOff = !enabled
 		c.reporter().CameraEnabled(enabled)
+		if !enabled {
+			// Off is off for the window's preview too: its light goes out.
+			c.stopPreviewLocked()
+		}
 		if !enabled && c.on {
 			// A grace running for the next tunnel has nothing left to keep
 			// on, unless the front-facing camera is still on: then it runs

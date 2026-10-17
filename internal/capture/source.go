@@ -4,10 +4,12 @@
 // ffmpeg is the one program that opens cameras and microphones on macOS
 // (avfoundation), Windows (dshow) and Linux (v4l2 and PulseAudio) alike and
 // encodes with whatever hardware the computer has. The connector runs it as
-// a child only while a session is reading, so the camera light is off
-// otherwise, and receives its RTSP output on a loopback port nobody else
-// knows the path of. What ffmpeg produces is forwarded as it is; nothing is
-// decoded or looked at here.
+// a child while a session is reading, and receives its RTSP output on a
+// loopback port nobody else knows the path of; and, while no session has
+// the camera, for the desktop window's preview (preview.go), whose small
+// pictures go to the window alone. Otherwise the camera light is off. What
+// ffmpeg produces is forwarded as it is; nothing is decoded or looked at
+// here.
 package capture
 
 import (

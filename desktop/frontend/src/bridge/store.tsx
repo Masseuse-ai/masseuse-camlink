@@ -6,7 +6,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type Dispatch, type ReactNode, type RefObject } from 'react';
 
-import { CODE_TTL_MS, type Bridge, type CameraStats, type ConnectorEvent, type Descriptor, type Device, type EnclaveProof, type FaceCamera, type Hello, type LinkState, type MediaPermission, type Share, type Substitution, type Unit, type UpdateState } from './types';
+import { CODE_TTL_MS, type Bridge, type CameraStats, type ConnectorEvent, type Descriptor, type Device, type EnclaveProof, type FaceCamera, type Hello, type LinkState, type MediaPermission, type PreviewStanding, type Share, type Substitution, type Unit, type UpdateState } from './types';
 
 export type Platform = 'darwin' | 'windows' | 'linux';
 
@@ -66,6 +66,17 @@ export function switchedOff(camera: CameraState): boolean {
     return camera.enabled === false;
 }
 
+/** Ready's preview of the camera behind the person, as the connector last said it; its pictures are not state (usePreviewPictures). */
+export interface PreviewState {
+    state: PreviewStanding;
+    /** Why it cannot run, for the person, while `unavailable`. */
+    note?: string;
+    camera?: string;
+    /** The picture's mode, so the frame can be drawn before the first picture. */
+    width?: number;
+    height?: number;
+}
+
 export interface AppState {
     platform: Platform;
     shell: { version: string; wired: boolean; stateDir: string };
@@ -84,6 +95,11 @@ export interface AppState {
     camera: CameraState;
     /** The face camera (OBS's picture going back), on only while the room reads it; `enabled` as for the camera. */
     faceCamera: CameraState;
+    preview: PreviewState;
+    /** How long the window may go unused before Ready's preview pauses, so the camera's light is not left on for an empty room. */
+    previewIdleMs: number;
+    /** The person hid Ready's preview: it stays off, across screens and sessions, until Show or the next launch (not remembered, like the switch). */
+    previewHidden: boolean;
     units: Unit[];
     unitsScanning: boolean;
     unit: Descriptor | null;
@@ -118,6 +134,9 @@ export const initialState: AppState = {
     link: { state: 'idle' },
     camera: { on: false },
     faceCamera: { on: false },
+    preview: { state: 'off' },
+    previewIdleMs: 5 * 60_000,
+    previewHidden: false,
     units: [],
     unitsScanning: false,
     unit: null,
@@ -142,6 +161,7 @@ export type Action =
     | { type: 'ui/dismiss'; id: number }
     | { type: 'ui/shell'; shell: AppState['shell'] }
     | { type: 'ui/media-asked' }
+    | { type: 'ui/preview-hidden'; hidden: boolean }
     | { type: 'ui/reset'; state: AppState };
 
 let noticeSeq = 1;
@@ -178,6 +198,8 @@ export function reducer(state: AppState, action: Action): AppState {
             return { ...state, shell: action.shell };
         case 'ui/media-asked':
             return { ...state, mediaAsked: true };
+        case 'ui/preview-hidden':
+            return { ...state, previewHidden: action.hidden };
         case 'event':
             return applyEvent(state, action.event);
     }
@@ -225,6 +247,14 @@ function applyEvent(state: AppState, ev: ConnectorEvent): AppState {
             return { ...state, camera: { on: ev.on, stats: ev.on ? ev.stats : undefined, enabled: ev.enabled ?? state.camera.enabled } };
         case 'face':
             return { ...state, faceCamera: { on: ev.on, stats: ev.on ? ev.stats : undefined, enabled: ev.enabled ?? state.faceCamera.enabled } };
+        case 'preview':
+            return {
+                ...state,
+                preview: { state: ev.state, note: ev.note, camera: ev.camera ?? state.preview.camera, width: ev.width ?? state.preview.width, height: ev.height ?? state.preview.height },
+            };
+        case 'preview_frame':
+            // Handed to usePreviewPictures before the reducer (StoreProvider); never state.
+            return state;
         case 'units':
             return { ...state, units: ev.units, unitsScanning: ev.scanning };
         case 'device':
@@ -263,6 +293,8 @@ interface StoreValue {
     bridge: Bridge;
     /** When a device listing was asked for and not yet answered (ms since the epoch), 0 when none is outstanding. */
     listingAsked: RefObject<number>;
+    /** Who is showing the preview's pictures (usePreviewPictures). */
+    pictures: RefObject<Set<(jpeg: string) => void>>;
 }
 
 /** How long an unanswered listing blocks the next ask: past this the connector is asked again. */
@@ -279,6 +311,7 @@ interface ProviderProps {
 export function StoreProvider({ bridge, initial, children }: ProviderProps) {
     const [state, dispatch] = useReducer(reducer, initial);
     const listingAsked = useRef(0);
+    const pictures = useRef(new Set<(jpeg: string) => void>());
 
     // A new bridge (the scenario panel swapping scenarios) starts the state
     // over; the reducer's initial state is only read once, so it is reset
@@ -287,13 +320,20 @@ export function StoreProvider({ bridge, initial, children }: ProviderProps) {
         dispatch({ type: 'ui/reset', state: initial });
         listingAsked.current = 0;
         return bridge.subscribe((event) => {
+            // The preview's pictures go straight to whoever shows them:
+            // through the reducer, each of the eight a second would render
+            // the whole window again.
+            if (event.type === 'preview_frame') {
+                for (const show of pictures.current) show(event.jpeg);
+                return;
+            }
             // The connector's answer to list_devices: the next ask may go.
             if (event.type === 'devices') listingAsked.current = 0;
             dispatch({ type: 'event', event });
         });
     }, [bridge, initial]);
 
-    const value = useMemo(() => ({ state, dispatch, bridge, listingAsked }), [state, bridge]);
+    const value = useMemo(() => ({ state, dispatch, bridge, listingAsked, pictures }), [state, bridge]);
     return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 
@@ -346,6 +386,60 @@ export function useDeviceListing(live: boolean, intervalMs = 10_000): void {
             document.removeEventListener('visibilitychange', ask);
         };
     }, [hello, blocked, live, bridge, intervalMs, listingAsked]);
+}
+
+/** Hands each of the preview's pictures (a JPEG in base64) to `show`, for as long as the caller is mounted. */
+export function usePreviewPictures(show: (jpeg: string) => void): void {
+    const { pictures } = useStore();
+    const latest = useRef(show);
+    useEffect(() => {
+        latest.current = show;
+    }, [show]);
+    useEffect(() => {
+        const set = pictures.current;
+        const relay = (jpeg: string) => latest.current(jpeg);
+        set.add(relay);
+        return () => {
+            set.delete(relay);
+        };
+    }, [pictures]);
+}
+
+/** How often Ready asks for its preview again: well inside the connector's ten-second lease (cmd/masseuse-camlink/preview.go). */
+const PREVIEW_ASK_MS = 3_000;
+
+/**
+ * Keeps Ready's preview asked for while `wanted` and the window is
+ * visible: at once, then every PREVIEW_ASK_MS, so the connector's lease
+ * never runs out while the picture is shown; and off the moment it is not
+ * (unwanted, the window hidden, the screen left). A window that stops
+ * asking for any other reason (closed, stuck) has the connector let the
+ * camera go when the lease runs out. A refusal is said by the connector
+ * as the preview's standing, not as a notice.
+ */
+export function usePreviewLease(wanted: boolean): void {
+    const { state, bridge } = useStore();
+    const { hello, blocked } = state;
+    useEffect(() => {
+        if (!hello || blocked) return;
+        let asking = false;
+        const ask = (on: boolean) => {
+            asking = on;
+            bridge.send({ type: 'preview', on }).catch(() => {});
+        };
+        const tick = () => {
+            if (wanted && document.visibilityState === 'visible') ask(true);
+            else if (asking) ask(false);
+        };
+        tick();
+        const timer = setInterval(tick, PREVIEW_ASK_MS);
+        document.addEventListener('visibilitychange', tick);
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener('visibilitychange', tick);
+            if (asking) ask(false);
+        };
+    }, [hello, blocked, wanted, bridge]);
 }
 
 /** The connector, to ask things of; a refusal becomes a notice. */

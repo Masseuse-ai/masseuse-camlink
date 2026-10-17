@@ -120,6 +120,17 @@ export function SetCamera(view: string, enabled: boolean): $CancellablePromise<v
 }
 
 /**
+ * SetPreview asks for Ready's preview of the camera behind the person: on,
+ * repeated every few seconds while the page shows it (the connector lets
+ * the camera go ten seconds after the last), or off to stop it at once.
+ * The standing comes back as "preview" events and the pictures as
+ * "preview_frame", neither of which the shell keeps (Snapshot).
+ */
+export function SetPreview(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(2248284786, on);
+}
+
+/**
  * SetSource chooses the camera and microphone (or the network camera), the
  * front-facing camera, or whether the phone's picture is wanted. The
  * connector applies it while no session reads the camera and remembers

@@ -21,9 +21,11 @@ import (
 
 // The test binary doubles as a fake connector when FAKE_CONNECTOR is set:
 // it speaks the -ipc protocol's shapes (docs/DESKTOP.md section 3), echoes
-// every command as a notice, ends with the relaunch code on update_now,
-// with 0 on quit or when standard input ends, and with FAKE_EXIT at once
-// when that is set, a line on standard error first.
+// every command as a notice, answers a preview with its standing and a
+// picture, ends with the relaunch code on update_now, with 0 on quit or
+// when standard input ends, and with FAKE_EXIT at once when that is set, a
+// line on standard error first. With FAKE_GARBAGE set its first line is
+// FAKE_GARBAGE bytes that are not JSON.
 func TestMain(m *testing.M) {
 	if os.Getenv("FAKE_CONNECTOR") == "" {
 		os.Exit(m.Run())
@@ -34,6 +36,11 @@ func TestMain(m *testing.M) {
 		var n int
 		fmt.Sscan(code, &n)
 		os.Exit(n)
+	}
+	if garbage := os.Getenv("FAKE_GARBAGE"); garbage != "" {
+		var n int
+		fmt.Sscan(garbage, &n)
+		fmt.Println(strings.Repeat("x", n))
 	}
 	out := json.NewEncoder(os.Stdout)
 	_ = out.Encode(map[string]any{"type": "hello", "hello": map[string]any{"version": "v9.9.9", "identity": "abcd1234", "stateDir": "/tmp/x", "updates": "on", "awake": true, "drivers": "Unit drivers: Mastogo (built in).", "phones": 1}})
@@ -52,6 +59,10 @@ func TestMain(m *testing.M) {
 		case "update_now":
 			_ = out.Encode(map[string]any{"type": "update", "state": "installing", "tag": "v10.0.0", "text": "Updating to v10.0.0; back in a moment."})
 			os.Exit(relaunchExitCode)
+		case "preview":
+			_ = out.Encode(map[string]any{"type": "preview", "state": "live", "camera": "Cam", "width": 1920, "height": 1080})
+			_ = out.Encode(map[string]any{"type": "preview_frame", "jpeg": "/9j/2Q=="})
+			_ = out.Encode(map[string]any{"type": "notice", "level": "info", "text": fmt.Sprintf("got preview on=%v", cmd["on"])})
 		default:
 			_ = out.Encode(map[string]any{"type": "notice", "level": "info", "text": "got " + fmt.Sprint(cmd["type"])})
 		}
@@ -157,6 +168,78 @@ func TestServiceReadsStateAndRelaunches(t *testing.T) {
 	}
 	if err := s.ListDevices(); err == nil {
 		t.Fatal("a command reached a connector that ended")
+	}
+}
+
+// TestSetPreviewAsksTheConnector: SetPreview is the connector's preview
+// command, and its answer, the standing and a picture, comes back as lines.
+func TestSetPreviewAsksTheConnector(t *testing.T) {
+	s := newConnectorService()
+	s.log = slog.New(slog.DiscardHandler)
+	p, err := startConnector(fakeConnector(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.stop(5 * time.Second)
+	s.mu.Lock()
+	s.proc = p
+	s.mu.Unlock()
+	if err := s.SetPreview(true); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for line := range p.lines {
+		var ev map[string]any
+		if err := json.Unmarshal(line, &ev); err != nil {
+			t.Fatalf("not JSON: %s", line)
+		}
+		kinds = append(kinds, fmt.Sprint(ev["type"]))
+		if ev["text"] == "got preview on=true" {
+			break
+		}
+	}
+	if got := strings.Join(kinds, " "); !strings.HasSuffix(got, "preview preview_frame notice") {
+		t.Fatalf("lines %s", got)
+	}
+}
+
+// TestServiceKeepsNoPreview: the preview's standing and pictures pass to
+// the page and are not kept for one that mounts late; a line that is not
+// an event is logged in part only, since it may be anything, a picture
+// among them.
+func TestServiceKeepsNoPreview(t *testing.T) {
+	var logged lockedBuffer
+	s := newConnectorService()
+	s.log = slog.New(slog.NewTextHandler(&logged, nil))
+	p, err := startConnector(fakeConnector(t, "FAKE_GARBAGE=5000"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.proc = p
+	s.mu.Unlock()
+	done := make(chan struct{})
+	go func() { defer close(done); s.relay(p) }()
+	if err := s.SetPreview(true); err != nil {
+		t.Fatal(err)
+	}
+	// The update ends the fake: every line before it has been relayed once
+	// the relay is done.
+	if err := s.UpdateNow(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	for _, ev := range s.Snapshot() {
+		if k := ev["type"]; k == "preview" || k == "preview_frame" {
+			t.Fatalf("the snapshot keeps %v", ev)
+		}
+	}
+	if s.last["update"] == nil {
+		t.Fatal("the update was not relayed")
+	}
+	log := logged.String()
+	if !strings.Contains(log, "shell: not an event") || !strings.Contains(log, "(5000 bytes)") || strings.Contains(log, strings.Repeat("x", notAnEventKept+1)) {
+		t.Fatalf("log %q", log)
 	}
 }
 

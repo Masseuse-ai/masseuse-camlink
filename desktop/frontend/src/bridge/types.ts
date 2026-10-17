@@ -160,6 +160,13 @@ export type UpdateState = 'current' | 'checking' | 'staged' | 'installing' | 'fa
  */
 export type MediaPermission = 'notDetermined' | 'restricted' | 'denied' | 'authorized';
 
+/**
+ * The standing of Ready's preview of the camera behind the person
+ * (cmd/masseuse-camlink/preview.go): opening the camera, pictures coming,
+ * not running, or unable to run (the event's `note` says why).
+ */
+export type PreviewStanding = 'starting' | 'live' | 'off' | 'unavailable';
+
 /** Everything the connector tells the window, and the shell's own words in the same stream (`media`, `blocked connector-stopped`). */
 export type ConnectorEvent =
     | { type: 'hello'; hello: Hello }
@@ -222,6 +229,17 @@ export type ConnectorEvent =
           camera: MediaPermission;
           mic: MediaPermission;
       }
+    | {
+          /** Ready's preview of the camera behind the person, as the connector runs it; `width` and `height` are its picture's mode, `note` why it cannot run, for the person. */
+          type: 'preview';
+          state: PreviewStanding;
+          note?: string;
+          camera?: string;
+          width?: number;
+          height?: number;
+      }
+    /** One of the preview's pictures, a JPEG in base64, eight or so a second; never folded into the state (bridge/store.tsx, usePreviewPictures). */
+    | { type: 'preview_frame'; jpeg: string }
     | { type: 'update'; state: UpdateState; tag?: string; text: string }
     | { type: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
     | { type: 'blocked'; kind: 'already-running' | 'connector-stopped' | 'state-dir-unwritable'; detail?: string };
@@ -241,6 +259,13 @@ export type ConnectorCommand =
      * back on the `camera` or `face` event as `enabled`.
      */
     | { type: 'set_camera'; view: CameraView; enabled: boolean }
+    /**
+     * Ready's preview of the camera behind the person: on, again every few
+     * seconds while the screen shows it (the connector lets the camera go
+     * ten seconds after the last), or off at once. Refused while a session
+     * has the camera or the switch is off; the answer is `preview` events.
+     */
+    | { type: 'preview'; on: boolean }
     | { type: 'select_unit'; id: string }
     | { type: 'update_now' }
     /** The shell's: ask the system for the camera and the microphone (macOS's prompts); the answer is a `media` event. */

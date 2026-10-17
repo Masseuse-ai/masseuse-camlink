@@ -28,8 +28,11 @@ encoder) and no nonfree component. With `--disable-everything
 --disable-autodetect` the program holds only what the connector asks for,
 listed in `build.sh` next to the configure flags: raw video and PCM
 decoders, the `libopus` encoder, the filters ffmpeg inserts for the output
-options, the RTSP output over TCP, plus the `lavfi` test source and `null`
-output the smoke test uses; and, per system:
+options, the RTSP output over TCP, the `mjpeg` encoder and the `mpjpeg`
+output on a pipe for the window's preview (small pictures of the camera,
+which the connector hands to the window and nowhere else), plus the
+`lavfi` test source and `null` output the smoke test uses; and, per
+system:
 
 - **macOS** (`build.sh -t darwin`): the AVFoundation input and the
   `h264_videotoolbox` encoder (hardware or, with `-allow_sw 1`, Apple's

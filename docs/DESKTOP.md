@@ -20,8 +20,9 @@ Two programs, one download.
   process and speaks to it over its standard input and output, in JSON
   lines, the way the connector speaks to its unit driver helpers
   (docs/UNITS.md). The shell holds no key, no pairing, no camera and no
-  unit: it shows what the connector reports and passes on what the person
-  chooses. One thing is its own: on a Mac it is the process the system
+  unit: it shows what the connector reports (Ready's preview of the camera
+  included: pictures the connector captures and the page shows) and passes
+  on what the person chooses. One thing is its own: on a Mac it is the process the system
   holds responsible for the camera and the microphone its grandchild ffmpeg
   opens, so it is the shell that asks the system for them
   (`desktop/permissions_darwin.go`), on the Cameras screen, while the
@@ -88,8 +89,10 @@ it. Cameras is two lists on six columns each; the face tab a split, the
 choice on five and what it asks for on seven. Unit is the units found on
 six and the one serving (or what a session may do with one) on the other
 six. Ready is four cards on three columns each over the Session box on all
-twelve, itself seven and five. Lists that can grow scroll inside their
-card, never the window.
+twelve, itself seven and five; waiting for a session, the five hold the
+preview of the camera behind the person, as large as the box's height
+allows at 16:9. Lists that can grow scroll inside their card, never the
+window.
 
 The first run is four steps under the top bar, **Pair, Cameras and
 microphone, Unit, Ready**, each opening only when the one before is done
@@ -107,7 +110,7 @@ the reducer's `ui/go` and `hello` in `frontend/src/bridge/store.tsx`).
 | **Pair** | Under the heading, the line on what the code does ("The code securely connects your masseuse to this computer."). The code, large, in the cells the phone's code input draws, with a ring under it that is wiped clockwise over the code's ten-minute life, as an authenticator app draws one, and the time left in words beside the ring ("Code rotates in 9 minutes and 5 seconds", counting down by the second); the three things to do on the phone, one line each. | fresh code (nothing leads on until a phone pairs); the last minute (ring, code and the words in ember; the code's cells breathing, the ring still); not yet reachable (empty cells, "Reaching masseuse.ai…"); a lapsed code waiting for the next (empty cells); a phone just paired (straight on to the camera; the check on Pair in the bar is the confirmation); back here after pairing in this run (the way on is the camera); pairing another phone from Ready; a computer paired on an earlier run opens on Ready instead |
 | **Cameras and microphone** | Two tabs, one per view the room shows; under the heading, for Behind you, a line on what the camera behind the person watches and what the face alone accounts for. **Behind you**: this computer's cameras as ffmpeg lists them, each a card with what it is (built in, USB, virtual camera, Continuity Camera), and last in the list "A camera on your network", which opens inline to the RTSPS address and an optional certificate pin; the microphones, with "No microphone" last. A virtual camera such as OBS's carries the word that it shows what its program outputs. The picture itself (size, rate, bit rate, encoder) is the connector's and the enclave's to manage between them and is not offered; nothing on the screen names the encoding. **Your face**: which picture the room shows as the person's face and streams on: *Your phone's camera* (the default: "As captured; nothing passes through this computer") or *OBS Studio* (advanced, "Apply filters or use a dedicated front-facing camera"), which opens three steps: "Pull your phone's camera into OBS Studio", marked optional (the loopback address with a copy button; or a dedicated camera on the computer as OBS's source instead, only step 2's camera going back to masseuse.ai), "Apply filters in OBS Studio, then select your post-processed front-facing camera" (this computer's cameras, virtual ones first; the camera chosen behind the person greyed), and "Enable it in https://masseuse.ai" (under Setup on the phone: *Show the computer's picture as my face*, and *Send my phone's picture to the computer* if step 1 was used). The page says nothing of the loop's latency or of what the analysis reads (the room keeps reading the phone's own picture): that is plumbing, not the person's concern. | Behind you: the usual; looking (the cards' shapes until the connector's first answer); no camera the connector can serve (in the first run, Continue waits, "Connect a camera to continue."); a virtual camera chosen; a remembered device not connected (the stand-in shown, the missing one greyed and named); no camera; locked while a session has the camera; a network camera; on a Mac, the system not yet asked for the camera and the microphone (the window asks as the screen opens and the card says so while the two prompts are up, with "Allow camera and microphone" to ask again); macOS blocking the camera, the microphone or both (the card names what is blocked, points at Privacy & Security and opens it; a switch made there shows within seconds). Your face: the phone's camera; processed and setting up (the address up, the phone not sending, no virtual camera yet); processed and ready (the phone's picture arriving, OBS Virtual Camera chosen); the face camera also chosen behind you; locked while the room shows OBS's picture; an older connector (no share or face in its report: one line, nothing to choose) |
 | **Unit** | The units found (Bluetooth or USB serial by their family), the one served, the one another program has open; the served unit's standing (held at zero or armed, battery, level, bound). With none found, the units masseuse.ai works with, each with its maker's mark, as the phone's "Which units work?" sheet lists them (Mastogo units and the DG-Lab Coyote over Bluetooth, the E-Stim Systems 2B and the ErosTek MK-312BT over a serial link cable), with the trademark line; with units found, the same list behind "Which units work?". | looking, none yet (in the first run, Done waits for a unit); one connected; several; another program has it open; Bluetooth permission needed (macOS); Bluetooth off; disconnected, by reason (idle, battery, button, link); armed by a session (switching waits) |
-| **Ready** | What this computer offers (behind you, microphone, your face, unit, each with Change) and what the session is doing: waiting; the camera link active with its rates and the enclave's proof (release, commit, source, registry, signer: the three `enclave …` log lines made readable); with the face through OBS, a Face meter and the loop's three hops (the phone's picture to this computer, OBS's picture back, shown as the face); congested; on hold; closed. The cameras are the person's to switch off here, whatever a session asks: a switch (shadcn/ui, at the right of the card's eyebrow) on *Behind you*, and one on *Your face* while OBS Studio is the face view (the phone's own camera has nothing on this computer to switch). Off, the connector stops that capture at once, so the camera's light goes out, and refuses to start it for any session until the switch is on again; the microphone rides in the camera's capture and goes with it (the card says so; the session hears the phone's). On again, nothing starts by itself: the enclave's relay is back at the stream within seconds and the camera comes on for it. The switch shows the connector's standing, not the click, and is greyed while there is no camera the connector can serve. Not remembered: every launch has both allowed. | idle; session active; face processed through OBS and live; the camera switched off during a session (the chip *Camera link active · camera switched off*, the card's *Switched off* badge, a card in the Session box in place of the meters) or while idle (a line under *Waiting for a session*); the face camera switched off (its badge, the hop *OBS picture back · switched off*, the camera behind still sending); congested; camera on but no picture sent (the connector's reason); on hold; closed; update downloaded and waiting; updates off; without a unit; an older connector (no switch shown: it never says `enabled`); on a Mac, the system not yet asked for the camera and the microphone (a computer paired on an earlier run opens here and skips the steps, so the window asks here, with the same card as Cameras); macOS blocking the camera or the microphone (the shell's definite card, in place of the connector's no-picture guess during a session) |
+| **Ready** | What this computer offers (behind you, microphone, your face, unit, each with Change) and what the session is doing: waiting; the camera link active with its rates and the enclave's proof (release, commit, source, registry, signer: the three `enclave …` log lines made readable); with the face through OBS, a Face meter and the loop's three hops (the phone's picture to this computer, OBS's picture back, shown as the face); congested; on hold; closed. The cameras are the person's to switch off here, whatever a session asks: a switch (shadcn/ui, at the right of the card's eyebrow) on *Behind you*, and one on *Your face* while OBS Studio is the face view (the phone's own camera has nothing on this computer to switch). Off, the connector stops that capture at once, so the camera's light goes out, and refuses to start it for any session until the switch is on again; the microphone rides in the camera's capture and goes with it (the card says so; the session hears the phone's). On again, nothing starts by itself: the enclave's relay is back at the stream within seconds and the camera comes on for it. The switch shows the connector's standing, not the click, and is greyed while there is no camera the connector can serve. Not remembered: every launch has both allowed. Waiting for a session, the camera behind the person shows live where the illustration of the setup stood, so it can be placed first: the connector's own capture of it in the session's mode (`preview`, section 3), fitted into the room's 16:9 as the room fits it (bars beside a square camera's), unmirrored, with *Live · on this computer only* over it, *Show larger* (a dialog across the window, the picture readable from the bed, closing by itself when a session takes the camera) and *Hide the picture*; beside it, the line on placing the camera ("Place the camera so that, lying on your front, your shoulders to your feet are in the picture, your back uncovered."). It runs while Ready is on screen and the window visible and used in the last five minutes, the switch is on and the camera is one of this computer's own and allowed; the page asks again every 3 s, and the connector lets the camera go 10 s after the last ask. The card says *Preview* and "Shown on this screen only" while it runs. Hidden is not remembered either. | idle, the preview live; the preview starting (the illustration, *Turning the camera on*); a square or portrait camera (bars); the picture black (a covered lens, a dark room, or a virtual camera whose program sends nothing, said so); the camera not opened (*No picture* and the connector's reason; it tries again); paused after five minutes unused (the pointer brings it back); hidden (*Show the picture*); the larger view; a session taking the camera from the preview; a camera on the network (no preview, its own app shows it); session active; face processed through OBS and live; the camera switched off during a session (the chip *Camera link active · camera switched off*, the card's *Switched off* badge, a card in the Session box in place of the meters) or while idle (a line under *Waiting for a session*); the face camera switched off (its badge, the hop *OBS picture back · switched off*, the camera behind still sending); congested; camera on but no picture sent (the connector's reason); on hold; closed; update downloaded and waiting; updates off; without a unit; an older connector (no switch shown: it never says `enabled`); on a Mac, the system not yet asked for the camera and the microphone (a computer paired on an earlier run opens here and skips the steps, so the window asks here, with the same card as Cameras); macOS blocking the camera or the microphone (the shell's definite card, in place of the connector's no-picture guess during a session) |
 | **Blocked** | Whole-window: the program cannot run as it is, and the one thing to do. | already running in another window; the connector stopped (its last lines); the state folder cannot be written |
 | **About** | A dialog from the application menu: the program, versions (connector and window), the identity's first characters, the state folder, the links (how it stays private, verify this download, report a security issue, the source). | |
 
@@ -189,6 +192,8 @@ Events, connector to shell:
 | `link` | `state` (`active`, `on-hold`, `closed`), `reason`; with `active`, `enclave` (`{image,release,commit,source,registry,signedBy,cached}`) as last verified | "Camera link active …", "Enclave image … verified" |
 | `camera` | `on`; `stats` (`{videoBps,audioBps,congested,backlogS}`) every 10 s while sending; `enabled`, the switch on Ready, on every event from a connector that has one (said right after the `source` at startup, and at once when the switch moves, `on` false: switched off, the capture is being stopped; switched on, nothing starts until a session reads it); absent from an older connector, and the page shows no switch for it | "Camera on", "Sending …", "Connection congested …", "Camera switched off in the window …" |
 | `face` | `on` (the front-facing capture); `enabled`, its own switch, as for `camera` | "Front-facing camera on/off", "Front-facing camera switched off in the window …" |
+| `preview` | Ready's preview of the camera behind the person, the answer to `preview`: `state` (`starting`, `live`, `off`, `unavailable`), `note` (why it cannot run, for the person, while `unavailable`), `camera`, `width` and `height` (the picture's mode); not kept for a page that mounts late (`snapshotKinds`) | (the window's alone) |
+| `preview_frame` | `jpeg`: one of the preview's pictures, base64, at most 8 a second and 640 on its longer side; a slow page loses pictures rather than holding up other events; never kept, logged or folded into the page's state (`usePreviewPictures`) | (the window's alone) |
 | `units` | `units` (`{id,kind,label,held}`), `scanning` | "Stimulation units in reach" |
 | `device` | `descriptor`: the connector's Descriptor (`kind`, `label`, `id`, `connected`, `held`, `reason`, `capabilities`) with `status` (`batteryPercent`, `power`, `mode`, `levelA`, `levelB`, `outputting`) and `armed` (`{levelBound}`) while a session has it; sent when found or lost and, once a second, when that state changes | "Stimulation device connected/disconnected …" |
 | `update` | `state` (`current`, `checking`, `staged`, `installing`, `failed`, `off`), `tag`, `text` | the `Update …` lines; `checking` and a check that found nothing are the window's alone |
@@ -224,7 +229,14 @@ enclave's next streams for it (the tunnel's `REFUSE "camera unreachable"`,
 naming nothing) until on again; on starts nothing by itself, the relay's
 next stream brings the camera on as any does; not remembered, both cameras
 are allowed at every start; the standing comes back on the `camera` or
-`face` event; `{"type":"select_unit","id":"…"}` (refused with a
+`face` event; `{"type":"preview","on":true|false}`, Ready's preview of the
+camera behind the person (`cmd/masseuse-camlink/preview.go`): on starts it
+or renews its lease, and the page sends it every 3 s while Ready shows the
+picture (`usePreviewLease`), the connector stopping it 10 s after the last;
+off stops it at once; refused while a session has the camera, the switch
+is off or the camera is on the network, and stopped by a session's first
+stream (before the session's capture starts), the switch, a change of
+camera and quitting; `{"type":"select_unit","id":"…"}` (refused with a
 notice while armed); `{"type":"update_now"}`; `{"type":"quit"}`. Standard
 input reaching its end is a shutdown, like the terminal window closing, so
 the connector never outlives a shell that was killed.
@@ -356,6 +368,16 @@ Gatekeeper and SmartScreen prompts):
   word on the phone. With OBS Studio as the face view, the same for its
   switch: OBS's picture stops going back while the camera behind keeps
   sending. Quit and reopen: both switches are on again.
+- Ready's preview, on each system: Ready open, the camera behind shows
+  live within a few seconds and its light comes on. Leave Ready (Change),
+  hide the window or minimise it, or switch the camera off: the light goes
+  out within about ten seconds and no preview `ffmpeg` is left (`pgrep`,
+  Task Manager). *Hide the picture* turns it off at once and *Show the
+  picture* back on; *Show larger* fills the window. Leave the window
+  untouched for five minutes: it pauses and the light goes out; moving the
+  pointer brings it back. Start a session on the phone while it shows:
+  the session gets the camera within seconds (on Windows, where a camera
+  serves one program at a time, too), and Ready shows the session.
 - On a Mac with the application's grants reset (`tccutil reset Camera
   ai.masseuse.camlink`, and `Microphone`): the two system prompts appear
   as the Cameras step opens, in the application's name, with the card
@@ -377,10 +399,14 @@ Gatekeeper and SmartScreen prompts):
 
 ## 6. Open questions
 
-- A local preview of the chosen camera in the picker. It would help with a
-  virtual camera (is OBS outputting?) but sits oddly beside "the camera is on
-  only while a session reads it" and needs the WebView's media permission
-  work; left out of the page until decided.
+- Decided: a local preview, on Ready, of the camera behind the person
+  (Ready's row above; `preview`, section 3). It is the connector's own
+  capture in the session's mode, not the WebView's media, so its crop is
+  the session's, no WebView permission is asked, and on Windows it never
+  contends with the session for the camera; the camera's promise reads
+  "on while a session reads it, or while Ready shows you its picture". A
+  preview in the Cameras picker, of each camera before it is chosen, is
+  a later option with the same command; a camera on the network has none.
 - Decided against: controls for the picture (size, rate, bit rate, encoder).
   The connector and the enclave manage the link between them; the window
   is a front on what the program does, not a place to constrain it. The

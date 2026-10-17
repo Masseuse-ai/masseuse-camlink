@@ -48,6 +48,8 @@ export class WailsBridge implements Bridge {
                 return ConnectorService.SetSource(command.choice);
             case 'set_camera':
                 return ConnectorService.SetCamera(command.view, command.enabled);
+            case 'preview':
+                return ConnectorService.SetPreview(command.on);
             case 'select_unit':
                 return ConnectorService.SelectUnit(command.id);
             case 'update_now':

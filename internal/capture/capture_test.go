@@ -90,6 +90,9 @@ func fakeFFmpeg(args []string) int {
 		fmt.Fprintf(os.Stderr, "[AVFoundation indev @ 0x1] Invalid audio device index\n[in#0 @ 0x2] Error opening input: Input/output error\nError opening input file %s.\nError opening input files: Input/output error\n", input)
 		return 251
 	}
+	if url == "pipe:1" {
+		return fakePreview()
+	}
 	desc := &description.Session{Medias: []*description.Media{
 		{Type: description.MediaTypeVideo, Formats: []format.Format{&format.H264{PayloadTyp: 96, PacketizationMode: 1}}},
 		{Type: description.MediaTypeAudio, Formats: []format.Format{&format.Opus{PayloadTyp: 97, ChannelCount: 1}}},

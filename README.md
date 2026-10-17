@@ -9,7 +9,9 @@ The camera you already have is enough. `masseuse-camlink` runs on the laptop
 or desktop in the room and sends its camera and microphone, the built-in
 ones or a USB camera and microphone plugged into it, to the one
 confidential-computing enclave your session is using; the camera is on only
-while a session is watching. If you have a home camera that speaks RTSPS
+while a session is watching, or while the window shows you its picture
+before one, a picture that stays on your computer. If you have a home
+camera that speaks RTSPS
 (UniFi Protect and others), it can send that instead. The masseuse.ai
 service never sees the picture: it carries a pairing code and a ticket, and
 the stream goes from your computer to the enclave inside TLS.
@@ -535,9 +537,14 @@ differently from one with a device connected.
   no open port: the enclave reaches it only through the tunnel, so nothing
   else on your computer or network can watch it.
 - **Camera on only when watched.** The camera and microphone are captured
-  only while a session is reading the stream, and never between sessions.
-  If the connection to the enclave drops mid-session, they stay on for up
-  to 15 s while it is re-established, then go off.
+  only while a session is reading the stream. If the connection to the
+  enclave drops mid-session, they stay on for up to 15 s while it is
+  re-established, then go off. Between sessions the window's Ready screen
+  shows you the camera's picture so you can place it: the camera alone,
+  never the microphone, as small pictures handed to the window on this
+  computer and to nothing else. It stops when a session takes the camera,
+  when you leave Ready, hide the picture, switch the camera off or close
+  or hide the window, and after five minutes without using the window.
 - **Open and reproducible.** Apache-2.0, built from a pinned Go toolchain
   with SLSA provenance and keyless signatures. `VERIFY.md` shows how to check
   a download and rebuild it byte for byte.

@@ -49,6 +49,12 @@ type reporter interface {
 	FaceEnabled(enabled bool)
 	// Share is the phone's picture starting or stopping to arrive.
 	Share(receiving bool, url string)
+	// Preview is the window's preview of the camera (preview.go): its
+	// standing, why when unavailable (note), the camera and the size of
+	// its picture; PreviewFrame is one of its pictures. The window's
+	// alone: the console has no preview.
+	Preview(state previewState, note, camera, size string)
+	PreviewFrame(jpeg []byte)
 
 	// The stimulation unit.
 	Units(units []estim.Unit, serving *estim.Descriptor, withPicker bool)
@@ -322,6 +328,10 @@ func (c *consoleReporter) Share(receiving bool, url string) {
 		c.printf("Your phone's picture stopped.\n")
 	}
 }
+
+// The console has no preview; only the window asks for one.
+func (c *consoleReporter) Preview(previewState, string, string, string) {}
+func (c *consoleReporter) PreviewFrame([]byte)                          {}
 
 func (c *consoleReporter) Units(units []estim.Unit, serving *estim.Descriptor, withPicker bool) {
 	// A list of one is no choice; the console says nothing until there is
