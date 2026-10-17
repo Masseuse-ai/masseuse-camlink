@@ -326,8 +326,10 @@ func TestApplySourceWaitsWhileTheCameraIsOn(t *testing.T) {
 	}
 	// A change of the camera itself waits while a session reads it; it is
 	// applied when the camera goes off (and then says how it went: a
-	// source report, or why the new camera could not be prepared).
-	if err := m.applySource(context.Background(), sourceChoice{Camera: "Some Other Camera", Mic: "none"}); err != nil {
+	// source report, or why the new camera could not be prepared). A
+	// camera on the network nobody answers for, so the test opens none of
+	// this computer's devices.
+	if err := m.applySource(context.Background(), sourceChoice{URL: "rtsps://127.0.0.1:1/live"}); err != nil {
 		t.Fatal(err)
 	}
 	if m.pending == nil {

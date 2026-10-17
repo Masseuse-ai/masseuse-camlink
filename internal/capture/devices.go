@@ -338,7 +338,8 @@ func parsePactlSources(out string) []Device {
 var ErrNoDevice = errors.New("capture: no such device")
 
 // A Substitution is a device that was asked for but not connected and the
-// one used in its place (Options.Fallback).
+// one used in its place (Options.Fallback). A microphone may have nothing
+// in its place (Using's Name empty): the picture goes without sound.
 type Substitution struct {
 	Kind   Kind
 	Wanted string
@@ -348,9 +349,19 @@ type Substitution struct {
 // Resolve picks the camera and, unless Mic is "none", the microphone that
 // opts name among devs. With Fallback, a named device that is absent gives
 // way to the default of its kind (Select with no selector) and is reported
-// in the substitutions; with no device of that kind at all the error stands
-// either way.
+// in the substitutions. Without a camera there is nothing to send, and the
+// error stands either way; without a microphone the picture goes alone
+// (mic nil) when none was named or the named one may give way, and a
+// named one is reported as standing in for nothing.
 func Resolve(devs []Device, opts Options) (cam Device, mic *Device, subs []Substitution, err error) {
+	return resolve(devs, opts, false)
+}
+
+// resolve is Resolve; with anyMic a microphone that cannot be chosen,
+// whatever the reason, leaves the picture to go alone and is reported as
+// standing in for nothing (Source.rechoose: a session under way never
+// waits on a microphone).
+func resolve(devs []Device, opts Options, anyMic bool) (cam Device, mic *Device, subs []Substitution, err error) {
 	pick := func(kind Kind, selector string) (Device, error) {
 		d, err := Select(devs, kind, selector)
 		if err == nil || !opts.Fallback || strings.TrimSpace(selector) == "" || !errors.Is(err, ErrNoDevice) {
@@ -366,25 +377,45 @@ func Resolve(devs []Device, opts Options) (cam Device, mic *Device, subs []Subst
 	if cam, err = pick(Video, opts.Camera); err != nil {
 		return Device{}, nil, nil, err
 	}
-	if !strings.EqualFold(strings.TrimSpace(opts.Mic), "none") {
-		m, err := pick(Audio, opts.Mic)
-		if err != nil {
-			return Device{}, nil, nil, err
-		}
+	sel := strings.TrimSpace(opts.Mic)
+	if strings.EqualFold(sel, "none") {
+		return cam, nil, subs, nil
+	}
+	m, err := pick(Audio, sel)
+	switch {
+	case err == nil:
 		mic = &m
+	case anyMic || (errors.Is(err, ErrNoDevice) && (sel == "" || opts.Fallback) && !hasKind(devs, Audio)):
+		if sel != "" {
+			subs = append(subs, Substitution{Kind: Audio, Wanted: sel, Using: Device{Kind: Audio}})
+		}
+	default:
+		return Device{}, nil, nil, err
 	}
 	return cam, mic, subs, nil
+}
+
+// hasKind reports whether devs has a device of kind.
+func hasKind(devs []Device, kind Kind) bool {
+	for _, d := range devs {
+		if d.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // Select picks the device of a kind named by selector: its number in the
 // listing, its exact name, or a case-insensitive substring of its name
 // matching exactly one device. An empty selector picks the default: the
 // first device that is the computer's own or wired to it. A virtual camera
-// (OBS's and the like, which shows what its program outputs and is black
-// until that program sends a picture) and an iPhone or iPad joining through
-// Continuity Camera (macOS lists them first, and they open over the air, in
-// several seconds and not always) are passed over unless nothing else of
-// the kind is connected; then a virtual camera comes before a phone.
+// or microphone (OBS's camera and the like, which shows what its program
+// outputs and is black until that program sends a picture; a program's
+// microphone, silent until it sends sound) and an iPhone or iPad joining
+// through Continuity Camera (macOS lists them first, and they open over
+// the air, in several seconds and not always) are passed over unless
+// nothing else of the kind is connected; then a virtual device comes
+// before a phone.
 func Select(devs []Device, kind Kind, selector string) (Device, error) {
 	var ofKind []Device
 	for _, d := range devs {
@@ -430,12 +461,12 @@ func Select(devs []Device, kind Kind, selector string) (Device, error) {
 	}
 }
 
-// defaultDevice is the first of devs that is neither a virtual camera nor a
+// defaultDevice is the first of devs that is neither virtual nor a
 // Continuity Camera device; else the first that is not a Continuity Camera
 // device; else the first of all.
 func defaultDevice(devs []Device) Device {
 	for _, skip := range []func(Device) bool{
-		func(d Device) bool { return continuity(d) || virtualCamera(d) },
+		func(d Device) bool { return continuity(d) || virtual(d) },
 		continuity,
 	} {
 		for _, d := range devs {
@@ -455,14 +486,30 @@ func continuity(d Device) bool {
 	return strings.Contains(name, "iphone") || strings.Contains(name, "ipad")
 }
 
-// virtualName is how the window tells a virtual camera by its name
-// (natureOf, desktop/frontend/src/ui/DeviceCard.tsx); the two must agree,
-// or the window badges as virtual a camera the connector picks by default.
-var virtualName = regexp.MustCompile(`(?i)(obs|virtual|camo|snap camera|manycam|ndi)`)
+// virtualCameraName and virtualMicName are how the window tells a virtual
+// camera and a virtual microphone by their names (natureOf,
+// desktop/frontend/src/ui/DeviceCard.tsx); the two must agree, or the
+// window badges as virtual a device the connector picks by default. The
+// microphones are the sound programs' own devices (BlackHole, Loopback,
+// Zoom's, Teams', VB-Audio's cable and VoiceMeeter, Krisp, Voicemod, Steam
+// and NVIDIA Broadcast) and Windows' Stereo Mix, which records what the
+// computer plays.
+var (
+	virtualCameraName = regexp.MustCompile(`(?i)(obs|virtual|camo|snap camera|manycam|ndi)`)
+	virtualMicName    = regexp.MustCompile(`(?i)(virtual|blackhole|soundflower|loopback|zoomaudiodevice|teams audio|vb-audio|voicemeeter|krisp|voicemod|steam streaming|nvidia broadcast|stereo mix|camo|ndi webcam)`)
+)
 
-// virtualCamera reports whether d is a camera that shows what a program
-// outputs (OBS Studio, a camera maker's companion program, a phone app):
-// black, or the program's placeholder, until that program sends a picture.
-func virtualCamera(d Device) bool {
-	return d.Kind == Video && virtualName.MatchString(d.Name)
+// virtual reports whether d is a device that carries what a program sends
+// rather than what a lens or a capsule picks up: a camera that shows what
+// OBS Studio, a camera maker's companion program or a phone app outputs
+// (black, or the program's placeholder, until it sends a picture), or a
+// microphone that carries a program's sound (silence until it sends some).
+func virtual(d Device) bool {
+	switch d.Kind {
+	case Video:
+		return virtualCameraName.MatchString(d.Name)
+	case Audio:
+		return virtualMicName.MatchString(d.Name)
+	}
+	return false
 }

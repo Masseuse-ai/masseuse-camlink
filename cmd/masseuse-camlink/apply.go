@@ -68,10 +68,14 @@ func (m *manager) applyPending() {
 }
 
 // applyLocked rebuilds what the flags speak of; the caller holds srcMu.
+// The window's choice is the person's, remembered the moment it is made:
+// a device it names that is not connected when a session starts gives way
+// as a remembered one does (buildOffer's fallback), rather than holding
+// back the picture.
 func (m *manager) applyLocked(ctx context.Context, cfg sourceConfig, flags sourceFlags) error {
 	body, face := m.cam.current()
 	if flags.bodyAny() {
-		o, err := buildOffer(ctx, cfg, m.stateDir, m.sink, m.log, m.reporter(), false)
+		o, err := buildOffer(ctx, cfg, m.stateDir, m.sink, m.log, m.reporter(), true)
 		if err != nil {
 			return err
 		}
@@ -110,6 +114,15 @@ func (m *manager) applyLocked(ctx context.Context, cfg sourceConfig, flags sourc
 	}
 	m.reporter().Source(sourceReportOf(body, face, m.shared))
 	return nil
+}
+
+// reportSource tells the window the sources again: the capture's devices
+// changed under it (camControl.onSource).
+func (m *manager) reportSource() {
+	m.srcMu.Lock()
+	defer m.srcMu.Unlock()
+	body, face := m.cam.current()
+	m.reporter().Source(sourceReportOf(body, face, m.shared))
 }
 
 // setShareLocked starts or stops the phone's picture server as cfg says,
@@ -172,7 +185,8 @@ func startShare(cfg *sourceConfig, log *slog.Logger, ui reporter) (*share.Server
 
 // rememberedConfig is what source.json keeps: cfg with the devices by the
 // names the offers resolved them to, so a later start finds them even if
-// their numbering changed.
+// their numbering changed, and a device not connected by the name it was
+// chosen by (rememberedDevices).
 func rememberedConfig(cfg sourceConfig, body, face *offer) sourceConfig {
 	save := cfg
 	if body != nil {

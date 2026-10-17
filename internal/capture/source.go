@@ -10,6 +10,13 @@
 // pictures go to the window alone. Otherwise the camera light is off. What
 // ffmpeg produces is forwarded as it is; nothing is decoded or looked at
 // here.
+//
+// The camera and the microphone are one ffmpeg input, so a microphone that
+// is missing, refused or silent could hold back the picture with it. It
+// never does: one that is not connected gives way to another or to none
+// (Resolve, rechoose), one the system refuses is left out (SetMicRefused),
+// and a capture that does not get going with it is tried without it
+// (micTrial). Standing says what is in use.
 package capture
 
 import (
@@ -75,11 +82,23 @@ type Source struct {
 	// bitrate is the video bit rate in force: opts.Bitrate unless Reshape
 	// lowered it.
 	bitrate string
-	// in is the intake while running; procCancel ends the current ffmpeg
-	// and reshaping says that was asked for (Reshape) rather than a failure.
+	// in is the intake while running; procCancel ends the current ffmpeg,
+	// and reshaping (Reshape) or retrying (stalled, without the microphone)
+	// says that was asked for rather than a failure.
 	in         *intake
 	procCancel context.CancelFunc
 	reshaping  bool
+	retrying   bool
+	// micRefused says the system refuses the microphone to this program
+	// (SetMicRefused); runRefused is what the capture under way started
+	// with.
+	micRefused, runRefused bool
+	// trial is how the microphone fares in the capture under way.
+	trial micTrial
+	// micInFFmpeg says the latest ffmpeg has the microphone in it: the
+	// one that replaces it under the readers (Reshape) must publish the
+	// same tracks, whatever has been learnt since.
+	micInFFmpeg bool
 	// stopGrace bounds how long Stop waits for ffmpeg to quit on its own.
 	stopGrace time.Duration
 	// earlyExit is how soon an exit counts as "failed to start" (encoder
@@ -91,6 +110,50 @@ type Source struct {
 	// not: on a Mac the avfoundation input waits for a first frame that
 	// never comes, without a word, for as long as it is left running.
 	announceGrace time.Duration
+}
+
+// micTrial is how the microphone fares in a capture. One with it that
+// does not get going (it exits at once, or runs for the announce grace
+// without publishing) is started again without it, once: if that one gets
+// going, the microphone was the trouble and the picture goes alone until
+// the next Start; if not, the trouble is the camera's and the microphone
+// goes back in. A microphone that never sends a sample holds back the
+// picture with it: on a Mac the avfoundation input carries on past a
+// microphone it could not open (one the system refuses) and then waits
+// for its first sample for as long as it is left running, and ffmpeg
+// publishes nothing until every stream has started.
+type micTrial int
+
+const (
+	micIn     micTrial = iota // in the capture, or none is chosen
+	micTrying                 // left out of this attempt, to see whether the camera alone gets going
+	micOut                    // left out: the camera alone got going
+	micBack                   // in again: the camera alone did not get going either
+)
+
+// MicOut is why the microphone chosen is left out of the capture.
+type MicOut string
+
+const (
+	// MicRefused: the system refuses it to this program (SetMicRefused).
+	MicRefused MicOut = "refused"
+	// MicFailed: a capture with it did not get going and one without it
+	// did; it is tried again at the next Start.
+	MicFailed MicOut = "failed"
+)
+
+// Standing is what the capture uses, and how that differs from the choice.
+type Standing struct {
+	// Label names the devices, the way the phone shows them (Label).
+	Label  string
+	Camera Device
+	// Mic is the microphone chosen or standing in, nil for none; MicOut,
+	// when set, is why it is left out of the capture.
+	Mic    *Device
+	MicOut MicOut
+	// Substitutions are the devices asked for that are not connected and
+	// what stands in for them (Substitutions).
+	Substitutions []Substitution
 }
 
 // New resolves ffmpeg, the devices and the camera's mode now, so a wrong
@@ -185,15 +248,70 @@ func (s *Source) shape(ctx context.Context) {
 // Label names the devices, the way the phone shows them.
 func (s *Source) Label() string {
 	s.mu.Lock()
-	cam, mic := s.cam, s.mic
+	defer s.mu.Unlock()
+	return s.labelLocked()
+}
+
+func (s *Source) labelLocked() string {
+	if s.mic == nil {
+		return s.cam.Name + " (video only)"
+	}
+	if s.mic.Name == s.cam.Name {
+		return s.cam.Name
+	}
+	return s.cam.Name + " + " + s.mic.Name
+}
+
+// Standing is the capture's devices as they stand: what is used, what
+// stands in for what, and whether the microphone is left out and why (the
+// system's refusal as the capture under way started with it, or between
+// captures as the next will; a microphone that failed the last capture,
+// until the next Start).
+func (s *Source) Standing() Standing {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := Standing{Label: s.labelLocked(), Camera: s.cam, Substitutions: append([]Substitution(nil), s.subs...)}
+	if s.mic != nil {
+		m := *s.mic
+		st.Mic = &m
+		running := s.cancel != nil
+		switch {
+		case running && s.runRefused, !running && s.micRefused:
+			st.MicOut = MicRefused
+		case s.trial == micOut:
+			st.MicOut = MicFailed
+		}
+	}
+	return st
+}
+
+// SetMicRefused says whether the system refuses the microphone to this
+// program. While it does, a capture that starts leaves the microphone out
+// and sends the picture alone, rather than waiting on a microphone that
+// never delivers (micTrial). A capture under way keeps what it started
+// with; the next follows the standing.
+func (s *Source) SetMicRefused(refused bool) {
+	s.mu.Lock()
+	s.micRefused = refused
 	s.mu.Unlock()
-	if mic == nil {
-		return cam.Name + " (video only)"
+}
+
+// leaveOutMicLocked says whether the next ffmpeg goes without the
+// microphone chosen; the caller holds s.mu.
+func (s *Source) leaveOutMicLocked() bool {
+	return s.runRefused || s.trial == micTrying || s.trial == micOut
+}
+
+// tryAloneLocked starts the microphone's trial (micTrial) when the capture
+// that did not get going had one in it and none has been tried this run:
+// the next ffmpeg goes without it. It reports whether it did; the caller
+// holds s.mu.
+func (s *Source) tryAloneLocked() bool {
+	if s.mic == nil || s.trial != micIn || s.leaveOutMicLocked() {
+		return false
 	}
-	if mic.Name == cam.Name {
-		return cam.Name
-	}
-	return cam.Name + " + " + mic.Name
+	s.trial = micTrying
+	return true
 }
 
 // Camera is the selected camera.
@@ -307,7 +425,9 @@ func (s *Source) Publishing() bool {
 // Start turns the camera on: ffmpeg is started and kept running (restarted
 // with backoff if it exits) until Stop. Calling it while running does
 // nothing. A start is a fresh attempt: what went wrong the last time the
-// camera was on is not said of this one.
+// camera was on is not said of this one, a microphone that failed then is
+// tried again, and devices that stood in for others give way to them if
+// they are back (run).
 func (s *Source) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -315,6 +435,7 @@ func (s *Source) Start() {
 		return
 	}
 	s.trouble = ""
+	s.trial, s.runRefused = micIn, s.micRefused
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.done = make(chan struct{})
@@ -339,14 +460,30 @@ func (s *Source) Stop() {
 func (s *Source) setPublishing(v bool) {
 	s.mu.Lock()
 	s.publishing = v
+	alone := false
 	if v {
 		s.trouble = ""
+		if s.trial == micTrying {
+			s.trial, alone = micOut, true
+		}
 	}
-	cam, enc := s.cam, s.encoder
+	cam, mic, enc := s.cam, s.mic, s.encoder
 	s.mu.Unlock()
 	if v {
 		s.log.Info("capture: camera on", "camera", cam.Name, "encoder", enc)
 	}
+	if alone && mic != nil {
+		s.log.Warn("capture: the camera alone got going; the microphone stays out until the camera next comes on", "mic", mic.Name)
+	}
+}
+
+// degraded says the devices in use are not all the ones chosen: something
+// stands in for a device that is not connected, or no microphone was for a
+// choice that wants one.
+func (s *Source) degraded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.subs) > 0 || (s.mic == nil && !strings.EqualFold(strings.TrimSpace(s.conf.Mic), "none"))
 }
 
 func (s *Source) run(ctx context.Context, done chan struct{}) {
@@ -363,10 +500,17 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		s.in, s.procCancel, s.reshaping = nil, nil, false
+		s.in, s.procCancel, s.reshaping, s.retrying = nil, nil, false, false
 		s.mu.Unlock()
 	}()
+	// What stood in last time gives way to the devices chosen if they are
+	// back: one listing, only while something stands in.
+	if s.degraded() {
+		s.rechoose(ctx)
+	}
 	backoff := time.Second
+	// handover says the next ffmpeg replaces one under the readers.
+	handover := false
 	for {
 		started := time.Now()
 		// Each ffmpeg has its own context so Reshape can end one without
@@ -378,21 +522,36 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 		// An ffmpeg that runs on without publishing is said so of after
 		// the announce grace (stalled); one that exits is read below.
 		stall := time.AfterFunc(s.announceGrace, func() { s.stalled(pctx) })
-		err := s.runFFmpeg(pctx, in.URL())
+		err := s.runFFmpeg(pctx, in.URL(), handover)
 		stall.Stop()
 		pcancel()
 		s.mu.Lock()
 		s.procCancel = nil
-		reshaped := s.reshaping
-		s.reshaping = false
+		reshaped, retried := s.reshaping, s.retrying
+		s.reshaping, s.retrying = false, false
 		s.mu.Unlock()
 		if ctx.Err() != nil {
 			s.log.Info("capture: camera off")
 			return
 		}
-		if reshaped {
-			// Asked for: start the next one now, at the new rate.
+		if reshaped || retried {
+			// Asked for: start the next one now, at the new rate or
+			// without the microphone.
+			handover = reshaped && !retried
 			continue
+		}
+		handover = false
+		// The camera alone, tried without the microphone, ended without
+		// publishing (which would have settled the trial): the trouble is
+		// the camera's, and the microphone goes back in.
+		s.mu.Lock()
+		backIn := s.trial == micTrying
+		if backIn {
+			s.trial = micBack
+		}
+		s.mu.Unlock()
+		if backIn {
+			s.log.Warn("capture: the camera alone did not get going either; the microphone goes back in", "err", err)
 		}
 		if time.Since(started) >= s.earlyExit {
 			// It ran and broke: start over soon.
@@ -409,12 +568,17 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 		// gone), an encoder that would not start gives way to libx264
 		// when this ffmpeg has it, and an option it does not know means
 		// the encoder in use is not in this build at all. A picture this
-		// ffmpeg cannot decode is said so: no encoder would help.
+		// ffmpeg cannot decode is said so: no encoder would help. When
+		// choosing again changes nothing, or the reason is not known, the
+		// microphone may be what stops it: the camera is tried alone
+		// (micTrial).
 		switch kind := classifyExit(err); kind {
 		case exitInput:
 			s.setTrouble("the camera or microphone could not be opened; choosing the devices again")
 			s.log.Warn("capture: ffmpeg could not open the camera or microphone; choosing the devices again", "err", err)
-			s.rechoose(ctx)
+			if changed, ok := s.rechoose(ctx); ok && !changed && s.tryAlone(err) {
+				continue
+			}
 		case exitOption:
 			if s.revertEncoder(err) {
 				continue
@@ -425,6 +589,12 @@ func (s *Source) run(ctx context.Context, done chan struct{}) {
 			s.setTrouble("the camera sends its picture as " + format + ", which this ffmpeg cannot decode")
 			s.log.Warn("capture: the camera sends a format this ffmpeg cannot decode", "format", format, "err", err)
 		default:
+			// Words that name nothing: the camera alone first, so a
+			// microphone that stops it costs the hardware encoder nothing;
+			// if the camera alone does not start either, the encoder next.
+			if kind == exitUnknown && s.tryAlone(err) {
+				continue
+			}
 			if s.fallBack(ctx, err) {
 				continue
 			}
@@ -454,9 +624,12 @@ func (s *Source) pause(ctx context.Context, d time.Duration) bool {
 }
 
 // stalled is the announce grace running out on the ffmpeg whose context is
-// ctx: it has been running since then and has not published. Trouble says
-// so, in the words of the system it runs on (stallTrouble), and one line
-// is logged. Nothing is restarted: a camera the system refuses would be
+// ctx: it has been running since then and has not published. With the
+// microphone in it, and none tried this run, it is ended and the camera
+// tried alone (micTrial): a microphone that sends nothing holds back the
+// picture too. Otherwise trouble says the camera delivered no picture, in
+// the words of the system it runs on (stallTrouble), and one line is
+// logged; nothing is restarted: a camera the system refuses would be
 // refused again, a camera that is merely slow to start would be set back
 // to zero, and the enclave's relay asks for the stream again on its own.
 // An ffmpeg that has published, or ended, in the meantime is left alone.
@@ -464,29 +637,64 @@ func (s *Source) stalled(ctx context.Context) {
 	s.mu.Lock()
 	quiet := !s.publishing && ctx.Err() == nil
 	cam, grace := s.cam, s.announceGrace
+	var alone context.CancelFunc
+	var mic string
 	if quiet {
-		s.trouble = stallTrouble(s.goos, grace)
+		if s.tryAloneLocked() {
+			alone, mic, s.retrying = s.procCancel, s.mic.Name, true
+			s.trouble = "the camera and microphone sent nothing in " + describeDuration(grace) + "; trying the camera alone"
+		} else {
+			if s.trial == micTrying {
+				// The camera alone sends nothing either: the trouble is
+				// the camera's, even if its picture comes later.
+				s.trial = micBack
+			}
+			s.trouble = stallTrouble(s.goos, grace)
+		}
 	}
 	s.mu.Unlock()
-	if quiet {
+	switch {
+	case alone != nil:
+		s.log.Warn("capture: ffmpeg is running but has not started publishing; trying the camera without the microphone", "camera", cam.Name, "mic", mic, "after", grace.String())
+		alone()
+	case quiet:
 		s.log.Warn("capture: ffmpeg is running but has not started publishing; the camera delivered no picture", "camera", cam.Name, "after", grace.String())
 	}
 }
 
+// tryAlone starts the microphone's trial after a capture with it that
+// exited without getting going (tryAloneLocked), and says so; it reports
+// whether the next ffmpeg is to start at once, without the microphone.
+func (s *Source) tryAlone(cause error) bool {
+	s.mu.Lock()
+	ok := s.tryAloneLocked()
+	var mic string
+	if ok {
+		mic = s.mic.Name
+		s.trouble = "the camera and microphone did not start together; trying the camera alone"
+	}
+	s.mu.Unlock()
+	if ok {
+		s.log.Warn("capture: ffmpeg did not get going with the microphone; trying the camera alone", "mic", mic, "err", cause)
+	}
+	return ok
+}
+
 // stallTrouble is what to say when ffmpeg has run for grace without
-// publishing: the camera delivered no picture. On a Mac that is what a
-// camera the system refuses looks like, and the refusal is silent when the
-// application may not ask (a hardened-runtime application without the
-// camera entitlement, as v0.16.0 and v0.17.0 were), so the words point at
-// Privacy & Security; on Windows, at the camera privacy switch for desktop
-// programs. Without a trailing stop: the reporters add their own.
+// publishing, and the microphone was not what held it back (micTrial): the
+// camera delivered no picture. On a Mac that is what a camera the system
+// refuses looks like, and the refusal is silent when the application may
+// not ask (a hardened-runtime application without the camera entitlement,
+// as v0.16.0 and v0.17.0 were), so the words point at Privacy & Security;
+// on Windows, at the camera privacy switch for desktop programs. Without a
+// trailing stop: the reporters add their own.
 func stallTrouble(goos string, grace time.Duration) string {
 	after := "the camera delivered no picture in " + describeDuration(grace)
 	switch goos {
 	case "darwin":
-		return after + "; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it"
+		return after + "; macOS may have refused it: System Settings › Privacy & Security › Camera must list Masseuse and allow it"
 	case "windows":
-		return after + "; Windows may have refused it: Settings › Privacy & security › Camera, Let desktop apps access your camera, must be on, and the same under Microphone"
+		return after + "; Windows may have refused it: Settings › Privacy & security › Camera, Let desktop apps access your camera, must be on"
 	default:
 		return after + "; the camera may be refused to this program, or held by another"
 	}
@@ -501,29 +709,33 @@ func describeDuration(d time.Duration) string {
 	return d.String()
 }
 
-// rechoose lists the devices again and picks by the configured selectors,
-// for an ffmpeg that could not open its input. On macOS the list is
-// renumbered when a device comes or goes (a phone through Continuity
-// Camera, most often); a device addressed by name (Device.Input) rides
-// that out, one addressed by index does not, and a device may simply be
-// gone, in which case the default or the fallback stands in as at New.
-// When no choice can be made the devices stay as they are, for the retry.
-// Another camera brings its own modes, read again (shape).
-func (s *Source) rechoose(ctx context.Context) {
+// rechoose lists the devices again and picks by the configured selectors:
+// for an ffmpeg that could not open its input, and at a start while
+// something stands in (degraded). On macOS the list is renumbered when a
+// device comes or goes (a phone through Continuity Camera, most often); a
+// device addressed by name (Device.Input) rides that out, one addressed by
+// index does not, and a device may simply be gone, in which case the
+// default or the fallback stands in as at New, and a microphone that
+// cannot be chosen leaves the picture to go alone: a session under way
+// never waits on one. A device that is back takes its place again. When
+// no camera can be chosen the devices stay as they are, for the retry.
+// Another camera brings its own modes, read again (shape). It reports
+// whether the devices changed, and whether a choice could be made.
+func (s *Source) rechoose(ctx context.Context) (changed, ok bool) {
 	devs, err := s.list(ctx, s.ffmpeg)
 	if err != nil {
 		s.log.Warn("capture: cannot list the devices", "err", err)
-		return
+		return false, false
 	}
-	cam, mic, subs, err := Resolve(devs, s.conf)
+	cam, mic, subs, err := resolve(devs, s.conf, true)
 	if err != nil {
-		s.log.Warn("capture: the devices are not all connected", "err", err)
-		s.setTrouble("the camera or microphone is not connected: " + err.Error())
-		return
+		s.log.Warn("capture: the camera is not connected", "err", err)
+		s.setTrouble("the camera is not connected: " + err.Error())
+		return false, false
 	}
 	s.mu.Lock()
 	camChanged := !sameDevice(cam, s.cam)
-	changed := camChanged || (mic == nil) != (s.mic == nil) || (mic != nil && !sameDevice(*mic, *s.mic))
+	changed = camChanged || (mic == nil) != (s.mic == nil) || (mic != nil && !sameDevice(*mic, *s.mic))
 	s.cam, s.mic, s.subs = cam, mic, subs
 	s.mu.Unlock()
 	if changed {
@@ -536,6 +748,7 @@ func (s *Source) rechoose(ctx context.Context) {
 	if camChanged {
 		s.shape(ctx)
 	}
+	return changed, true
 }
 
 func sameDevice(a, b Device) bool { return a.Kind == b.Kind && a.ID == b.ID && a.Name == b.Name }
@@ -693,12 +906,17 @@ func undecodable(err error) string {
 }
 
 // runFFmpeg runs one ffmpeg until it exits or ctx ends; the error carries
-// the last lines it wrote.
-func (s *Source) runFFmpeg(ctx context.Context, url string) error {
+// the last lines it wrote. With handover it replaces the one before under
+// the readers (Reshape), with the same tracks.
+func (s *Source) runFFmpeg(ctx context.Context, url string, handover bool) error {
 	s.mu.Lock()
 	opts, enc, in := s.opts, s.encoder, s.input
 	opts.ceiling, opts.Bitrate = opts.Bitrate, s.bitrate
 	cam, mic := s.cam, s.mic
+	if (handover && !s.micInFFmpeg) || (!handover && s.leaveOutMicLocked()) {
+		mic = nil
+	}
+	s.micInFFmpeg = mic != nil
 	s.mu.Unlock()
 	args := Args(s.goos, opts, in, cam, mic, enc, url)
 	cmd := exec.Command(s.ffmpeg, args...)

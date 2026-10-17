@@ -17,12 +17,14 @@ const (
 // Options shapes the capture. Zero values mean the defaults noted.
 type Options struct {
 	// Camera and Mic select devices (see Select); empty picks the first of
-	// each. Mic "none" sends video only.
+	// each. Mic "none" sends video only, as does an empty Mic on a computer
+	// with no microphone connected.
 	Camera string
 	Mic    string
 	// Fallback lets a named device that is not connected give way to the
-	// first of its kind (Source.Substitutions says which), for a remembered
-	// choice; a device named on the command line is an error when absent.
+	// first of its kind (Source.Substitutions says which), or a microphone
+	// to none when there is none, for a remembered choice or the window's;
+	// a device named on the command line is an error when absent.
 	Fallback bool
 	// VideoSize is WxH; empty is the camera's largest picture that reaches
 	// MinFPS (choose), or Defaults.VideoSize when its modes cannot be read.

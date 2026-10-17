@@ -3,7 +3,7 @@
 // The scenario panel (src/dev) lists them; `?scenario=<id>` opens one.
 
 import type { AppState, Platform, Step } from '../store';
-import { CODE_TTL_MS, type ConnectorEvent, type Descriptor, type Device, type MediaPermission, type Unit } from '../types';
+import { CODE_TTL_MS, type ConnectorEvent, type Descriptor, type Device, type MediaPermission, type Substitution, type Unit } from '../types';
 import { CODE, cameras, descriptorFor, disconnected, enclave, expiresIn, faceThrough, hello, mics, shareArriving, shareListening, shareOffered, stateDirs, units } from './fixtures';
 
 export interface Timed {
@@ -58,6 +58,12 @@ function source(camera: Device, mic: Device | null, over: Partial<Extract<Connec
 
 const obsCameras: Device[] = [cameras.obs!, cameras.insta!, cameras.facetime!];
 const stats = (videoBps: number) => ({ videoBps, audioBps: 64_000, congested: false, backlogS: 0.2 });
+
+/** The remembered Insta360 Link and Yeti not connected, the FaceTime camera and the MacBook’s microphone standing in. */
+const standingIn: Substitution[] = [
+    { kind: 'video', wanted: 'Insta360 Link', using: 'FaceTime HD Camera' },
+    { kind: 'audio', wanted: 'Yeti Stereo Microphone', using: 'MacBook Pro Microphone' },
+];
 
 function devices(cams: Device[], ms: Device[], substitutions: Extract<ConnectorEvent, { type: 'devices' }>['substitutions'] = []): ConnectorEvent {
     return { type: 'devices', cameras: cams, mics: ms, substitutions };
@@ -183,16 +189,37 @@ export const scenarios: Scenario[] = [
         id: 'camera-remembered-missing',
         group: 'Cameras and microphone',
         title: 'Remembered camera not connected',
-        note: 'The Insta360 Link is remembered; the FaceTime camera stands in for the day it is back.',
+        note: 'The Insta360 Link and the Yeti are still the choice, their rings dotted; the FaceTime camera and the MacBook’s microphone stand in for the day they are back. Picking either stand-in makes it the choice.',
         step: 'camera',
         script: opening({
             phones: 1,
             cams: [cameras.facetime!],
             mics: [mics.macbook!],
-            src: source(cameras.facetime!, mics.macbook!),
-        }).map((t) =>
-            t.event.type === 'devices' ? { ...t, event: devices([cameras.facetime!], [mics.macbook!], [{ kind: 'video', wanted: 'Insta360 Link', using: 'FaceTime HD Camera' }, { kind: 'audio', wanted: 'Yeti Stereo Microphone', using: 'MacBook Pro Microphone' }]) } : t,
-        ),
+            src: source(cameras.facetime!, mics.macbook!, { substitutions: standingIn }),
+        }).map((t) => (t.event.type === 'devices' ? { ...t, event: devices([cameras.facetime!], [mics.macbook!], standingIn) } : t)),
+    },
+    {
+        id: 'camera-mic-missing-alone',
+        group: 'Cameras and microphone',
+        title: 'Remembered microphone not connected, none to stand in',
+        note: 'A computer with no microphone of its own (a Mac mini) and the USB microphone unplugged: the picture goes alone until it is back, rather than not at all.',
+        step: 'camera',
+        setupDone: true,
+        script: opening({
+            phones: 1,
+            cams: [cameras.insta!],
+            mics: [],
+            src: source(cameras.insta!, null, { label: 'Insta360 Link (video only)', mic: undefined, substitutions: [{ kind: 'audio', wanted: mics.yeti!.name, using: '' }] }),
+        }),
+    },
+    {
+        id: 'camera-virtual-mics',
+        group: 'Cameras and microphone',
+        title: 'Sound programs’ microphones listed',
+        note: 'Zoom’s and BlackHole’s microphones are listed first and badged virtual; the MacBook’s own is the one taken by default. Choose BlackHole to see what a program’s microphone means.',
+        step: 'camera',
+        setupDone: true,
+        script: opening({ phones: 1, cams: [cameras.facetime!], mics: [mics.zoom!, mics.blackhole!, mics.macbook!], src: source(cameras.facetime!, mics.macbook!) }),
     },
     {
         id: 'camera-none',
@@ -253,7 +280,7 @@ export const scenarios: Scenario[] = [
         id: 'camera-permission-mic-denied',
         group: 'Cameras and microphone',
         title: 'macOS is blocking the microphone only',
-        note: 'The camera allowed, the microphone refused: the card names the one that is blocked.',
+        note: 'The camera allowed, the microphone refused: the card names the one that is blocked, and the picture goes without this computer’s sound until it is allowed.',
         step: 'camera',
         setupDone: true,
         script: [media('authorized', 'denied'), ...opening({ phones: 1 })],
@@ -531,6 +558,54 @@ export const scenarios: Scenario[] = [
         script: [media('denied', 'authorized'), ...opening({ phones: 1 })],
     },
     {
+        id: 'home-mic-blocked',
+        group: 'Ready',
+        title: 'Ready, macOS blocking the microphone',
+        note: 'The camera allowed, the microphone refused: the preview runs, the Microphone card says the picture goes alone, and the card above says where to allow it.',
+        step: 'home',
+        setupDone: true,
+        script: [media('authorized', 'denied'), ...opening({ phones: 1 }), { at: 400, event: source(cameras.insta!, mics.yeti!, { micOut: 'refused' }) }],
+    },
+    {
+        id: 'home-mic-stand-in',
+        group: 'Ready',
+        title: 'Ready, the microphone chosen not connected',
+        note: 'The Yeti is unplugged: the MacBook’s microphone stands in until it is back, and the Yeti stays the choice.',
+        step: 'home',
+        setupDone: true,
+        script: opening({ phones: 1, mics: [mics.macbook!], src: source(cameras.insta!, mics.macbook!, { substitutions: [standingIn[1]!] }) }),
+    },
+    {
+        id: 'home-mic-missing',
+        group: 'Ready',
+        title: 'Ready, no microphone to stand in',
+        note: 'The Yeti is unplugged and the computer has no microphone of its own: the picture goes alone until it is back.',
+        step: 'home',
+        setupDone: true,
+        script: opening({
+            phones: 1,
+            mics: [],
+            src: source(cameras.insta!, null, { label: 'Insta360 Link (video only)', mic: undefined, substitutions: [{ kind: 'audio', wanted: mics.yeti!.name, using: '' }] }),
+        }),
+    },
+    {
+        id: 'home-mic-failed',
+        group: 'Ready',
+        title: 'Session active, the microphone did not work',
+        note: 'The capture did not get going with the microphone, so the camera went alone (ten seconds in, in life; three here): the picture arrives, the Microphone card and a notice say so, and the microphone is tried again next session.',
+        step: 'home',
+        setupDone: true,
+        script: [
+            ...opening({ phones: 1, unit: armedUnit() }),
+            { at: 1800, event: { type: 'link', state: 'active', enclave } },
+            { at: 2000, event: { type: 'camera', on: true } },
+            { at: 2400, event: { type: 'camera', on: true, stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0, reason: 'the camera and microphone sent nothing in 10 s; trying the camera alone' } } },
+            { at: 3200, event: { type: 'camera', on: true, stats: { videoBps: 2_100_000, audioBps: 0, congested: false, backlogS: 0.2 } } },
+            { at: 4600, event: source(cameras.insta!, mics.yeti!, { micOut: 'failed' }) },
+            { at: 4600, event: { type: 'notice', level: 'warn', text: 'Yeti Stereo Microphone did not work, so the picture goes without this computer’s sound; it is tried again at the next session.' } },
+        ],
+    },
+    {
         id: 'home-session',
         group: 'Ready',
         title: 'Session active',
@@ -604,10 +679,10 @@ export const scenarios: Scenario[] = [
                 event: {
                     type: 'camera',
                     on: true,
-                    stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0, reason: 'the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it' },
+                    stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0, reason: 'the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera must list Masseuse and allow it' },
                 },
             },
-            { at: 4600, event: { type: 'notice', level: 'warn', text: 'Camera on but not sending yet: the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it.' } },
+            { at: 4600, event: { type: 'notice', level: 'warn', text: 'Camera on but not sending yet: the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera must list Masseuse and allow it.' } },
         ],
     },
     {
@@ -636,7 +711,7 @@ export const scenarios: Scenario[] = [
                 event: {
                     type: 'camera',
                     on: true,
-                    stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0, reason: 'the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera, and Microphone, must list Masseuse and allow it' },
+                    stats: { videoBps: 0, audioBps: 0, congested: false, backlogS: 0, reason: 'the camera delivered no picture in 10 s; macOS may have refused it: System Settings › Privacy & Security › Camera must list Masseuse and allow it' },
                 },
             },
         ],

@@ -51,17 +51,6 @@ func fakeFFmpeg(args []string) int {
 		}
 		return 0
 	}
-	if os.Getenv("CAPTURE_FAKE_STALL") == "1" {
-		// A camera the system refuses: the avfoundation input waits for a
-		// first frame that never comes, so this ffmpeg announces nothing,
-		// writes nothing and reads nothing (not even the q on standard
-		// input, which only the transcoding loop reads) until it is killed.
-		// It sleeps rather than blocking on nothing, which the runtime can
-		// end at once as a deadlock (it does on Windows).
-		for {
-			time.Sleep(time.Hour)
-		}
-	}
 	url, encoder, bitrate, input := args[len(args)-1], "", "", ""
 	for i, a := range args {
 		if a == "-c:v" && i+1 < len(args) {
@@ -73,6 +62,30 @@ func fakeFFmpeg(args []string) int {
 		if a == "-i" && i+1 < len(args) {
 			input = args[i+1]
 		}
+	}
+	if log := os.Getenv("CAPTURE_FAKE_INPUTS"); log != "" && url != "pipe:1" {
+		if f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+			fmt.Fprintln(f, input)
+			f.Close()
+		}
+	}
+	withMic := !slices.Contains(args, "-an")
+	if os.Getenv("CAPTURE_FAKE_STALL") == "1" || (withMic && os.Getenv("CAPTURE_FAKE_STALL_WITH_MIC") == "1") {
+		// A camera the system refuses, or a microphone (on a Mac): the
+		// avfoundation input waits for a first frame or sample that never
+		// comes, so this ffmpeg announces nothing, writes nothing and reads
+		// nothing (not even the q on standard input, which only the
+		// transcoding loop reads) until it is killed. It sleeps rather than
+		// blocking on nothing, which the runtime can end at once as a
+		// deadlock (it does on Windows).
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	if withMic && os.Getenv("CAPTURE_FAKE_FAIL_WITH_MIC") == "1" {
+		// A microphone the input cannot run with, in words that name nothing.
+		fmt.Fprintln(os.Stderr, "[dshow @ 0x1] Could not run graph (sometimes caused by a device already in use by other application)")
+		return 1
 	}
 	if os.Getenv("CAPTURE_FAKE_HW_FAILS") == "1" && encoder != EncoderX264 {
 		fmt.Fprintln(os.Stderr, "[vost#0:0 @ 0x1] Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height")
@@ -99,8 +112,10 @@ func fakeFFmpeg(args []string) int {
 	}
 	desc := &description.Session{Medias: []*description.Media{
 		{Type: description.MediaTypeVideo, Formats: []format.Format{&format.H264{PayloadTyp: 96, PacketizationMode: 1}}},
-		{Type: description.MediaTypeAudio, Formats: []format.Format{&format.Opus{PayloadTyp: 97, ChannelCount: 1}}},
 	}}
+	if withMic {
+		desc.Medias = append(desc.Medias, &description.Media{Type: description.MediaTypeAudio, Formats: []format.Format{&format.Opus{PayloadTyp: 97, ChannelCount: 1}}})
+	}
 	c := gortsplib.Client{}
 	if err := c.StartRecording(url, desc); err != nil {
 		fmt.Fprintln(os.Stderr, "announce:", err)
@@ -490,6 +505,102 @@ dummy: Immediate exit requested
 `)
 	if d, err := Select(win, Video, ""); err != nil || d.Name != "Integrated Camera" {
 		t.Errorf("windows: got %+v, %v", d, err)
+	}
+}
+
+// avfVirtualMicListing is a Mac with sound programs' microphones listed
+// before the computer's own: Zoom's, BlackHole and Loopback.
+const avfVirtualMicListing = `[AVFoundation indev @ 0x7f8] AVFoundation video devices:
+[AVFoundation indev @ 0x7f8] [0] FaceTime HD Camera
+[AVFoundation indev @ 0x7f8] AVFoundation audio devices:
+[AVFoundation indev @ 0x7f8] [0] ZoomAudioDevice
+[AVFoundation indev @ 0x7f8] [1] BlackHole 2ch
+[AVFoundation indev @ 0x7f8] [2] Loopback Audio
+[AVFoundation indev @ 0x7f8] [3] MacBook Pro Microphone
+[in#0 @ 0x7f9] Error opening input: Input/output error
+Error opening input file .
+`
+
+func TestDefaultPassesOverVirtualMicrophones(t *testing.T) {
+	devs := parseAVFoundation(avfVirtualMicListing)
+	if d, err := Select(devs, Audio, ""); err != nil || d.Name != "MacBook Pro Microphone" {
+		t.Fatalf("default microphone %+v, %v", d, err)
+	}
+	// A virtual microphone asked for is the one used.
+	if d, err := Select(devs, Audio, "blackhole"); err != nil || d.Name != "BlackHole 2ch" {
+		t.Fatalf("asked for: %+v, %v", d, err)
+	}
+	// A remembered microphone that is not connected gives way to the
+	// computer's own, not to the program's listed first.
+	_, mic, subs, err := Resolve(devs, Options{Mic: "Yeti Stereo Microphone", Fallback: true})
+	if err != nil || mic == nil || mic.Name != "MacBook Pro Microphone" || len(subs) != 1 || subs[0].Using.Name != "MacBook Pro Microphone" {
+		t.Fatalf("mic %+v subs %+v err %v", mic, subs, err)
+	}
+	// On Windows: VB-Audio's cable and Stereo Mix give way to the
+	// computer's own; with sound programs only, a program's comes before
+	// a phone's.
+	win := parseDShow(`[dshow @ 000001] "Integrated Camera" (video)
+[dshow @ 000001] "CABLE Output (VB-Audio Virtual Cable)" (audio)
+[dshow @ 000001] "Stereo Mix (Realtek(R) Audio)" (audio)
+[dshow @ 000001] "Microphone Array (Realtek(R) Audio)" (audio)
+dummy: Immediate exit requested
+`)
+	if d, err := Select(win, Audio, ""); err != nil || d.Name != "Microphone Array (Realtek(R) Audio)" {
+		t.Errorf("windows: got %+v, %v", d, err)
+	}
+	programs := []Device{{Kind: Audio, ID: "0", Name: "Someone’s iPhone Microphone"}, {Kind: Audio, ID: "1", Name: "Microsoft Teams Audio"}}
+	if d, err := Select(programs, Audio, ""); err != nil || d.Name != "Microsoft Teams Audio" {
+		t.Errorf("programs only: got %+v, %v", d, err)
+	}
+	// Microphones that pick up a room are not taken for programs'.
+	for _, name := range []string{
+		"MacBook Pro Microphone", "MacBook Air Microphone", "Studio Display Microphone", "External Microphone",
+		"Yeti Stereo Microphone", "Insta360 Link", "AirPods Pro", "Shure MV7", "Elgato Wave:3", "RØDE NT-USB Mini",
+		"Scarlett Solo USB", "Microphone Array (Realtek(R) Audio)", "Headset Microphone (Jabra Evolve2 65)",
+		"Microphone (HD Pro Webcam C920)", "Microphone (Logitech BRIO)", "Headset (Bose QC45 Hands-Free AG Audio)",
+	} {
+		if virtual(Device{Kind: Audio, Name: name}) {
+			t.Errorf("%q taken for a program's microphone", name)
+		}
+	}
+	// The camera's words do not make a microphone virtual, nor the
+	// microphone's a camera.
+	if virtual(Device{Kind: Audio, Name: "OBS Studio Monitor"}) || virtual(Device{Kind: Video, Name: "Loopback Audio"}) {
+		t.Error("a device judged by the other kind's words")
+	}
+}
+
+// No microphone at all never costs the picture: the default goes video
+// only, and a remembered microphone stands in for nothing; a microphone
+// named on the command line is still the person's to correct.
+func TestResolveSendsThePictureAloneWithoutAMicrophone(t *testing.T) {
+	camOnly := []Device{{Kind: Video, ID: "0", Name: "FaceTime HD Camera"}}
+	cam, mic, subs, err := Resolve(camOnly, Options{})
+	if err != nil || cam.ID != "0" || mic != nil || subs != nil {
+		t.Fatalf("default: cam %+v mic %+v subs %+v err %v", cam, mic, subs, err)
+	}
+	_, mic, subs, err = Resolve(camOnly, Options{Mic: "USB Mic", Fallback: true})
+	want := []Substitution{{Kind: Audio, Wanted: "USB Mic", Using: Device{Kind: Audio}}}
+	if err != nil || mic != nil || !reflect.DeepEqual(subs, want) {
+		t.Fatalf("remembered: mic %+v subs %+v err %v", mic, subs, err)
+	}
+	if _, _, _, err := Resolve(camOnly, Options{Mic: "USB Mic"}); !errors.Is(err, ErrNoDevice) {
+		t.Fatalf("named on the command line: err %v", err)
+	}
+	// A session under way takes any microphone it cannot have as none, the
+	// command line's too; a remembered one still has its stand-in.
+	devs := parseAVFoundation(avfListing)
+	_, mic, subs, err = resolve(devs, Options{Mic: "USB Mic"}, true)
+	if err != nil || mic != nil || !reflect.DeepEqual(subs, want) {
+		t.Fatalf("under way: mic %+v subs %+v err %v", mic, subs, err)
+	}
+	_, mic, _, err = resolve(devs, Options{Mic: "USB Mic", Fallback: true}, true)
+	if err != nil || mic == nil || mic.Name != "Yeti Stereo Microphone" {
+		t.Fatalf("under way, remembered: mic %+v err %v", mic, err)
+	}
+	// Without a camera there is nothing to send, whichever way.
+	if _, _, _, err := resolve([]Device{{Kind: Audio, ID: "0", Name: "USB Mic"}}, Options{Fallback: true}, true); !errors.Is(err, ErrNoDevice) {
+		t.Fatalf("no camera: err %v", err)
 	}
 }
 
@@ -927,6 +1038,9 @@ func TestSourceReportsAnFFmpegThatNeverPublishes(t *testing.T) {
 			if src.Publishing() {
 				t.Fatal("publishing, with an ffmpeg that never announced")
 			}
+			if st := src.Standing(); st.MicOut != "" {
+				t.Fatalf("the microphone was blamed for the camera: %+v", st)
+			}
 			if !src.Running() {
 				t.Fatal("not running: the ffmpeg was given up on")
 			}
@@ -1122,19 +1236,227 @@ func TestSourceChoosesTheDevicesAgainWhenTheInputCannotBeOpened(t *testing.T) {
 	}
 }
 
-// When the device cannot be chosen again (it is gone), the choice stands
+// When the camera cannot be chosen again (it is gone), the choice stands
 // and the retry goes on; the person is told what is missing.
-func TestSourceKeepsTheDevicesWhenNoneCanBeChosen(t *testing.T) {
+func TestSourceKeepsTheDevicesWhenTheCameraIsGone(t *testing.T) {
 	t.Setenv("CAPTURE_FAKE_BAD_INPUT", "0:1")
 	_, src := testSource(t, Options{})
 	src.earlyExit = 100 * time.Millisecond
 	src.list = func(context.Context, string) ([]Device, error) {
-		return []Device{{Kind: Video, ID: "0", Name: "Insta360 Link"}}, nil
+		return []Device{{Kind: Audio, ID: "1", Name: "Yeti Stereo Microphone"}}, nil
 	}
 	src.Start()
-	waitFor(t, "trouble", func() bool { return strings.HasPrefix(src.Trouble(), "the camera or microphone is not connected") })
-	if mic := src.Mic(); mic == nil || mic.ID != "1" {
-		t.Fatalf("mic %+v", mic)
+	waitFor(t, "trouble", func() bool { return strings.HasPrefix(src.Trouble(), "the camera is not connected") })
+	if cam, mic := src.Camera(), src.Mic(); cam.ID != "0" || mic == nil || mic.ID != "1" {
+		t.Fatalf("cam %+v mic %+v", cam, mic)
+	}
+	if src.Publishing() {
+		t.Fatal("publishing without a camera")
+	}
+}
+
+// A microphone that is gone when a session starts never costs the picture:
+// with nothing to stand in (no other microphone, or a microphone named on
+// the command line, which nothing replaces) the picture goes alone, and
+// the microphone named is reported as standing in for nothing. The next
+// start lists the devices again, and a microphone that is back is used.
+func TestSourceSendsThePictureWithoutAMicrophoneThatIsGone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		devs []Device
+		// wanted is the microphone reported as standing in for nothing.
+		wanted string
+	}{
+		{"the default, and no microphone left", Options{}, []Device{{Kind: Video, ID: "0", Name: "Insta360 Link"}}, ""},
+		{"named, and no microphone left", Options{Mic: "Yeti Stereo Microphone", Fallback: true}, []Device{{Kind: Video, ID: "0", Name: "Insta360 Link"}}, "Yeti Stereo Microphone"},
+		{"named on the command line, another left", Options{Mic: "Yeti Stereo Microphone"}, []Device{{Kind: Video, ID: "0", Name: "Insta360 Link"}, {Kind: Audio, ID: "0", Name: "MacBook Pro Microphone"}}, "Yeti Stereo Microphone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CAPTURE_FAKE_BAD_INPUT", "0:1")
+			inputs := filepath.Join(t.TempDir(), "inputs")
+			t.Setenv("CAPTURE_FAKE_INPUTS", inputs)
+			_, src := testSource(t, tc.opts)
+			src.earlyExit = 100 * time.Millisecond
+			var devs atomic.Pointer[[]Device]
+			devs.Store(&tc.devs)
+			src.list = func(context.Context, string) ([]Device, error) { return *devs.Load(), nil }
+			src.Start()
+			waitFor(t, "the picture alone", src.Publishing)
+			st := src.Standing()
+			if st.Mic != nil || st.MicOut != "" || src.Trouble() != "" {
+				t.Fatalf("standing %+v, trouble %q", st, src.Trouble())
+			}
+			var subs []Substitution
+			if tc.wanted != "" {
+				subs = []Substitution{{Kind: Audio, Wanted: tc.wanted, Using: Device{Kind: Audio}}}
+			}
+			if !reflect.DeepEqual(st.Substitutions, subs) {
+				t.Fatalf("substitutions %+v, want %+v", st.Substitutions, subs)
+			}
+			// The microphone is back: the next start finds it.
+			src.Stop()
+			back := append(slices.Clone(tc.devs), Device{Kind: Audio, ID: "2", Name: "Yeti Stereo Microphone"})
+			devs.Store(&back)
+			src.Start()
+			waitFor(t, "the microphone back", func() bool { return src.Publishing() && src.Mic() != nil })
+			if st := src.Standing(); st.Mic.ID != "2" || st.Substitutions != nil {
+				t.Fatalf("standing %+v", st)
+			}
+			if got := readLines(t, inputs); !reflect.DeepEqual(got, []string{"0:1", "0", "0:2"}) {
+				t.Fatalf("inputs %q", got)
+			}
+		})
+	}
+}
+
+// readLines is the file's lines, none for a file not written.
+func readLines(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(b))
+}
+
+// A microphone that sends nothing (one macOS refuses: the capture waits
+// for its first sample, and publishes nothing, picture included): after
+// the announce grace the camera is tried alone, and once it gets going the
+// microphone is reported left out. The next start tries it again.
+func TestSourceTriesTheCameraAloneWhenTheMicrophoneSendsNothing(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_STALL_WITH_MIC", "1")
+	inputs := filepath.Join(t.TempDir(), "inputs")
+	t.Setenv("CAPTURE_FAKE_INPUTS", inputs)
+	_, src := testSource(t, Options{})
+	src.announceGrace = 100 * time.Millisecond
+	src.stopGrace = 100 * time.Millisecond
+	src.Start()
+	waitFor(t, "the trial", func() bool { return strings.HasSuffix(src.Trouble(), "trying the camera alone") })
+	waitFor(t, "the camera alone", src.Publishing)
+	if st := src.Standing(); st.MicOut != MicFailed || st.Mic == nil || src.Trouble() != "" {
+		t.Fatalf("standing %+v, trouble %q", st, src.Trouble())
+	}
+	src.Stop()
+	if st := src.Standing(); st.MicOut != MicFailed {
+		t.Fatalf("between captures the microphone reads %q", st.MicOut)
+	}
+	// The microphone works again: the next start has it in.
+	t.Setenv("CAPTURE_FAKE_STALL_WITH_MIC", "")
+	src.Start()
+	waitFor(t, "the microphone in again", src.Publishing)
+	if st := src.Standing(); st.MicOut != "" {
+		t.Fatalf("standing %+v", st)
+	}
+	if got := readLines(t, inputs); !reflect.DeepEqual(got, []string{"0:1", "0", "0:1"}) {
+		t.Fatalf("inputs %q", got)
+	}
+}
+
+// A capture that stops at once with the microphone in it, in words that
+// name nothing: the camera is tried alone before the encoder is blamed,
+// and the hardware encoder stays.
+func TestSourceTriesTheCameraAloneBeforeTheEncoder(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_FAIL_WITH_MIC", "1")
+	_, src := testSource(t, Options{})
+	src.earlyExit = time.Second
+	src.Start()
+	waitFor(t, "the camera alone", src.Publishing)
+	if st := src.Standing(); st.MicOut != MicFailed {
+		t.Fatalf("standing %+v", st)
+	}
+	if src.Encoder() != EncoderVideoToolbox {
+		t.Fatalf("encoder %s: the microphone's trouble was the encoder's", src.Encoder())
+	}
+}
+
+// The camera alone does not get going either: the trouble is the camera's,
+// the microphone goes back in and is not reported, and the trouble says
+// the camera delivered no picture.
+func TestSourceDoesNotBlameTheMicrophoneForTheCamera(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_STALL", "1")
+	inputs := filepath.Join(t.TempDir(), "inputs")
+	t.Setenv("CAPTURE_FAKE_INPUTS", inputs)
+	_, src := testSource(t, Options{})
+	src.announceGrace = 100 * time.Millisecond
+	src.stopGrace = 100 * time.Millisecond
+	src.Start()
+	want := stallTrouble("darwin", src.announceGrace)
+	waitFor(t, "the stall", func() bool { return src.Trouble() == want })
+	if st := src.Standing(); st.MicOut != "" {
+		t.Fatalf("the microphone was blamed: %+v", st)
+	}
+	src.mu.Lock()
+	trial := src.trial
+	src.mu.Unlock()
+	if trial != micBack {
+		t.Fatalf("trial %d", trial)
+	}
+	src.Stop()
+	if got := readLines(t, inputs); !reflect.DeepEqual(got, []string{"0:1", "0"}) {
+		t.Fatalf("inputs %q", got)
+	}
+}
+
+// A microphone the system refuses (SetMicRefused, the window's word on a
+// Mac) is left out of the captures that start while it does, which send
+// the picture alone at once; a capture under way keeps what it started
+// with, and the next follows the standing.
+func TestSourceLeavesOutAMicrophoneTheSystemRefuses(t *testing.T) {
+	inputs := filepath.Join(t.TempDir(), "inputs")
+	t.Setenv("CAPTURE_FAKE_INPUTS", inputs)
+	_, src := testSource(t, Options{})
+	src.SetMicRefused(true)
+	if st := src.Standing(); st.MicOut != MicRefused {
+		t.Fatalf("idle standing %+v", st)
+	}
+	src.Start()
+	waitFor(t, "the picture alone", src.Publishing)
+	src.SetMicRefused(false)
+	if st := src.Standing(); st.MicOut != MicRefused || st.Mic == nil {
+		t.Fatalf("running standing %+v", st)
+	}
+	src.Stop()
+	if st := src.Standing(); st.MicOut != "" {
+		t.Fatalf("allowed again, idle standing %+v", st)
+	}
+	src.Start()
+	waitFor(t, "the microphone in", src.Publishing)
+	src.Stop()
+	if got := readLines(t, inputs); !reflect.DeepEqual(got, []string{"0", "0:1"}) {
+		t.Fatalf("inputs %q", got)
+	}
+}
+
+// Devices that stood in give way to the ones chosen once they are back, at
+// the next start.
+func TestSourceGoesBackToTheChosenDevices(t *testing.T) {
+	t.Setenv("CAPTURE_FAKE_FFMPEG", "1")
+	srv, err := serve.New(serve.Config{StateDir: t.TempDir(), Logger: quiet(), DescribeWait: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	opts := Options{Camera: "Studio Cam 4K", Mic: "USB Mic", Fallback: true}
+	standIn := []Device{{Kind: Video, ID: "0", Name: "FaceTime HD Camera"}, {Kind: Audio, ID: "0", Name: "MacBook Pro Microphone"}}
+	cam, mic, subs, err := Resolve(standIn, opts)
+	if err != nil || len(subs) != 2 {
+		t.Fatalf("subs %+v, err %v", subs, err)
+	}
+	src := newSource(srv, opts, quiet(), "darwin", os.Args[0], cam, mic)
+	src.subs = subs
+	src.modes = nil
+	t.Cleanup(src.Stop)
+	src.list = func(context.Context, string) ([]Device, error) {
+		return append(standIn, Device{Kind: Video, ID: "1", Name: "Studio Cam 4K"}, Device{Kind: Audio, ID: "1", Name: "USB Mic"}), nil
+	}
+	src.Start()
+	waitFor(t, "publishing", src.Publishing)
+	if st := src.Standing(); st.Camera.Name != "Studio Cam 4K" || st.Mic == nil || st.Mic.Name != "USB Mic" || st.Substitutions != nil {
+		t.Fatalf("standing %+v", st)
 	}
 }
 

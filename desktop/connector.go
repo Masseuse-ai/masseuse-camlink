@@ -305,6 +305,13 @@ func clipped(line []byte, n int) string {
 func (s *ConnectorService) take(ev map[string]any) {
 	kind, _ := ev["type"].(string)
 	var version, update string
+	defer func() {
+		// A connector that has just started is told the system's standing
+		// on the camera and the microphone (tellMedia), outside the lock.
+		if kind == "hello" {
+			s.tellMedia()
+		}
+	}()
 	s.mu.Lock()
 	for _, k := range snapshotKinds {
 		if k == kind {
@@ -509,7 +516,24 @@ func (s *ConnectorService) reportMedia(camera, mic string) bool {
 	}
 	s.log.Info("shell: camera and microphone access", "camera", camera, "mic", mic)
 	s.report(mediaEvent(camera, mic))
+	s.tellMedia()
 	return true
+}
+
+// tellMedia hands the connector the standing on the camera and the
+// microphone as last said to the page (its media command): a microphone
+// the system refuses is left out of the connector's capture, which on a
+// Mac would otherwise send no picture either, waiting on a microphone that
+// never delivers. Nothing while the connector is not running; its hello
+// is the cue to say it again (take).
+func (s *ConnectorService) tellMedia() {
+	s.mu.Lock()
+	ev, ok := s.last["media"]
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	_ = s.send(map[string]any{"type": "media", "camera": ev["camera"], "mic": ev["mic"]})
 }
 
 // mediaWatchInterval is how often watchMedia reads the standing.

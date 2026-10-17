@@ -6,7 +6,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type Dispatch, type ReactNode, type RefObject } from 'react';
 
-import { CODE_TTL_MS, type Bridge, type CameraStats, type ConnectorEvent, type Descriptor, type Device, type EnclaveProof, type FaceCamera, type Hello, type LinkState, type MediaPermission, type PreviewStanding, type Share, type Substitution, type Unit, type UpdateState } from './types';
+import { CODE_TTL_MS, type Bridge, type CameraStats, type ConnectorEvent, type Descriptor, type Device, type EnclaveProof, type FaceCamera, type Hello, type LinkState, type MediaPermission, type MicOut, type PreviewStanding, type Share, type Substitution, type Unit, type UpdateState } from './types';
 
 export type Platform = 'darwin' | 'windows' | 'linux';
 
@@ -29,6 +29,9 @@ export interface SourceState {
     camera?: string;
     mic?: string;
     url?: string;
+    /** Devices chosen that are not connected and what stands in (types.ts, the source event). */
+    substitutions?: Substitution[];
+    micOut?: MicOut;
     /** Absent when the connector's report has no `share` (an older release). */
     share?: Share;
     /** null is the phone's own camera; absent when the connector's report has no `face`. */
@@ -45,6 +48,21 @@ export function faceViewOf(source: SourceState | null): FaceView {
 /** Whether the connector's report knows the loop at all (an older release does not). */
 export function offersFaceLoop(source: SourceState | null): boolean {
     return Boolean(source && source.share !== undefined && source.face !== undefined);
+}
+
+/**
+ * The computer's camera and microphone as the person chose them, which the
+ * connector keeps while something else stands in: a device not connected
+ * by its own name (the report's substitutions; the devices listing's from
+ * an older connector), else the one in use. The microphone is "none" for
+ * a choice of video only, and null when none is known: nothing connected
+ * and nothing named, which the connector reads as its default.
+ */
+export function chosenDevices(source: SourceState | null, listed: Substitution[] = []): { camera: string | null; mic: string | null; substitutions: Substitution[] } {
+    if (source?.kind !== 'capture') return { camera: null, mic: null, substitutions: [] };
+    const substitutions = source.substitutions ?? listed;
+    const wanted = (kind: Substitution['kind']) => substitutions.find((s) => s.kind === kind)?.wanted;
+    return { camera: wanted('video') ?? source.camera ?? null, mic: wanted('audio') ?? source.mic ?? null, substitutions };
 }
 
 /** A capture of this computer's as the connector reports it: on while a session reads it, its rates while sending, and the switch on Ready. */

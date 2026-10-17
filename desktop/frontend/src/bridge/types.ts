@@ -18,12 +18,20 @@ export interface Device {
     name: string;
 }
 
-/** A remembered device that is not connected, and the one standing in (capture.Substitution). */
+/** A device chosen that is not connected, and the one standing in (capture.Substitution); `using` is empty for a microphone with nothing in its place, the picture going without sound. */
 export interface Substitution {
     kind: 'video' | 'audio';
     wanted: string;
     using: string;
 }
+
+/**
+ * Why the microphone the connector names is left out of the capture
+ * (capture.MicOut): macOS refuses it (the shell's word, passed on), or the
+ * capture would not get going with it and went without it, until the next
+ * session. A microphone never holds back the picture.
+ */
+export type MicOut = 'refused' | 'failed';
 
 /** A stimulation unit within reach (internal/estim, Unit). */
 export interface Unit {
@@ -189,9 +197,15 @@ export type ConnectorEvent =
           note?: string;
           /** "1280x720 30 fps, h264_videotoolbox" */
           shape?: string;
+          /** The camera the capture uses; one standing in by its own name, the one chosen among `substitutions`. */
           camera?: string;
+          /** The microphone the capture uses, as `camera`; "none" for a choice of video only; absent when none is connected. */
           mic?: string;
           url?: string;
+          /** The devices chosen that are not connected and what stands in for each, as they stand now (the `devices` event lists the same). Absent when nothing stands in, and from an older connector. */
+          substitutions?: Substitution[];
+          /** Why `mic` is left out of the capture; absent while it is in. */
+          micOut?: MicOut;
           /**
            * The phone's picture offered to this computer for OBS (the source
            * report v2's `share`). Absent from an older connector's report.
