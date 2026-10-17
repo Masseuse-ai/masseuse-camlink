@@ -8,6 +8,7 @@
 
 import type { Bridge, ConnectorCommand, ConnectorEvent, Descriptor, FaceCamera, Share, Unit } from '../types';
 import { SHARE_ADDRESS, descriptorFor, disconnected, shareOffered } from './fixtures';
+import { mockPicture } from './picture';
 import type { Scenario } from './scenarios';
 
 type Handler = (event: ConnectorEvent) => void;
@@ -20,6 +21,13 @@ const PROMPTS_ANSWERED_MS = 5000;
 
 /** How long the enclave's relay takes to be back at a stream switched on again during a session (the connector's word: within seconds). */
 const RELAY_BACK_MS = 2000;
+
+/** How long the mock camera takes to send its first preview picture, and how often it sends one after (the connector's eight a second). */
+const PREVIEW_WARMUP_MS = 700;
+const PREVIEW_EVERY_MS = 125;
+
+/** The connector's lease on the preview: off this long after the page's last ask (cmd/masseuse-camlink/preview.go). */
+const PREVIEW_LEASE_MS = 10_000;
 
 export class MockBridge implements Bridge {
     private handlers = new Set<Handler>();
@@ -49,6 +57,11 @@ export class MockBridge implements Bridge {
     // when a camera switched on again comes back on its own.
     private switches: { camera?: boolean; face?: boolean } = {};
     private linkActive = false;
+    // Ready's preview while it runs, as the connector holds it: the lease
+    // the page's asks renew, the camera warming up, the pictures' timer.
+    // cameraOn is the session's capture, which takes the camera from it.
+    private previewRun: { lease: ReturnType<typeof setTimeout>; warmup?: ReturnType<typeof setTimeout>; pictures?: ReturnType<typeof setInterval> } | null = null;
+    private cameraOn = false;
 
     constructor(private readonly scenario: Scenario) {}
 
@@ -66,6 +79,7 @@ export class MockBridge implements Bridge {
                 for (const t of this.timers) clearTimeout(t);
                 this.timers = [];
                 this.started = false;
+                this.stopPreview(false);
             }
         };
     }
@@ -95,7 +109,68 @@ export class MockBridge implements Bridge {
                 break;
         }
         const said = event.type === 'camera' || event.type === 'face' ? this.stamped(event) : event;
+        // A session's stream takes the camera from the preview first (the
+        // connector's dialLocal): the page hears the preview end, then the
+        // camera come on.
+        if (said.type === 'camera') {
+            if (said.on && this.previewRun) this.stopPreview();
+            this.cameraOn = said.on;
+        }
         for (const h of this.handlers) h(said);
+    }
+
+    /** Why the connector would refuse Ready's preview now, in its words, or null. */
+    private previewRefusal(): string | null {
+        if (this.cameraOn) return 'a session has the camera';
+        if (this.switches.camera === false) return 'the camera is switched off';
+        if (!this.source) return 'no camera is set up';
+        if (!this.source.ready) return this.source.note ?? 'no camera is set up';
+        if (this.source.kind === 'camera') return 'a camera on your network shows its picture in its own app';
+        return null;
+    }
+
+    /** The page's ask for the preview, as the connector answers it: refused, renewed, or started (warming up, then pictures, or the scenario's reason it cannot run). */
+    private askPreview() {
+        const refusal = this.previewRefusal();
+        if (refusal) {
+            this.stopPreview(false);
+            this.emit({ type: 'preview', state: 'unavailable', note: refusal });
+            return;
+        }
+        if (this.previewRun) {
+            clearTimeout(this.previewRun.lease);
+            this.previewRun.lease = setTimeout(() => this.stopPreview(), PREVIEW_LEASE_MS);
+            return;
+        }
+        const shot = this.scenario.preview ?? {};
+        const [width, height] = shot.size ?? [1920, 1080];
+        const camera = this.source?.camera;
+        const run: NonNullable<MockBridge['previewRun']> = { lease: setTimeout(() => this.stopPreview(), PREVIEW_LEASE_MS) };
+        this.previewRun = run;
+        this.emit({ type: 'preview', state: 'starting', camera, width, height });
+        run.warmup = setTimeout(() => {
+            if (this.previewRun !== run) return;
+            if (shot.fails) {
+                this.emit({ type: 'preview', state: 'unavailable', note: shot.fails, camera, width, height });
+                return;
+            }
+            this.emit({ type: 'preview', state: 'live', camera, width, height });
+            const started = Date.now();
+            const send = () => this.emit({ type: 'preview_frame', jpeg: mockPicture(width, height, Date.now() - started, shot.black) });
+            send();
+            run.pictures = setInterval(send, PREVIEW_EVERY_MS);
+        }, PREVIEW_WARMUP_MS);
+    }
+
+    /** Ends the preview, if one runs; `say` tells the page, as the connector does. */
+    private stopPreview(say = true) {
+        const run = this.previewRun;
+        if (!run) return;
+        this.previewRun = null;
+        clearTimeout(run.lease);
+        clearTimeout(run.warmup);
+        clearInterval(run.pictures);
+        if (say) this.emit({ type: 'preview', state: 'off' });
     }
 
     /**
@@ -159,6 +234,8 @@ export class MockBridge implements Bridge {
                 const views = { share, face };
 
                 const bodyChanged = choice.url !== undefined || choice.camera !== undefined || choice.mic !== undefined;
+                // A new camera ends the old one's preview; the page's next ask shows the new one.
+                if (bodyChanged) this.stopPreview();
                 if (!bodyChanged) {
                     if (!current) throw new Error('No camera is chosen yet.');
                     this.later(400, { ...current, ...views });
@@ -198,6 +275,7 @@ export class MockBridge implements Bridge {
                 // face camera only when one is configured and ready.
                 const key = command.view === 'body' ? 'camera' : 'face';
                 this.switches[key] = command.enabled;
+                if (key === 'camera' && !command.enabled) this.stopPreview();
                 this.later(150, key === 'camera' ? { type: 'camera', on: false, enabled: command.enabled } : { type: 'face', on: false, enabled: command.enabled });
                 if (command.enabled && this.linkActive) {
                     this.later(RELAY_BACK_MS, () => {
@@ -208,6 +286,11 @@ export class MockBridge implements Bridge {
                 }
                 return;
             }
+
+            case 'preview':
+                if (command.on) this.askPreview();
+                else this.stopPreview();
+                return;
 
             case 'select_unit': {
                 if (this.unit?.armed) {

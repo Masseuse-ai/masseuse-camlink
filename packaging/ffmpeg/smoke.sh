@@ -55,6 +55,9 @@ for decoder in $decoders; do
   "$bin" -hide_banner -decoders | grep -qE "^ V[^ ]* +$decoder " || { echo "no $decoder decoder" >&2; exit 1; }
 done
 "$bin" -hide_banner -protocols | grep -qw tcp || { echo "no tcp protocol" >&2; exit 1; }
+"$bin" -hide_banner -encoders | grep -qE '^ V[^ ]* +mjpeg ' || { echo "no mjpeg encoder" >&2; exit 1; }
+"$bin" -hide_banner -muxers | grep -qE '^ +E +mpjpeg ' || { echo "no mpjpeg muxer" >&2; exit 1; }
+"$bin" -hide_banner -protocols | grep -qw pipe || { echo "no pipe protocol" >&2; exit 1; }
 if "$bin" -hide_banner -encoders | grep -qE 'libx264|x265|libfdk'; then
   echo "a GPL or nonfree component is present" >&2; exit 1
 fi
@@ -71,4 +74,11 @@ fi
   -b:v 2500k -maxrate 2500k -bufsize 2500k \
   -c:a libopus -ac 1 -ar 48000 -b:a 64k -application audio \
   -f null -
-echo "ok: components present, two seconds of 1280x720 encoded with $encoder and libopus"
+# The window's preview (internal/capture/args.go, previewArgs, after the
+# input): two seconds of it, as JPEGs in a multipart stream on a pipe.
+parts=$("$bin" -hide_banner -loglevel error -nostats \
+  -f lavfi -i testsrc2=size=1920x1080:rate=30 -t 2 \
+  -an -vf "fps=8,scale=w='min(640,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2" \
+  -c:v mjpeg -q:v 7 -f mpjpeg pipe:1 | grep -a -c 'Content-type: image/jpeg')
+[ "$parts" -ge 12 ] || { echo "the preview chain gave $parts pictures in two seconds, not 16" >&2; exit 1; }
+echo "ok: components present, two seconds of 1280x720 encoded with $encoder and libopus, $parts preview pictures"

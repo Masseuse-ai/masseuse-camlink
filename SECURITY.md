@@ -34,7 +34,14 @@ are acknowledged within three business days.
 - The camera and microphone are captured only while a session is reading;
   the capture process is stopped when the session's tunnel ends. The
   front-facing camera starts only when the enclave asks for it and stops
-  with the camera.
+  with the camera. The one exception is the desktop window's preview on
+  its Ready screen (`-ipc` only): while no session has the camera and the
+  window keeps asking for it (every few seconds; the connector stops it
+  ten seconds after the last ask), the camera alone, never the
+  microphone, is captured as small JPEGs written to the window over the
+  connector's standard output, and to no socket, tunnel or file. It is
+  refused while a session has the camera or the window's switch has it
+  off, and a session's first stream takes the camera from it.
 - It refuses to dial anything but a single private-network `host:port` per
   session, so a compromised service cannot turn it into a proxy. Its own
   endpoint (`127.0.0.1:7443`) is answered in-process, never dialled, and

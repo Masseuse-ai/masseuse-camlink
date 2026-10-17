@@ -24,6 +24,14 @@ export interface Scenario {
     tab?: 'behind' | 'face';
     setupDone?: boolean;
     aboutOpen?: boolean;
+    /**
+     * How the mock camera answers Ready's preview: its picture's mode
+     * (1920x1080 unless said), black (a virtual camera whose program is not
+     * running), or the connector's reason it cannot run.
+     */
+    preview?: { size?: [number, number]; black?: boolean; fails?: string };
+    /** The window's idle time before the preview pauses (AppState.previewIdleMs), shortened to show it. */
+    previewIdleMs?: number;
     script: Timed[];
 }
 
@@ -433,9 +441,94 @@ export const scenarios: Scenario[] = [
         id: 'home-idle',
         group: 'Ready',
         title: 'Ready, waiting for a session',
+        note: 'The camera behind you shows live where the illustration stood, on this computer only, while Ready is on screen.',
         step: 'home',
         setupDone: true,
         script: opening({ phones: 1 }),
+    },
+    {
+        id: 'home-preview-square',
+        group: 'Ready',
+        title: 'Preview of a square camera',
+        note: 'A MacBook’s camera in its square mode: the picture sits in the room’s 16:9 with bars beside it, as the room shows it.',
+        step: 'home',
+        setupDone: true,
+        preview: { size: [1552, 1552] },
+        script: opening({ phones: 1, cams: [cameras.facetime!, cameras.insta!], mics: [mics.macbook!], src: source(cameras.facetime!, mics.macbook!, { shape: '1552x1552 30 fps, h264_videotoolbox' }) }),
+    },
+    {
+        id: 'home-preview-black',
+        group: 'Ready',
+        title: 'Preview of a virtual camera sending nothing',
+        note: 'OBS’s virtual camera chosen while OBS is not outputting: the picture is black, and the tile says why.',
+        step: 'home',
+        setupDone: true,
+        preview: { black: true },
+        script: opening({ phones: 1, cams: obsCameras, src: source(cameras.obs!, mics.yeti!) }),
+    },
+    {
+        id: 'home-preview-trouble',
+        group: 'Ready',
+        title: 'Preview: the camera cannot be opened',
+        note: 'Another program has the camera (on Windows a camera serves one program at a time): the connector’s reason; it tries again while Ready asks.',
+        step: 'home',
+        setupDone: true,
+        preview: { fails: 'the camera could not be opened; another program may have it, or it was unplugged' },
+        script: opening({ phones: 1 }),
+    },
+    {
+        id: 'home-preview-session',
+        group: 'Ready',
+        title: 'Preview, then the session takes the camera',
+        note: 'The preview runs until the phone starts the session at seven seconds; the camera goes to the session, and Ready shows the session.',
+        step: 'home',
+        setupDone: true,
+        script: [
+            ...opening({ phones: 1 }),
+            { at: 7000, event: { type: 'link', state: 'active', enclave } },
+            { at: 7400, event: { type: 'camera', on: true, stats: stats(2_100_000) } },
+            { at: 7600, event: device(armedUnit()) },
+        ],
+    },
+    {
+        id: 'home-preview-paused',
+        group: 'Ready',
+        title: 'Preview paused while the window is unused',
+        note: 'After five minutes without the pointer or a key (six seconds here) the preview pauses and the camera’s light goes out; any use brings it back.',
+        step: 'home',
+        setupDone: true,
+        previewIdleMs: 6000,
+        script: opening({ phones: 1 }),
+    },
+    {
+        id: 'home-switched-off-idle',
+        group: 'Ready',
+        title: 'Ready, the camera switched off',
+        note: 'Switched off before any session: no preview, no light.',
+        step: 'home',
+        setupDone: true,
+        script: [...opening({ phones: 1 }), { at: 400, event: { type: 'camera', on: false, enabled: false } }],
+    },
+    {
+        id: 'home-network-camera',
+        group: 'Ready',
+        title: 'Ready with a camera on the network',
+        note: 'A network camera has no preview here; its own app shows its picture.',
+        step: 'home',
+        setupDone: true,
+        script: opening({
+            phones: 1,
+            src: { type: 'source', kind: 'camera', label: 'rtsps://192.168.1.20:7441', ready: true, shape: 'h264 video, aac audio', url: 'rtsps://192.168.1.20:7441/porch', share: shareOffered, face: null },
+        }),
+    },
+    {
+        id: 'home-preview-blocked',
+        group: 'Ready',
+        title: 'Ready, macOS blocking the camera',
+        note: 'The shell’s definite word: no picture to show, and the card says where the camera is allowed.',
+        step: 'home',
+        setupDone: true,
+        script: [media('denied', 'authorized'), ...opening({ phones: 1 })],
     },
     {
         id: 'home-session',
@@ -661,5 +754,6 @@ export function scenarioState(scenario: Scenario, base: AppState, platform?: Pla
         cameraTab: scenario.tab ?? 'behind',
         setupDone: scenario.setupDone ?? false,
         aboutOpen: scenario.aboutOpen ?? false,
+        previewIdleMs: scenario.previewIdleMs ?? base.previewIdleMs,
     };
 }

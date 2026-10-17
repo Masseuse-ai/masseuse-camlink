@@ -92,7 +92,9 @@ const connectorEvent = "connector"
 
 // snapshotKinds are the events kept for a page that mounts late, in the
 // order they are replayed. "media" is the shell's own (permissions.go),
-// said before the connector's first line.
+// said before the connector's first line. The preview's "preview" and
+// "preview_frame" are not kept: a picture is for the moment it is shown,
+// and a page that mounts asks for the preview again (SetPreview).
 var snapshotKinds = []string{"media", "hello", "update", "source", "online", "code", "paired", "link", "camera", "face", "units", "device", "blocked"}
 
 func init() {
@@ -252,7 +254,7 @@ func (s *ConnectorService) relay(p *connectorProcess) {
 	for line := range p.lines {
 		var ev map[string]any
 		if err := json.Unmarshal(line, &ev); err != nil {
-			s.log.Warn("shell: not an event", "line", string(line))
+			s.log.Warn("shell: not an event", "line", clipped(line, notAnEventKept))
 			continue
 		}
 		s.report(ev)
@@ -282,6 +284,19 @@ func (s *ConnectorService) relay(p *connectorProcess) {
 		s.log.Error("shell: connector stopped", "code", code)
 		s.report(map[string]any{"type": "blocked", "kind": "connector-stopped", "detail": detail})
 	}
+}
+
+// notAnEventKept is how much of a line that is not an event the log keeps:
+// enough to say what it was. Such a line may be anything the connector
+// wrote, a preview picture cut short included, and the log is a file.
+const notAnEventKept = 120
+
+// clipped is line's first n bytes, and how long it was when that is more.
+func clipped(line []byte, n int) string {
+	if len(line) <= n {
+		return string(line)
+	}
+	return fmt.Sprintf("%s… (%d bytes)", line[:n], len(line))
 }
 
 // take reads what the shell needs off an event: the connector's version
@@ -418,6 +433,15 @@ func (s *ConnectorService) SetSource(choice SourceChoice) error {
 // not remembered: every launch has both cameras allowed.
 func (s *ConnectorService) SetCamera(view string, enabled bool) error {
 	return s.send(map[string]any{"type": "set_camera", "view": view, "enabled": enabled})
+}
+
+// SetPreview asks for Ready's preview of the camera behind the person: on,
+// repeated every few seconds while the page shows it (the connector lets
+// the camera go ten seconds after the last), or off to stop it at once.
+// The standing comes back as "preview" events and the pictures as
+// "preview_frame", neither of which the shell keeps (Snapshot).
+func (s *ConnectorService) SetPreview(on bool) error {
+	return s.send(map[string]any{"type": "preview", "on": on})
 }
 
 // SelectUnit serves the stimulation unit with this id from the list the

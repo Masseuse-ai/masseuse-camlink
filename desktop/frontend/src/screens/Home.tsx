@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { faceViewOf, switchedOff, useAppState, useBridge, useDispatch, type Step } from '../bridge/store';
 import type { CameraStats } from '../bridge/types';
+import { CameraPreview, PLACE } from '../ui/CameraPreview';
 import { Card, CardLabel } from '../ui/Card';
 import { MediaAccessAlert, mediaStanding, useMediaAsk } from '../ui/MediaAccess';
 import { Page } from '../ui/Page';
@@ -165,6 +166,8 @@ export function Home() {
     })();
 
     const micName = source?.kind === 'capture' ? source.mic : undefined;
+    // The camera's light is on for the preview: the card says so, and that its picture stays here.
+    const previewing = !camera.on && !bodyOff && state.preview.state === 'live';
 
     // The screen's one control: the phones, and the way to pair another.
     const control = (
@@ -179,8 +182,32 @@ export function Home() {
                 icon={bodyOff ? CameraOff : Camera}
                 label="Behind you"
                 value={source?.kind === 'camera' ? source.label : (source?.camera ?? source?.label ?? 'Finding…')}
-                note={source?.ready ? (bodyOff ? 'Switched off: no picture or sound leaves this computer.' : camera.on ? 'Sending to the verified enclave' : 'On only while a session reads it') : source?.note}
-                badge={source?.ready ? (bodyOff ? { text: 'Switched off', variant: 'secondary' } : camera.on ? { text: 'On', variant: 'mint' } : { text: 'Off until watched', variant: 'secondary' }) : source ? { text: 'Not available', variant: 'amber' } : undefined}
+                note={
+                    source?.ready
+                        ? bodyOff
+                            ? 'Switched off: no picture or sound leaves this computer.'
+                            : camera.on
+                              ? 'Sending to the verified enclave'
+                              : previewing
+                                ? 'Shown on this screen only'
+                                : source.kind === 'camera'
+                                  ? 'On only while a session reads it'
+                                  : 'On while a session or this screen shows it'
+                        : source?.note
+                }
+                badge={
+                    source?.ready
+                        ? bodyOff
+                            ? { text: 'Switched off', variant: 'secondary' }
+                            : camera.on
+                              ? { text: 'On', variant: 'mint' }
+                              : previewing
+                                ? { text: 'Preview', variant: 'rose' }
+                                : { text: 'Off until watched', variant: 'secondary' }
+                        : source
+                          ? { text: 'Not available', variant: 'amber' }
+                          : undefined
+                }
                 step="camera"
                 tab="behind"
                 disabled={camera.on}
@@ -316,7 +343,11 @@ export function Home() {
                             ) : (
                                 <>
                                     <p className="type-body text-bone/80">{phones > 0 ? 'Waiting for a session on your phone.' : 'Waiting for a phone to pair.'}</p>
-                                    {bodyOff ? <p className="type-secondary text-bone/70">The camera is switched off: a session that starts gets no picture or sound from this computer until it is on again.</p> : null}
+                                    {bodyOff ? (
+                                        <p className="type-secondary text-bone/70">The camera is switched off: a session that starts gets no picture or sound from this computer until it is on again.</p>
+                                    ) : phones > 0 ? (
+                                        <p className="type-secondary text-bone/70">{PLACE}</p>
+                                    ) : null}
                                     <p className="type-secondary text-bone/55">
                                         To protect your privacy, we're setting up a confidential computing environment to process your video and protect your identity. Until then, your unit stays at zero. The computer stays awake while this window is open; the screen may go dark.
                                     </p>
@@ -324,7 +355,7 @@ export function Home() {
                             )}
                         </div>
                         <div className="col-span-5 flex min-h-0 flex-col justify-center">
-                            <Scene scene="laptopBehindYou" className="aspect-[2/1] max-h-[220px] w-full" />
+                            <CameraPreview />
                         </div>
                     </div>
                 )}

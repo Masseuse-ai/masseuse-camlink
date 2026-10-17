@@ -210,7 +210,10 @@ Authenticode). The window has no
 credentials and no network code of its own: it starts the connector,
 relays its lines to the page and its requests back, opens the Help pages
 in the browser, and starts the program again after an update
-(`desktop/connector.go`, `desktop/relaunch.go`).
+(`desktop/connector.go`, `desktop/relaunch.go`). Among those lines, while
+the page shows Ready and no session has the camera, are the preview's
+small pictures of the camera (docs/PROTOCOL.md section 6), which the page
+shows and the shell neither keeps nor logs.
 
 The connector inside each download is the published binary, byte for
 byte, and so the rebuild of section 3; the sections below say where it

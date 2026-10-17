@@ -1,12 +1,16 @@
 package capture
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"image/jpeg"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -221,4 +225,79 @@ func publishesThroughRealFFmpeg(t *testing.T, goos, encoder, camera string) {
 	}
 	waitFor(t, "publication end", func() bool { return !src.Publishing() })
 	t.Logf("real ffmpeg published %d packets through the connector's own argument shape", n.n.Load())
+}
+
+// TestRealFFmpegPreviews runs the window's preview on the real ffmpeg as
+// the connector does (previewArgs, the camera swapped for a stand-in as
+// above) and reads its pictures: JPEGs, fitted to PreviewSize. On Windows
+// also from a camera sending MJPEG, decoded at a fraction of its size.
+func TestRealFFmpegPreviews(t *testing.T) {
+	ffmpeg := os.Getenv(realFFmpegEnv)
+	if ffmpeg == "" {
+		t.Skipf("%s not set", realFFmpegEnv)
+	}
+	if _, err := os.Stat(ffmpeg); err != nil {
+		t.Fatal(err)
+	}
+	goos := realFFmpegOS()
+	t.Setenv("CAPTURE_FAKE_FFMPEG", "")
+	t.Setenv(realFFmpegEnv+"_WRAP", ffmpeg)
+	t.Run("raw", func(t *testing.T) { previewsThroughRealFFmpeg(t, goos, "", Input{}) })
+	if goos != "windows" {
+		return
+	}
+	camera, err := filepath.Abs(filepath.Join("testdata", compressedCameras["mjpeg"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("mjpeg", func(t *testing.T) {
+		previewsThroughRealFFmpeg(t, goos, camera, Input{Format: []string{"-vcodec", "mjpeg"}})
+	})
+}
+
+// previewsThroughRealFFmpeg runs a Source's preview on the real ffmpeg
+// (through the wrapper, with camera standing in when set) for sixteen
+// pictures, then stops it.
+func previewsThroughRealFFmpeg(t *testing.T, goos, camera string, in Input) {
+	t.Setenv(realFFmpegCameraEnv, camera)
+	_, src := testSourceOn(t, goos, Options{VideoSize: "1280x720", FPS: 30}, os.Args[0])
+	src.input = in
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var n atomic.Int64
+	var first atomic.Value
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		done <- src.Preview(ctx, func(b []byte) {
+			if n.Add(1) == 1 {
+				first.Store(b)
+			}
+		})
+	}()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && n.Load() < 16 {
+		select {
+		case err := <-done:
+			t.Fatalf("the preview ended after %d pictures: %v", n.Load(), err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if n.Load() < 16 {
+		t.Fatalf("%d pictures from the real ffmpeg in 30 s", n.Load())
+	}
+	took := time.Since(start)
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Preview: %v", err)
+	}
+	b, _ := first.Load().([]byte)
+	img, err := jpeg.Decode(bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("the first picture is not a JPEG: %v", err)
+	}
+	if w, h := img.Bounds().Dx(), img.Bounds().Dy(); w != PreviewSize || h != PreviewSize*720/1280 {
+		t.Fatalf("a %dx%d picture from a 1280x720 camera", w, h)
+	}
+	t.Logf("real ffmpeg previewed %d pictures in %s", n.Load(), took.Round(time.Millisecond))
 }

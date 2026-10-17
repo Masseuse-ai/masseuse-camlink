@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -149,6 +150,14 @@ type ipcReporter struct {
 	// mounts late, carries the standing. Zero is on.
 	cameraOff, faceOff bool
 	log                *slog.Logger
+	// frame is the preview's latest picture not yet written, and frameSend
+	// wakes the goroutine that writes it (sendFrames, started by the first
+	// picture): a window slow to read loses pictures, and never holds up
+	// the preview or the other events.
+	frameMu   sync.Mutex
+	frame     []byte
+	frameSend chan struct{}
+	frameOnce sync.Once
 }
 
 func newIPCReporter(w io.Writer, log *slog.Logger) *ipcReporter {
@@ -446,6 +455,71 @@ func (r *ipcReporter) Share(receiving bool, url string) {
 	r.mu.Unlock()
 }
 
+// ipcPreview is the preview's standing (preview.go); width and height are
+// its picture's mode, for the window to frame it before the first picture.
+type ipcPreview struct {
+	Type   string `json:"type"`
+	State  string `json:"state"`
+	Note   string `json:"note,omitempty"`
+	Camera string `json:"camera,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+}
+
+// ipcPreviewFrame is one of the preview's pictures, a JPEG in base64.
+type ipcPreviewFrame struct {
+	Type string `json:"type"`
+	JPEG string `json:"jpeg"`
+}
+
+func (r *ipcReporter) Preview(state previewState, note, camera, size string) {
+	if state != previewLive {
+		// A picture still waiting belongs to the preview that has ended.
+		r.frameMu.Lock()
+		r.frame = nil
+		r.frameMu.Unlock()
+	}
+	ev := ipcPreview{Type: "preview", State: string(state), Note: note, Camera: camera}
+	_, _ = fmt.Sscanf(size, "%dx%d", &ev.Width, &ev.Height)
+	r.emit(ev)
+}
+
+func (r *ipcReporter) PreviewFrame(jpeg []byte) {
+	r.frameOnce.Do(func() {
+		r.frameSend = make(chan struct{}, 1)
+		go r.sendFrames()
+	})
+	r.frameMu.Lock()
+	r.frame = jpeg
+	r.frameMu.Unlock()
+	select {
+	case r.frameSend <- struct{}{}:
+	default:
+	}
+}
+
+// sendFrames writes the preview's latest picture whenever there is one; a
+// picture that comes while the one before is being written replaces it.
+// Pictures are never kept for after the hello: the window cannot have
+// asked for them yet.
+func (r *ipcReporter) sendFrames() {
+	for range r.frameSend {
+		r.frameMu.Lock()
+		b := r.frame
+		r.frame = nil
+		r.frameMu.Unlock()
+		if b == nil {
+			continue
+		}
+		ev := ipcPreviewFrame{Type: "preview_frame", JPEG: base64.StdEncoding.EncodeToString(b)}
+		r.mu.Lock()
+		if r.ready {
+			r.write(ev)
+		}
+		r.mu.Unlock()
+	}
+}
+
 func (r *ipcReporter) Units(units []estim.Unit, _ *estim.Descriptor, _ bool) {
 	if units == nil {
 		units = []estim.Unit{}
@@ -527,6 +601,9 @@ type ipcCommand struct {
 	// ("body") or the front-facing camera ("face"), off or on again.
 	View    string `json:"view,omitempty"`
 	Enabled *bool  `json:"enabled,omitempty"`
+	// On is a preview: the window asking for the camera's preview again
+	// (every few seconds while it shows it), or for it to stop.
+	On *bool `json:"on,omitempty"`
 }
 
 // sourceChoice is a set_source: the source flags as fields, each part
@@ -645,6 +722,19 @@ func (c *ipcCommands) handle(ctx context.Context, cmd ipcCommand) bool {
 		if err := c.mgr.cam.setEnabled(cmd.View, *cmd.Enabled); err != nil {
 			c.ui.Notice(noticeError, firstLine(err))
 		}
+	case "preview":
+		// Ready's preview of the camera: on starts it or renews its lease,
+		// off stops it (camControl.preview); the standing comes back as
+		// preview events, the pictures as preview_frame.
+		if cmd.On == nil {
+			c.ui.Notice(noticeError, "preview needs on, true or false.")
+			return false
+		}
+		if c.mgr == nil || c.mgr.cam == nil {
+			c.ui.Preview(previewUnavailable, "no camera is set up", "", "")
+			return false
+		}
+		c.mgr.cam.preview(*cmd.On)
 	case "select_unit":
 		if c.mgr.estim == nil {
 			c.ui.Notice(noticeWarn, "No stimulation device is served: every device family is switched off by the flags.")

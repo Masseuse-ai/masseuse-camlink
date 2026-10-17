@@ -129,11 +129,85 @@ func HardwareEncoder(goos string) string {
 func Args(goos string, o Options, in Input, cam Device, mic *Device, encoder, url string) []string {
 	o = o.WithDefaults()
 	fps := strconv.Itoa(o.FPS)
+	args := append([]string{"-hide_banner", "-loglevel", "warning", "-nostats"}, inputArgs(goos, o, in, cam, mic)...)
+	ceiling := o.ceiling
+	if ceiling == "" {
+		ceiling = o.Bitrate
+	}
+	args = append(args, encoderArgs(encoder, h264Level(o.VideoSize, o.FPS, ceiling))...)
+	gop := strconv.Itoa(2 * o.FPS)
+	// The picture goes out in limited range, the range the enclave reads it
+	// in: MJPEG, what most webcams send, decodes to full range, which the
+	// scaler ffmpeg inserts for -pix_fmt then converts rather than passing
+	// on under a limited-range label (its shadows and highlights clipped).
+	// The rate-control buffer is one second of the bit rate: what a bit
+	// rate change (Reshape) may swing by before the next keyframe, and
+	// small enough that a low rung is really low.
+	args = append(args, "-pix_fmt", "yuv420p", "-color_range", "tv", "-r", fps, "-g", gop, "-force_key_frames", "expr:gte(t,n_forced*2)",
+		"-b:v", o.Bitrate, "-maxrate", o.Bitrate, "-bufsize", o.Bitrate)
+	if mic != nil {
+		args = append(args, "-c:a", "libopus", "-ac", "1", "-ar", "48000", "-b:a", "64k", "-application", "audio")
+	} else {
+		args = append(args, "-an")
+	}
+	// RTP packets stay under what the stream's RTSPS server can forward
+	// (1472 bytes less the SRTP overhead); ffmpeg's default is exactly 1472.
+	return append(args, "-f", "rtsp", "-rtsp_transport", "tcp", "-pkt_size", "1200", url)
+}
+
+// The window's preview pictures (previewArgs, Source.Preview): at most
+// PreviewFPS a second, the longer side at most PreviewSize and never more
+// than the camera's own.
+const (
+	PreviewFPS  = 8
+	PreviewSize = 640
+)
+
+// previewArgs builds ffmpeg's arguments for the window's preview: the
+// camera alone, opened as a session's capture opens it (inputArgs, the
+// same mode), so the picture is the one a session would be sent, thinned
+// to PreviewFPS and scaled to fit PreviewSize, as JPEGs in a multipart
+// stream on standard output. The microphone is not opened. A camera that
+// sends MJPEG is decoded at a fraction of its size (previewLowres), so a
+// 4K camera's preview costs what a small one's does.
+func previewArgs(goos string, o Options, in Input, cam Device) []string {
+	o = o.WithDefaults()
+	args := []string{"-hide_banner", "-loglevel", "warning", "-nostats"}
+	if n := previewLowres(o.VideoSize, in); n > 0 {
+		args = append(args, "-lowres", strconv.Itoa(n))
+	}
+	args = append(args, inputArgs(goos, o, in, cam, nil)...)
+	filter := fmt.Sprintf("fps=%[1]d,scale=w='min(%[2]d,iw)':h='min(%[2]d,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2", PreviewFPS, PreviewSize)
+	return append(args, "-an", "-vf", filter, "-c:v", "mjpeg", "-q:v", "7", "-f", "mpjpeg", "pipe:1")
+}
+
+// previewLowres is how many times the MJPEG decoder may halve the picture
+// of a camera sending MJPEG at size: as often as leaves its longer side at
+// least PreviewSize, at most the decoder's three; 0 for any other format.
+func previewLowres(size string, in Input) int {
+	if len(in.Format) != 2 || in.Format[0] != "-vcodec" || in.Format[1] != "mjpeg" {
+		return 0
+	}
+	var w, h int
+	if _, err := fmt.Sscanf(size, "%dx%d", &w, &h); err != nil {
+		return 0
+	}
+	n, long := 0, max(w, h)
+	for n < 3 && long>>(n+1) >= PreviewSize {
+		n++
+	}
+	return n
+}
+
+// inputArgs opens cam (and mic, unless nil) on goos as in says, at the
+// options' size: the half of the arguments a session's capture and the
+// window's preview share, so the preview is the session's picture.
+func inputArgs(goos string, o Options, in Input, cam Device, mic *Device) []string {
 	rate := in.Rate
 	if rate == "" {
-		rate = fps
+		rate = strconv.Itoa(o.FPS)
 	}
-	args := []string{"-hide_banner", "-loglevel", "warning", "-nostats"}
+	var args []string
 	switch goos {
 	case "darwin":
 		// By name where the name stands alone (Device.Input), so the input
@@ -161,29 +235,7 @@ func Args(goos string, o Options, in Input, cam Device, mic *Device, encoder, ur
 				"-map", "0:v:0", "-map", "1:a:0")
 		}
 	}
-	ceiling := o.ceiling
-	if ceiling == "" {
-		ceiling = o.Bitrate
-	}
-	args = append(args, encoderArgs(encoder, h264Level(o.VideoSize, o.FPS, ceiling))...)
-	gop := strconv.Itoa(2 * o.FPS)
-	// The picture goes out in limited range, the range the enclave reads it
-	// in: MJPEG, what most webcams send, decodes to full range, which the
-	// scaler ffmpeg inserts for -pix_fmt then converts rather than passing
-	// on under a limited-range label (its shadows and highlights clipped).
-	// The rate-control buffer is one second of the bit rate: what a bit
-	// rate change (Reshape) may swing by before the next keyframe, and
-	// small enough that a low rung is really low.
-	args = append(args, "-pix_fmt", "yuv420p", "-color_range", "tv", "-r", fps, "-g", gop, "-force_key_frames", "expr:gte(t,n_forced*2)",
-		"-b:v", o.Bitrate, "-maxrate", o.Bitrate, "-bufsize", o.Bitrate)
-	if mic != nil {
-		args = append(args, "-c:a", "libopus", "-ac", "1", "-ar", "48000", "-b:a", "64k", "-application", "audio")
-	} else {
-		args = append(args, "-an")
-	}
-	// RTP packets stay under what the stream's RTSPS server can forward
-	// (1472 bytes less the SRTP overhead); ffmpeg's default is exactly 1472.
-	return append(args, "-f", "rtsp", "-rtsp_transport", "tcp", "-pkt_size", "1200", url)
+	return args
 }
 
 // encoderArgs selects the encoder. Profile and level are pinned where the

@@ -409,7 +409,8 @@ What `camera` carries is one source:
   random secret, and the connector forwards the packets into its stream
   unchanged. The child runs only while a session is reading: it starts at the
   first `OPEN` for the reserved target and stops when the session ends, so
-  the camera light is off between sessions. When the session's tunnel goes
+  the camera light is off between sessions, but for the desktop window's
+  preview (below). When the session's tunnel goes
   down while the session lasts (a network failure; the connector re-dials
   on its own) the child keeps running for 15 s, since the relay is back at
   the stream within seconds and a restart would put it back to zero just as
@@ -433,6 +434,18 @@ What `camera` carries is one source:
   start gives way to libx264 only when `ffmpeg -encoders` lists it (the
   ffmpeg in the app is built without GPL parts and has none), and a
   fallback that then fails on its own options is undone and not repeated.
+  Between sessions the desktop window may ask for a preview of this camera
+  (`-ipc` only, the `preview` command, docs/DESKTOP.md section 3): a child
+  of its own, the same camera opened in the same mode, video alone,
+  thinned to 8 pictures a second and scaled to fit 640, its pictures JPEGs
+  in an mpjpeg stream on the child's standard output, which the connector
+  reads and hands to the window as `preview_frame` events and to nothing
+  else. Nothing of it is published into the stream: it has no RTSP path
+  and opens no port. It runs while the window renews its ask (every 3 s;
+  it stops 10 s after the last), never while a session has the camera or
+  the window's switch has it off, and the first `OPEN` for the reserved
+  target stops it, waiting for its ffmpeg to exit, before the session's
+  child starts. A camera on the network has none.
 - **A camera on the network** (`camera`). The connector is an RTSPS client of
   the camera (`-camera-url rtsps://user:password@host:port/path`; the host
   must be a private-network address or a name resolving only to such

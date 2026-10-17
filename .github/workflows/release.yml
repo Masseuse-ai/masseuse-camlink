@@ -345,7 +345,7 @@ jobs:
         # camera, the stream read back.
         run: |
           lipo -archs dist/ffmpeg/ffmpeg | grep -q x86_64 || { echo "ffmpeg is not universal" >&2; exit 1; }
-          CAPTURE_REAL_FFMPEG="${PWD}/dist/ffmpeg/ffmpeg" go test -count=1 -run 'TestRealFFmpegPublishes' -v ./internal/capture/
+          CAPTURE_REAL_FFMPEG="${PWD}/dist/ffmpeg/ffmpeg" go test -count=1 -run 'TestRealFFmpeg(Publishes|Previews)' -v ./internal/capture/
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         # Saved as soon as it has passed, not at the end of the job: a failure
         # further on (signing, notarization) then does not cost the build
@@ -669,7 +669,7 @@ jobs:
         # internal/capture's real-ffmpeg test on Windows: a Source with the
         # dshow arguments and h264_mf, a test picture and tone instead of a
         # camera, the stream read back.
-        run: CAPTURE_REAL_FFMPEG="$(cygpath -w "${PWD}/dist/ffmpeg-windows/ffmpeg.exe")" go test -count=1 -run 'TestRealFFmpegPublishes' -v ./internal/capture/
+        run: CAPTURE_REAL_FFMPEG="$(cygpath -w "${PWD}/dist/ffmpeg-windows/ffmpeg.exe")" go test -count=1 -run 'TestRealFFmpeg(Publishes|Previews)' -v ./internal/capture/
       - name: The published windows_amd64 archive, verified
         # Nothing from the release is used before checksums.txt's keyless
         # signature and the archive's hash have been checked.

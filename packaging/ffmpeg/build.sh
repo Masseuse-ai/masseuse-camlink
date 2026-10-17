@@ -120,10 +120,14 @@ opussrc="$src/opus-$OPUS_VERSION"
 #   decode  rawvideo and PCM, which is what avfoundation delivers, and what
 #           dshow delivers from an uncompressed mode; wrapped_avframe, which
 #           is what lavfi delivers
-#   encode  libopus
-#   filter  the ones ffmpeg inserts for -pix_fmt, -r, -ac/-ar and -t, and
-#           the graph's own source and sink filters
-#   output  rtsp over tcp (rtp and http come with it), null for the tests
+#   encode  libopus; mjpeg for the window's preview (the camera's picture as
+#           small JPEGs, internal/capture previewArgs)
+#   filter  the ones ffmpeg inserts for -pix_fmt, -r, -ac/-ar and -t, the
+#           graph's own source and sink filters, and the preview's fps and
+#           scale
+#   output  rtsp over tcp (rtp and http come with it), null for the tests,
+#           mpjpeg on a pipe for the preview (to the connector, which
+#           passes it to the window and nowhere else)
 COMMON_CONFIGURE="
   --disable-gpl --disable-nonfree
   --disable-everything --disable-autodetect
@@ -131,8 +135,9 @@ COMMON_CONFIGURE="
   --disable-doc --disable-debug --disable-shared --enable-static --pkg-config-flags=--static
   --enable-libopus
   --enable-decoder=rawvideo,wrapped_avframe,pcm_f32le,pcm_f32be,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_u8
-  --enable-muxer=rtsp,rtp,null
-  --enable-protocol=tcp,udp,rtp
+  --enable-encoder=mjpeg
+  --enable-muxer=rtsp,rtp,null,mpjpeg
+  --enable-protocol=tcp,udp,rtp,pipe
   --enable-filter=buffer,buffersink,abuffer,abuffersink,format,aformat,scale,fps,aresample,null,anull,trim,atrim,testsrc2,sine
 "
 # darwin: avfoundation (cameras and microphones; what -list_devices reads)

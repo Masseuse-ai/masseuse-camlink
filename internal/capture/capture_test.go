@@ -56,7 +56,11 @@ func fakeFFmpeg(args []string) int {
 		// first frame that never comes, so this ffmpeg announces nothing,
 		// writes nothing and reads nothing (not even the q on standard
 		// input, which only the transcoding loop reads) until it is killed.
-		select {}
+		// It sleeps rather than blocking on nothing, which the runtime can
+		// end at once as a deadlock (it does on Windows).
+		for {
+			time.Sleep(time.Hour)
+		}
 	}
 	url, encoder, bitrate, input := args[len(args)-1], "", "", ""
 	for i, a := range args {
@@ -89,6 +93,9 @@ func fakeFFmpeg(args []string) int {
 		// avfoundation given an index the renumbered list no longer has.
 		fmt.Fprintf(os.Stderr, "[AVFoundation indev @ 0x1] Invalid audio device index\n[in#0 @ 0x2] Error opening input: Input/output error\nError opening input file %s.\nError opening input files: Input/output error\n", input)
 		return 251
+	}
+	if url == "pipe:1" {
+		return fakePreview()
 	}
 	desc := &description.Session{Medias: []*description.Media{
 		{Type: description.MediaTypeVideo, Formats: []format.Format{&format.H264{PayloadTyp: 96, PacketizationMode: 1}}},
